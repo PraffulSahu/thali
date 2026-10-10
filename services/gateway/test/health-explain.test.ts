@@ -46,21 +46,18 @@ describe('explainHealth', () => {
     expect(e.summary).toBe('Email provider failing: SMTP connect ECONNREFUSED 10.0.3.12:587');
   });
 
-  it('a single recent provider error marks the provider failing; an old single error does not', () => {
-    const recent = explainHealth(
-      'payments',
-      base({ providerErrorsLastHour: 1, providerErrorsByProvider: { razorpay: 1 }, lastProviderErrors: { razorpay: { message: 'HTTP 502', at: ago(3) } } }),
-      { now: NOW, geoProvider: 'demo' },
-    );
-    expect(recent.providers.payment).toBe('failing');
-    expect(recent.status).toBe('degraded');
-    const old = explainHealth(
-      'payments',
-      base({ providerErrorsLastHour: 1, providerErrorsByProvider: { razorpay: 1 }, lastProviderErrors: { razorpay: { message: 'HTTP 502', at: ago(40) } } }),
-      { now: NOW, geoProvider: 'demo' },
-    );
-    expect(old.providers.payment).toBe('up');
-    expect(old.status).toBe('up');
+  it('a single blip is not "failing"; ≥ 2 errors with the latest in the last 10 min is', () => {
+    const at = (n: number, min: number) =>
+      explainHealth(
+        'payments',
+        base({ providerErrorsLastHour: n, providerErrorsByProvider: { razorpay: n }, lastProviderErrors: { razorpay: { message: 'HTTP 502', at: ago(min) } } }),
+        { now: NOW, geoProvider: 'demo' },
+      );
+    expect(at(1, 1)).toMatchObject({ status: 'up', providers: { payment: 'up' } }); // one recent blip
+    expect(at(2, 3)).toMatchObject({ status: 'degraded', providers: { payment: 'failing' } });
+    expect(at(2, 3).degradedReasons).toEqual(['payment provider failing (2 errors in the last hour): HTTP 502']);
+    expect(at(4, 40)).toMatchObject({ status: 'up', providers: { payment: 'up' } }); // nothing recent, under 5/h
+    expect(at(5, 40)).toMatchObject({ status: 'degraded', providers: { payment: 'failing' } }); // ≥ 5/h
   });
 
   it('google-* errors roll up into "maps"; ≥ 5 in the hour → failing', () => {
@@ -95,7 +92,7 @@ describe('explainHealth', () => {
   it('unknown provider names are reported under their own name', () => {
     const e = explainHealth(
       'identity',
-      base({ providerErrorsLastHour: 1, providerErrorsByProvider: { notifications: 1 }, lastProviderErrors: { notifications: { message: 'connect ECONNREFUSED', at: ago(2) } } }),
+      base({ providerErrorsLastHour: 2, providerErrorsByProvider: { notifications: 2 }, lastProviderErrors: { notifications: { message: 'connect ECONNREFUSED', at: ago(2) } } }),
       { now: NOW, geoProvider: 'demo' },
     );
     expect(e.providers).toEqual({ notifications: 'failing' });

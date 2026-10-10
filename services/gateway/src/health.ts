@@ -24,7 +24,12 @@ export const HEALTH_THRESHOLDS = {
   providerErrorsPerHour: 5,
   /** A provider category with this many errors in the last hour is failing… */
   providerFailingPerHour: 5,
-  /** …or with any error this recent. */
+  /**
+   * …or with at least `providerRecentMinErrors` errors whose latest is within `providerRecentMs`
+   * (a single blip is never "failing"). Health details only expose hourly counts + the latest error
+   * time, so "≥ 2 in the last 10 min" is approximated as "≥ 2 in the last hour, the latest ≤ 10 min ago".
+   */
+  providerRecentMinErrors: 2,
   providerRecentMs: 10 * 60_000,
   /** Per consumed stream, entries behind (strictly greater). */
   consumerLag: 100,
@@ -98,7 +103,8 @@ export function explainHealth(service: string, d: Record<string, unknown>, opts:
   let providerReason = false;
   for (const [name, c] of cats) {
     const failing =
-      c.errors >= HEALTH_THRESHOLDS.providerFailingPerHour || (c.lastAt !== null && now - c.lastAt <= HEALTH_THRESHOLDS.providerRecentMs);
+      c.errors >= HEALTH_THRESHOLDS.providerFailingPerHour ||
+      (c.errors >= HEALTH_THRESHOLDS.providerRecentMinErrors && c.lastAt !== null && now - c.lastAt <= HEALTH_THRESHOLDS.providerRecentMs);
     providers[name] = failing ? 'failing' : 'up';
     if (failing) {
       providerReason = true;

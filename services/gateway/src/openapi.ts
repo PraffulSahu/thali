@@ -29,7 +29,7 @@ export function createGatewayOpenApi(): OpenApi {
     description:
       "Fans out to each service's GET /internal/health/details (3 s timeout each). Unreachable services are reported `down` with the error. " +
       'Reachable services are `degraded` (with `degradedReasons` and a one-line `summary`) when mongo/redis is down, a provider is failing ' +
-      '(≥ 5 errors in the last hour or any error in the last 10 min; shown in `providers` with its last scrubbed message), total provider errors ≥ 5/h, ' +
+      '(≥ 5 errors in the last hour, or ≥ 2 with the latest in the last 10 min — a single blip is not failing; shown in `providers` with its last scrubbed message), total provider errors ≥ 5/h, ' +
       'any consumer lag > 100, the oldest outbox event > 60 s, or dead letters > 0. A failing provider never makes a service `down`.',
     security: 'bearer',
     errors: ['MFA_REQUIRED'],
