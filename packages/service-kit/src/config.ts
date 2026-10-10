@@ -3,7 +3,8 @@
  *
  * `loadConfig(shape, env)` validates the common `BaseConfig` plus a service-specific zod shape and
  * enforces the production guard: with `APP_MODE=production`, any `*_PROVIDER=mock` or truthy
- * `DEMO_*` variable (in the raw env *or* in the parsed result, so shape defaults count) is refused.
+ * `DEMO_*` variable (in the raw env *or* in the parsed result, so shape defaults count) is refused, and
+ * so is any value carrying the `.env.example` demo-placeholder marker (see `isDemoPlaceholder`).
  */
 import { z } from 'zod';
 import { AppMode, enumValues, ServiceName } from '@thali/contracts';
@@ -86,15 +87,39 @@ function isTruthyFlag(v: unknown): boolean {
   return true;
 }
 
+/**
+ * Every placeholder secret in `.env.example` carries this marker (plain values start with it; base64 keys
+ * decode to bytes starting with it; connection URIs embed it as the password), so a copied example file can
+ * never be deployed: production refuses any env value containing it. Real secrets: `scripts/gen-env.sh`.
+ */
+export const DEMO_SECRET_MARKER = 'thali-demo-';
+
+/** True for a value built from a `.env.example` demo placeholder (raw, embedded, or base64-encoded). */
+export function isDemoPlaceholder(v: unknown): boolean {
+  if (typeof v !== 'string') return false;
+  const t = v.trim();
+  if (!t) return false;
+  if (t.toLowerCase().includes(DEMO_SECRET_MARKER)) return true;
+  if (t.length >= 16 && /^[A-Za-z0-9+/_-]+={0,2}$/.test(t)) {
+    const decoded = Buffer.from(t, 'base64').toString('latin1').toLowerCase();
+    if (decoded.startsWith(DEMO_SECRET_MARKER)) return true;
+  }
+  return false;
+}
+
 function productionViolations(env: Env, parsed: Record<string, unknown>): string[] {
-  const offending = new Set<string>();
+  const offending = new Map<string, string>();
   for (const source of [env, parsed]) {
     for (const [k, v] of Object.entries(source)) {
-      if (/_PROVIDER$/.test(k) && typeof v === 'string' && v.trim().toLowerCase() === 'mock') offending.add(k);
-      if (/^DEMO_/.test(k) && isTruthyFlag(v)) offending.add(k);
+      if (/_PROVIDER$/.test(k) && typeof v === 'string' && v.trim().toLowerCase() === 'mock') offending.set(k, 'not allowed when APP_MODE=production');
+      if (/^DEMO_/.test(k) && isTruthyFlag(v)) offending.set(k, 'not allowed when APP_MODE=production');
+      // The value itself is never echoed: it may be a (weak) secret.
+      if (!offending.has(k) && isDemoPlaceholder(v)) {
+        offending.set(k, 'is a .env.example demo placeholder; generate real secrets (scripts/gen-env.sh)');
+      }
     }
   }
-  return [...offending].sort().map((k) => `${k}: not allowed when APP_MODE=production`);
+  return [...offending.keys()].sort().map((k) => `${k}: ${offending.get(k)}`);
 }
 
 /**

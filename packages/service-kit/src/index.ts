@@ -4,7 +4,7 @@
  */
 export type { AuthContext, CallerContext, ValidatedRequest, RequestId } from './types/express.js';
 
-export { loadConfig, ConfigError, BaseConfigShape, envBool, envList, envOptionalUrl, envTrustProxy, type BaseConfig } from './config.js';
+export { loadConfig, ConfigError, BaseConfigShape, envBool, envList, envOptionalUrl, envTrustProxy, DEMO_SECRET_MARKER, isDemoPlaceholder, type BaseConfig } from './config.js';
 export { createLogger, REDACT_PATHS, type CreateLoggerOptions, type Logger } from './logger.js';
 export { createApp, redisHealthCheck, type CreateAppOptions, type HealthCheck } from './app.js';
 export { getKit, type KitContext } from './context.js';

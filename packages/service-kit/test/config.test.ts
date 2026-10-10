@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { ConfigError, loadConfig } from '@thali/service-kit';
+import { ConfigError, DEMO_SECRET_MARKER, isDemoPlaceholder, loadConfig } from '@thali/service-kit';
 
 const base = {
   SERVICE_NAME: 'payments',
@@ -130,5 +130,41 @@ describe('loadConfig', () => {
   it('production requires an INTERNAL_SERVICE_SECRET of at least 32 chars', () => {
     const env = { ...base, APP_MODE: 'production', INTERNAL_SERVICE_SECRET: 'short-secret-1234' };
     expect(() => loadConfig({}, env)).toThrow(/INTERNAL_SERVICE_SECRET/);
+  });
+
+  describe('demo placeholder secrets (.env.example) are refused in production', () => {
+    const demoKey = Buffer.from('thali-demo-field-key-000000000000').subarray(0, 32).toString('base64');
+    const prod = { ...base, APP_MODE: 'production' };
+
+    it('recognises plain, embedded (URI) and base64-encoded placeholders, not real values', () => {
+      expect(isDemoPlaceholder(`${DEMO_SECRET_MARKER}0123456789abcdef0123456789abcdef`)).toBe(true);
+      expect(isDemoPlaceholder('mongodb://thali_orders:thali-demo-03662f53@mongo:27017/?authSource=admin')).toBe(true);
+      expect(isDemoPlaceholder(demoKey)).toBe(true);
+      expect(isDemoPlaceholder('V9IZWsKY34aEvEi+QyEPhZpW394bLe++tcneUgAgXYE=')).toBe(false); // random base64 key
+      expect(isDemoPlaceholder('adbc5e13c60f0d9b2e4a5cc9538af86cc09b5461882164d9a55b1b0a36f3f98d')).toBe(false);
+      expect(isDemoPlaceholder('production')).toBe(false);
+    });
+
+    it('INTERNAL_SERVICE_SECRET placeholder is refused (and the value is not echoed)', () => {
+      const secret = `${DEMO_SECRET_MARKER}adbc5e13c60f0d9b2e4a5cc9538af86c`;
+      let message = '';
+      try {
+        loadConfig({}, { ...prod, INTERNAL_SERVICE_SECRET: secret });
+      } catch (e) {
+        message = (e as Error).message;
+      }
+      expect(message).toMatch(/INTERNAL_SERVICE_SECRET: is a \.env\.example demo placeholder/);
+      expect(message).not.toContain(secret);
+    });
+
+    it('any env var counts: base64 FIELD_ENCRYPTION_KEY, MONGO_URI password, undeclared vars', () => {
+      expect(() => loadConfig({}, { ...prod, FIELD_ENCRYPTION_KEY: demoKey })).toThrow(/FIELD_ENCRYPTION_KEY/);
+      expect(() => loadConfig({}, { ...prod, MONGO_URI: 'mongodb://u:thali-demo-abc@mongo:27017/?authSource=admin' })).toThrow(/MONGO_URI/);
+      expect(() => loadConfig({}, { ...prod, OTP_PEPPER: `${DEMO_SECRET_MARKER}x`.padEnd(40, '0') })).toThrow(/OTP_PEPPER/);
+    });
+
+    it('demo mode accepts the placeholders (cp .env.example .env just works)', () => {
+      expect(loadConfig({}, { ...base, INTERNAL_SERVICE_SECRET: `${DEMO_SECRET_MARKER}${'a'.repeat(32)}`, FIELD_ENCRYPTION_KEY: demoKey }).APP_MODE).toBe('demo');
+    });
   });
 });
