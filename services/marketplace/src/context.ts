@@ -10,6 +10,8 @@ import type { Logger } from 'pino';
 import type { Connection } from 'mongoose';
 import type { AuthVerifier, GeoProvider, OpenApi, Redis, StorageProvider } from '@thali/service-kit';
 import type { IdentityClient } from './clients/identity.js';
+import type { OrdersClient } from './clients/orders.js';
+import type { PaymentsClient } from './clients/payments.js';
 import type { MarketplaceConfig } from './config.js';
 import type { Models } from './models/index.js';
 
@@ -23,6 +25,10 @@ export interface MarketplaceDeps {
   geo: GeoProvider;
   storage: StorageProvider;
   identity: IdentityClient;
+  /** Task 9: checkout status (sweeper), child order (ratings), stats (dashboard). */
+  orders: OrdersClient;
+  /** Task 9: membership payment intents. */
+  payments: PaymentsClient;
   /** Injectable clock (tests). */
   now?: () => Date;
 }

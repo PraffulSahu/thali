@@ -16,7 +16,9 @@ import {
   type TestKeys,
   type TestRedis,
 } from '@thali/service-kit/testing';
-import { buildApp } from '../src/app.js';
+import { buildApp, createContext } from '../src/app.js';
+import type { AppContext, MarketplaceDeps } from '../src/context.js';
+import { fakeOrders, fakePayments, type FakeOrders, type FakePayments } from './fakes.js';
 import { loadMarketplaceConfig, type MarketplaceConfig } from '../src/config.js';
 import type { IdentityClient } from '../src/clients/identity.js';
 import { getModels, ensureMarketplaceIndexes, type Models } from '../src/models/index.js';
@@ -49,6 +51,10 @@ export interface Harness {
   keys: TestKeys;
   config: MarketplaceConfig;
   identity: FakeIdentity;
+  orders: FakeOrders;
+  payments: FakePayments;
+  /** Same deps as `app` (domain functions, consumers, sweepers in tests). */
+  ctx: AppContext;
   storage: StorageProvider;
   models: Models;
   clock: { now: Date | null };
@@ -89,7 +95,9 @@ export async function createHarness(name: string, env: Record<string, string> = 
   const identity = fakeIdentity();
   const storage = createStorageProvider(config);
   const clock: { now: Date | null } = { now: null };
-  const app = buildApp({
+  const orders = fakeOrders();
+  const payments = fakePayments();
+  const deps: MarketplaceDeps = {
     config,
     logger: testLogger('marketplace'),
     conn: db.conn,
@@ -98,8 +106,11 @@ export async function createHarness(name: string, env: Record<string, string> = 
     geo: createDemoGeo(),
     storage,
     identity,
+    orders,
+    payments,
     now: () => clock.now ?? new Date(),
-  });
+  };
+  const app = buildApp(deps);
   const { signServiceToken } = await import('@thali/service-kit');
   return {
     app,
@@ -108,6 +119,9 @@ export async function createHarness(name: string, env: Record<string, string> = 
     keys,
     config,
     identity,
+    orders,
+    payments,
+    ctx: createContext(deps),
     storage,
     models: getModels(db.conn),
     clock,

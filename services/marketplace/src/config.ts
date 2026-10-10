@@ -48,6 +48,14 @@ export const MarketplaceConfigShape = {
   IDENTITY_URL: z.url().default('http://localhost:4001'),
   ORDERS_URL: z.url().default('http://localhost:4003'),
   PAYMENTS_URL: z.url().default('http://localhost:4004'),
+
+  // Task 9: reservation expiry sweeper
+  /** How long after `expiresAt` a HELD reservation is left alone before the sweeper asks orders. */
+  RESERVATION_GRACE_SEC: z.coerce.number().int().min(0).default(300),
+  /** Extension applied when orders reports the checkout still AWAITING_PAYMENT. */
+  RESERVATION_EXTEND_SEC: z.coerce.number().int().min(30).default(300),
+  RESERVATION_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1000).default(60000),
+  INTERNAL_HTTP_TIMEOUT_MS: z.coerce.number().int().min(100).default(3000),
 };
 
 export type MarketplaceConfig = BaseConfig & {

@@ -10,6 +10,12 @@ import { menuCategoryModel } from './menu-category.js';
 import { menuItemModel } from './menu-item.js';
 import { restaurantModel } from './restaurant.js';
 import { serviceAreaModel } from './service-area.js';
+import { stockReservationModel } from './stock-reservation.js';
+import { couponModel } from './coupon.js';
+import { couponRedemptionModel } from './coupon-redemption.js';
+import { membershipPlanModel } from './membership-plan.js';
+import { membershipModel } from './membership.js';
+import { ratingModel } from './rating.js';
 
 export function getModels(conn: Connection) {
   return {
@@ -19,6 +25,13 @@ export function getModels(conn: Connection) {
     ServiceArea: serviceAreaModel(conn),
     Cuisine: cuisineModel(conn),
     Banner: bannerModel(conn),
+    // Task 9 (commerce)
+    StockReservation: stockReservationModel(conn),
+    Coupon: couponModel(conn),
+    CouponRedemption: couponRedemptionModel(conn),
+    MembershipPlan: membershipPlanModel(conn),
+    Membership: membershipModel(conn),
+    Rating: ratingModel(conn),
   };
 }
 export type Models = ReturnType<typeof getModels>;

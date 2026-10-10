@@ -6,6 +6,7 @@
  */
 import type { EventHandlers } from '@thali/service-kit';
 import type { AppContext } from '../context.js';
+import { commerceHandlerModule } from './commerce-handlers.js';
 
 export interface EventHandlerModule {
   name: string;
@@ -14,7 +15,7 @@ export interface EventHandlerModule {
   handlers(ctx: AppContext): EventHandlers;
 }
 
-export const handlerModules: EventHandlerModule[] = [];
+export const handlerModules: EventHandlerModule[] = [commerceHandlerModule];
 
 export function buildEventHandlers(ctx: AppContext, modules: EventHandlerModule[] = handlerModules) {
   const handlers: EventHandlers = {};

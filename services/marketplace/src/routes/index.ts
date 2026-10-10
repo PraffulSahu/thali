@@ -12,6 +12,12 @@ import { internalRoutes } from './internal.js';
 import { ownerMenuRoutes } from './owner-menu.js';
 import { ownerRestaurantRoutes } from './owner-restaurants.js';
 import { restaurantsPublicRoutes } from './restaurants-public.js';
+import { couponRoutes } from './coupons.js';
+import { membershipRoutes } from './memberships.js';
+import { ratingRoutes } from './ratings.js';
+import { ownerDashboardRoutes } from './owner-dashboard.js';
+import { adminPromotionRoutes } from './admin-promotions.js';
+import { internalCommerceRoutes } from './internal-commerce.js';
 
 export const routeModules: RouteModule[] = [
   discoveryRoutes,
@@ -21,4 +27,11 @@ export const routeModules: RouteModule[] = [
   adminRestaurantRoutes,
   adminCatalogRoutes,
   internalRoutes,
+  // Task 9 (commerce)
+  couponRoutes,
+  membershipRoutes,
+  ratingRoutes,
+  ownerDashboardRoutes,
+  adminPromotionRoutes,
+  internalCommerceRoutes,
 ];
