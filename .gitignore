@@ -8,3 +8,4 @@ test-results
 .superpowers/
 .DS_Store
 scripts/mongo-keyfile
+.playwright-mcp/
