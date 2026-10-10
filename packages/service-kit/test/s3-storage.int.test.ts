@@ -24,7 +24,7 @@ const PNG = Buffer.from(
 
 async function upload(bucket: string, key: string, body: Buffer, contentType: string, maxBytes = 1024) {
   created.push([bucket, key]);
-  const p = await storage.presignPut({ bucket, key, contentType, maxBytes });
+  const p = await storage.presignPut({ bucket, key, contentType, maxBytes, contentLength: body.length });
   return fetch(p.url, { method: 'PUT', headers: p.headers, body });
 }
 
@@ -35,7 +35,7 @@ afterAll(async () => {
 describe('S3 storage (MinIO)', () => {
   it('presignPut -> PUT bytes -> head returns content type and size; readHead returns leading bytes', async () => {
     const key = `${base}/logo.png`;
-    const p = await storage.presignPut({ bucket: PRIVATE, key, contentType: 'image/png', maxBytes: 1024 });
+    const p = await storage.presignPut({ bucket: PRIVATE, key, contentType: 'image/png', maxBytes: 1024, contentLength: PNG.length });
     expect(p.method).toBe('PUT');
     expect(p.headers['content-type']).toBe('image/png');
     expect(new Date(p.expiresAt).getTime()).toBeGreaterThan(Date.now());
@@ -60,13 +60,13 @@ describe('S3 storage (MinIO)', () => {
   it('the signed content type is enforced (different Content-Type -> 403)', async () => {
     const key = `${base}/wrong-type.png`;
     created.push([PRIVATE, key]);
-    const p = await storage.presignPut({ bucket: PRIVATE, key, contentType: 'image/png', maxBytes: 1024 });
+    const p = await storage.presignPut({ bucket: PRIVATE, key, contentType: 'image/png', maxBytes: 1024, contentLength: PNG.length });
     const res = await fetch(p.url, { method: 'PUT', headers: { 'content-type': 'text/html' }, body: PNG });
     expect(res.status).toBe(403);
     expect(await storage.head(PRIVATE, key)).toBeNull();
   });
 
-  it('when contentLength is declared it is signed: a different body size is rejected', async () => {
+  it('the declared contentLength is required and signed: a different body size is rejected', async () => {
     const key = `${base}/sized.png`;
     created.push([PRIVATE, key]);
     const p = await storage.presignPut({ bucket: PRIVATE, key, contentType: 'image/png', maxBytes: 1024, contentLength: PNG.length });
@@ -78,6 +78,13 @@ describe('S3 storage (MinIO)', () => {
     await expect(storage.presignPut({ bucket: PRIVATE, key, contentType: 'image/png', maxBytes: 10, contentLength: 11 })).rejects.toMatchObject({
       code: 'FILE_INVALID',
     });
+    const smaller = await fetch(p.url, { method: 'PUT', headers: p.headers, body: PNG.subarray(0, 10) });
+    expect(smaller.status).toBe(403);
+    for (const bad of [undefined, 0, -1, 1.5]) {
+      await expect(
+        storage.presignPut({ bucket: PRIVATE, key, contentType: 'image/png', maxBytes: 1024, contentLength: bad as unknown as number }),
+      ).rejects.toMatchObject({ code: 'FILE_INVALID' });
+    }
   });
 
   it('head returns null for a missing object', async () => {

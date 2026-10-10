@@ -1,9 +1,13 @@
+import net from 'node:net';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import type { EventEnvelope } from '@thali/contracts';
 import {
   createEnvelope,
+  createRedis,
   currentRequestId,
+  deadLetterModel,
   inboxModel,
+  isInfraError,
   initEventCollections,
   startConsumer,
   type ConsumerHandle,
@@ -152,10 +156,10 @@ describe('startConsumer', () => {
     expect(callTimes).toHaveLength(3);
     // failed attempts were rolled back with the transaction; only the successful one persisted
     expect(await effect('retry')).toBe(1);
-    expect((await inboxModel(db.conn).findById(e.id).lean())?.attempts).toBe(3);
-    // backoff min(2^attempt * base): >= 40 ms after the 1st failure, >= 80 ms after the 2nd
-    expect(callTimes[1]! - callTimes[0]!).toBeGreaterThanOrEqual(40);
-    expect(callTimes[2]! - callTimes[1]!).toBeGreaterThanOrEqual(80);
+    expect((await inboxModel(db.conn).findById(e.id).lean())).toMatchObject({ attempts: 3, deliveries: 3 });
+    // backoff min(2^(attempt-1) * base) (HLD 3.2: 1 s -> 2 s -> 4 s): >= 20 ms after the 1st failure, >= 40 ms after the 2nd
+    expect(callTimes[1]! - callTimes[0]!).toBeGreaterThanOrEqual(20);
+    expect(callTimes[2]! - callTimes[1]!).toBeGreaterThanOrEqual(40);
   });
 
   it("treats a duplicate-key error from the handler's own writes as a failure, not a duplicate event", async () => {
@@ -207,7 +211,8 @@ describe('startConsumer', () => {
     await tr.redis.xreadgroup('GROUP', 'cg.orders', 'dead-consumer', 'COUNT', 10, 'STREAMS', key, '>');
     consume(s, { 'payment.captured': async (_e, session) => bump('crash', session) });
     await waitFor(async () => (await inboxModel(db.conn).findById(e.id).lean()) != null, { timeoutMs: 5000 });
-    expect((await inboxModel(db.conn).findById(e.id).lean())?.attempts).toBe(2);
+    // the crashed consumer never completed a handler attempt: 1st handler attempt, 2nd delivery
+    expect(await inboxModel(db.conn).findById(e.id).lean()).toMatchObject({ attempts: 1, deliveries: 2 });
     expect(await effect('crash')).toBe(1);
   });
 
@@ -240,5 +245,120 @@ describe('startConsumer', () => {
     await publish(s, later);
     await new Promise((r) => setTimeout(r, 300));
     expect(await inboxModel(db.conn).countDocuments({ _id: later.id })).toBe(0);
+  });
+
+  it('infrastructure errors do not consume attempts: > maxAttempts outage failures, then success -> processed, no dead letter', async () => {
+    const s = newStream();
+    const e = env('infra');
+    let calls = 0;
+    const outage = () => Object.assign(new Error('connection 1 to 127.0.0.1:27018 closed'), { name: 'MongoNetworkError' });
+    expect(isInfraError(outage())).toBe(true);
+    consume(
+      s,
+      {
+        'payment.captured': async (_e, session) => {
+          calls += 1;
+          if (calls <= 7) throw outage();
+          await bump('infra', session);
+        },
+      },
+      { maxAttempts: 3, infraBackoffMs: 10 },
+    );
+    await publish(s, e);
+    await waitFor(async () => (await inboxModel(db.conn).findById(e.id).lean()) != null, { timeoutMs: 8000 });
+    expect(calls).toBe(8);
+    expect(await effect('infra')).toBe(1);
+    expect(await deadLetterModel(db.conn).countDocuments({ _id: e.id })).toBe(0);
+    // no handler attempt failed: success on the 1st attempt, after 8 deliveries
+    expect(await inboxModel(db.conn).findById(e.id).lean()).toMatchObject({ attempts: 1, deliveries: 8 });
+  });
+
+  it('handler failures still dead-letter after maxAttempts even when interleaved with outages', async () => {
+    const s = newStream();
+    const e = env('mixed');
+    let calls = 0;
+    consume(
+      s,
+      {
+        'payment.captured': async () => {
+          calls += 1;
+          if (calls % 2 === 1) throw Object.assign(new Error('pool cleared'), { name: 'MongoPoolClearedError' });
+          throw new Error('bad data');
+        },
+      },
+      { maxAttempts: 3, infraBackoffMs: 10 },
+    );
+    await publish(s, e);
+    await waitFor(async () => (await deadLetterModel(db.conn).findById(e.id).lean()) != null, { timeoutMs: 8000 });
+    expect(calls).toBe(6); // 3 outages + 3 real attempts
+    expect(await deadLetterModel(db.conn).findById(e.id).lean()).toMatchObject({ attempts: 3, error: 'bad data' });
+  });
+
+  it('dead-letters (envelope null, entryId kept) a pending entry that was trimmed from the stream', async () => {
+    const s = newStream();
+    const key = `${tr.prefix}${s}`;
+    await tr.redis.xgroup('CREATE', key, 'cg.orders', '0', 'MKSTREAM');
+    const id = await tr.redis.xadd(key, '*', 'data', JSON.stringify(env('trimmed')));
+    await tr.redis.xreadgroup('GROUP', 'cg.orders', 'dead-consumer', 'COUNT', 10, 'STREAMS', key, '>');
+    await tr.redis.xdel(key, id!);
+    consume(s, { 'payment.captured': async () => undefined });
+    await waitFor(async () => (await deadLetterModel(db.conn).countDocuments({ entryId: id })) === 1, { timeoutMs: 5000 });
+    const dl = await deadLetterModel(db.conn).findOne({ entryId: id }).lean();
+    expect(dl).toMatchObject({ _id: `${s}:${id}`, stream: s, envelope: null });
+    expect(dl?.error).toMatch(/trimmed/);
+    await waitFor(() => settled(s), { timeoutMs: 2000 });
+  });
+
+  it('retries setup until Redis is reachable, then processes events', async () => {
+    // a port with nothing listening; later a TCP proxy to the real Redis appears on it
+    const probeServer = net.createServer();
+    await new Promise<void>((r) => probeServer.listen(0, '127.0.0.1', r));
+    const port = (probeServer.address() as net.AddressInfo).port;
+    await new Promise<void>((r) => probeServer.close(() => r()));
+
+    const flaky = createRedis(`redis://127.0.0.1:${port}`, {
+      keyPrefix: tr.prefix,
+      redisOptions: { maxRetriesPerRequest: 1, retryStrategy: () => 50 },
+    });
+    flaky.on('error', () => undefined);
+    const s = newStream();
+    const e = env('late-redis');
+    let readyResolved = false;
+    const c = startConsumer({
+      conn: db.conn,
+      redis: flaky,
+      service: 'orders',
+      streams: [s],
+      handlers: { 'payment.captured': async (_e, session) => bump('late-redis', session) },
+      logger: testLogger(),
+      streamPrefix: tr.prefix,
+      claimIdleMs: 200,
+      backoffBaseMs: 20,
+      blockMs: 100,
+    });
+    void c.ready.then(() => (readyResolved = true));
+    await new Promise((r) => setTimeout(r, 400)); // setup fails a few times meanwhile
+    expect(readyResolved).toBe(false);
+
+    const sockets = new Set<net.Socket>();
+    const proxy = net.createServer((client) => {
+      const upstream = net.connect(6379, 'localhost');
+      sockets.add(client).add(upstream);
+      client.on('error', () => upstream.destroy());
+      upstream.on('error', () => client.destroy());
+      client.pipe(upstream).pipe(client);
+    });
+    await new Promise<void>((r) => proxy.listen(port, '127.0.0.1', r));
+    try {
+      await waitFor(() => readyResolved, { timeoutMs: 8000 });
+      await publish(s, e);
+      await waitFor(async () => (await inboxModel(db.conn).findById(e.id).lean()) != null, { timeoutMs: 5000 });
+      expect(await effect('late-redis')).toBe(1);
+    } finally {
+      await c.stop();
+      flaky.disconnect();
+      for (const sock of sockets) sock.destroy();
+      await new Promise<void>((r) => proxy.close(() => r()));
+    }
   });
 });

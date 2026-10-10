@@ -30,8 +30,10 @@ export interface InboxRecord {
   type: string;
   stream: string;
   processedAt: Date;
-  /** Delivery attempt that succeeded (1 = first try). */
+  /** Handler attempt that succeeded (1 = first try; infrastructure outages do not count). */
   attempts: number;
+  /** Stream delivery count of the successful delivery (includes redeliveries after outages/crashes). */
+  deliveries?: number;
 }
 
 export interface DeadLetterRecord {
@@ -41,7 +43,7 @@ export interface DeadLetterRecord {
   stream: string;
   entryId: string;
   service: string;
-  /** Original envelope, or the raw `data` string for malformed entries. */
+  /** Original envelope; the raw `data` string for malformed entries; `null` when the entry was trimmed from the stream before it could be processed. */
   envelope: unknown;
   error: string;
   attempts: number;
@@ -72,6 +74,7 @@ const inboxSchema = new Schema<InboxRecord>(
     stream: { type: String, required: true },
     processedAt: { type: Date, required: true },
     attempts: { type: Number, required: true },
+    deliveries: { type: Number },
   },
   { collection: INBOX_COLLECTION, versionKey: false },
 );
@@ -83,7 +86,7 @@ const deadLetterSchema = new Schema<DeadLetterRecord>(
     stream: { type: String, required: true },
     entryId: { type: String, required: true },
     service: { type: String, required: true },
-    envelope: { type: Schema.Types.Mixed, required: true },
+    envelope: { type: Schema.Types.Mixed, default: null },
     error: { type: String, required: true },
     attempts: { type: Number, required: true },
     failedAt: { type: Date, required: true },
@@ -109,5 +112,16 @@ export const deadLetterModel = (conn: Connection): Model<DeadLetterRecord> => mo
  * `startRelay` / `startConsumer` also call it.
  */
 export async function initEventCollections(conn: Connection): Promise<void> {
-  await Promise.all([outboxModel(conn).init(), inboxModel(conn).init(), deadLetterModel(conn).init()]);
+  // Not `Model.init()`: mongoose caches its promise forever, including a rejection, so a failed boot
+  // (Mongo briefly unavailable) could never be retried. createCollection/createIndexes are idempotent.
+  await Promise.all(
+    [outboxModel(conn), inboxModel(conn), deadLetterModel(conn)].map(async (m) => {
+      try {
+        await m.createCollection();
+      } catch (err) {
+        if ((err as { code?: number }).code !== 48) throw err; // NamespaceExists
+      }
+      await m.createIndexes();
+    }),
+  );
 }

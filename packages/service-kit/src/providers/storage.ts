@@ -2,10 +2,10 @@
  * ObjectStorage port (HLD 6): S3 in production, MinIO locally (same API).
  *
  * Upload flow (browser → bucket directly):
- *  1. server: `presignPut({ bucket, key, contentType, maxBytes, contentLength? })` → `{ url, method: 'PUT', headers, expiresAt }`.
- *     The content type is part of the signature (a different `Content-Type` → 403). A presigned PUT
- *     cannot carry a size *range*, so either pass the client-declared `contentLength` (signed: the body
- *     must be exactly that size, and it must be ≤ maxBytes) and/or verify after upload:
+ *  1. server: `presignPut({ bucket, key, contentType, maxBytes, contentLength })` → `{ url, method: 'PUT', headers, expiresAt }`.
+ *     `contentLength` (the client-declared file size, required, 1..maxBytes else `FILE_INVALID`) and
+ *     the content type are both signed (HLD 8): a different `Content-Type` or a body of any other
+ *     size → 403 from S3/MinIO. The client never sets Content-Length itself (it is derived from the body).
  *  2. client: `fetch(url, { method: 'PUT', headers, body: file })`.
  *  3. server (on "upload complete" call): `verifyUpload(storage, { bucket, key, maxBytes, allowedTypes })`
  *     → HEAD (exists, size ≤ maxBytes, declared type allowed) + magic-byte sniff of the first bytes
@@ -18,10 +18,10 @@ export interface PresignPutInput {
   bucket: string;
   key: string;
   contentType: string;
-  /** Upper bound enforced by `contentLength` (if given) and by `verifyUpload`. */
+  /** Upper bound for `contentLength` (and re-checked by `verifyUpload`). */
   maxBytes: number;
-  /** Exact size declared by the client; signed into the URL when given. Must be ≤ maxBytes. */
-  contentLength?: number;
+  /** Exact file size declared by the client (bytes, 1..maxBytes); signed into the URL — the upload must be exactly this size. */
+  contentLength: number;
   /** Default 300 s. */
   expiresSec?: number;
 }

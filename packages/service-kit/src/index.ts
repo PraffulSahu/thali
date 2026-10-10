@@ -139,6 +139,7 @@ export {
   type WriteDeadLetterInput,
 } from './events/dead-letters.js';
 export { createLeaderLock, type LeaderLock, type LeaderLockOptions } from './leader-lock.js';
+export { isInfraError } from './infra-errors.js';
 export {
   startScheduler,
   type StartSchedulerOptions,

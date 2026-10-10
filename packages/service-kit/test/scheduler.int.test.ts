@@ -1,5 +1,5 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { startScheduler, type SchedulerHandle } from '@thali/service-kit';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { createLeaderLock, setKeyPrefix, startScheduler, type Redis, type SchedulerHandle, type StartSchedulerOptions } from '@thali/service-kit';
 import { createTestRedis, testLogger, waitFor, type TestRedis } from '@thali/service-kit/testing';
 
 let tr: TestRedis;
@@ -17,7 +17,7 @@ afterAll(async () => {
   await tr.cleanup();
 });
 
-function schedule(name: string, intervalMs: number, run: () => Promise<void>): SchedulerHandle {
+function schedule(name: string, intervalMs: number, run: StartSchedulerOptions['run']): SchedulerHandle {
   const h = startScheduler({ redis: tr.redis, name, intervalMs, run, logger: testLogger() });
   handles.push(h);
   return h;
@@ -95,5 +95,41 @@ describe('startScheduler', () => {
     await a.stop();
     await waitFor(() => runs.includes('b'), { timeoutMs: 2000 });
     expect(b.isLeader()).toBe(true);
+  });
+
+  it("aborts the run's signal when leadership is lost mid-run", async () => {
+    let aborted = false;
+    const h = schedule('lost', 100, ({ signal }) => new Promise<void>((resolve) => signal.addEventListener('abort', () => {
+      aborted = true;
+      resolve();
+    })));
+    await waitFor(() => h.isLeader(), { timeoutMs: 2000 });
+    await tr.redis.set(`${tr.prefix}lock:lost`, 'another-instance', 'PX', 5000); // lock taken away
+    await waitFor(() => aborted, { timeoutMs: 2000 });
+    expect(h.isLeader()).toBe(false);
+  });
+});
+
+describe('createLeaderLock', () => {
+  it('acquire-or-renew is atomic; a transient Redis error keeps leadership only while the last hold is within its TTL', async () => {
+    const real = createLeaderLock(tr.redis, 'atomic', { ttlMs: 300, instanceId: 'me' });
+    expect(await real.tryHold()).toBe(true);
+    expect(await tr.redis.get(`${tr.prefix}lock:atomic`)).toBe('me');
+    expect(await createLeaderLock(tr.redis, 'atomic', { ttlMs: 300, instanceId: 'other' }).tryHold()).toBe(false);
+    expect(await real.tryHold()).toBe(true); // renew
+    await real.release();
+
+    const fake = { eval: vi.fn() } as unknown as Redis;
+    setKeyPrefix(fake, 'x:');
+    const evalMock = (fake as unknown as { eval: ReturnType<typeof vi.fn> }).eval;
+    const lock = createLeaderLock(fake, 'flaky', { ttlMs: 300, instanceId: 'me' });
+    evalMock.mockResolvedValueOnce(1);
+    expect(await lock.tryHold()).toBe(true);
+    evalMock.mockRejectedValueOnce(new Error('Connection is closed.'));
+    expect(await lock.tryHold()).toBe(true); // still within TTL: the key cannot belong to anyone else yet
+    await new Promise((r) => setTimeout(r, 300));
+    evalMock.mockRejectedValueOnce(new Error('Connection is closed.'));
+    expect(await lock.tryHold()).toBe(false); // TTL elapsed without confirmation
+    expect(evalMock.mock.calls[0]![2]).toBe('x:lock:flaky');
   });
 });

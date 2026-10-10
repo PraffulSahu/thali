@@ -119,7 +119,7 @@ export async function healthDetails(opts: HealthDetailsOptions): Promise<HealthD
     }, timeoutMs),
     probe(() => redis.ping(), timeoutMs),
     probe(() => Outbox.countDocuments({ publishedAt: null }).maxTimeMS(timeoutMs), timeoutMs),
-    probe(() => Outbox.findOne({ publishedAt: null }).sort({ createdAt: 1 }).select({ createdAt: 1 }).lean(), timeoutMs),
+    probe(() => Outbox.findOne({ publishedAt: null }).sort({ createdAt: 1 }).select({ createdAt: 1 }).maxTimeMS(timeoutMs).lean(), timeoutMs),
     probe(() => deadLetterModel(conn).countDocuments({ replayedAt: null }).maxTimeMS(timeoutMs), timeoutMs),
     probe(() => providerErrorStats(redis, service), timeoutMs),
     ...streams.map((s) => probe(() => groupLag(redis, streamKey(opts.streamPrefix, s), group), timeoutMs)),

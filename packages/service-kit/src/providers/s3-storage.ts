@@ -48,20 +48,16 @@ export function createS3Storage(opts: S3StorageOptions): StorageProvider {
   return {
     async presignPut(input: PresignPutInput): Promise<PresignedPut> {
       const expiresSec = input.expiresSec ?? 300;
-      if (input.contentLength !== undefined && (input.contentLength <= 0 || input.contentLength > input.maxBytes)) {
-        throw new DomainError('FILE_INVALID', `File must be between 1 and ${input.maxBytes} bytes`);
+      const len = input.contentLength;
+      if (!Number.isInteger(len) || len <= 0 || len > input.maxBytes) {
+        throw new DomainError('FILE_INVALID', `File size must be declared and between 1 and ${input.maxBytes} bytes`, undefined, {
+          maxBytes: input.maxBytes,
+        });
       }
-      const signed = new Set(['content-type']);
-      if (input.contentLength !== undefined) signed.add('content-length');
       const url = await getSignedUrl(
         client,
-        new PutObjectCommand({
-          Bucket: input.bucket,
-          Key: input.key,
-          ContentType: input.contentType,
-          ...(input.contentLength !== undefined ? { ContentLength: input.contentLength } : {}),
-        }),
-        { expiresIn: expiresSec, signableHeaders: signed },
+        new PutObjectCommand({ Bucket: input.bucket, Key: input.key, ContentType: input.contentType, ContentLength: len }),
+        { expiresIn: expiresSec, signableHeaders: new Set(['content-type', 'content-length']) },
       );
       // content-length is not returned: browsers forbid setting it and derive it from the body
       const headers: Record<string, string> = { 'content-type': input.contentType };
