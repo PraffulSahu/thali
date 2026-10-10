@@ -20,12 +20,12 @@ export function LocationChip() {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="flex min-h-touch max-w-[10rem] items-center gap-1.5 rounded-control px-2 text-sm font-medium text-slate-800 hover:bg-slate-100 sm:max-w-[16rem]"
+        className="flex min-h-touch max-w-[7rem] items-center gap-1 rounded-control px-1.5 text-sm font-medium text-slate-800 hover:bg-slate-100 sm:max-w-[16rem] sm:gap-1.5 sm:px-2"
         aria-label={loc ? `Delivery location: ${loc.label}. Change` : 'Choose delivery location'}
       >
         <Icon name="location" size={18} className="shrink-0 text-brand-600" />
         <span className="truncate">{loc ? loc.label : 'Set location'}</span>
-        <Icon name="chevron-down" size={14} className="shrink-0 text-slate-500" />
+        <Icon name="chevron-down" size={14} className="hidden shrink-0 text-slate-500 sm:block" />
       </button>
       {open ? (
         <Suspense fallback={null}>

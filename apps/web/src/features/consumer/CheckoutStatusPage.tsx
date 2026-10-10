@@ -8,7 +8,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useParams } from 'react-router';
-import { Badge, ButtonLink, Card, Countdown, Icon, PageHeader, Price, QueryState, RealtimeStatus, Skeleton, Spinner } from '../../components/ui';
+import { Badge, ButtonLink, Card, Countdown, Icon, PageHeader, Price, QueryState, Skeleton, Spinner } from '../../components/ui';
 import { RequireAuth } from '../../components/layout/RequireRole';
 import { usePolling } from '../../hooks/usePolling';
 import { useRealtime } from '../../hooks/useRealtime';
@@ -117,7 +117,7 @@ function StatusView({ checkoutId }: { checkoutId: string }) {
   const q = useQuery({ queryKey: checkoutKey(checkoutId), queryFn: () => fetchCheckout(checkoutId) });
   const awaiting = q.data?.checkout.status === 'AWAITING_PAYMENT';
   usePolling(() => q.refetch(), 3000, { enabled: awaiting || q.isError, pauseWhenHidden: true });
-  const { status } = useRealtime<{ checkoutId?: string }>(
+  useRealtime<{ checkoutId?: string }>(
     ['order.updated'],
     (e) => {
       if (e.data.checkoutId === checkoutId) void q.refetch();
@@ -137,7 +137,6 @@ function StatusView({ checkoutId }: { checkoutId: string }) {
       <PageHeader
         title={q.data ? `Order ${q.data.checkout.code}` : 'Order status'}
         back={{ to: '/orders', label: 'Orders' }}
-        actions={awaiting ? <RealtimeStatus status={status} /> : undefined}
       />
       <QueryState query={q} loading={<Skeleton className="mx-auto h-64 w-full max-w-xl" />} errorTitle="Couldn't load the payment status">
         {(data) => <StatusBody data={data} />}
