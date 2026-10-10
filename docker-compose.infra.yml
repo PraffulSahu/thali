@@ -7,6 +7,7 @@ name: thali-infra
 
 services:
   mongo:
+    restart: unless-stopped
     image: mongo:8.0
     command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
@@ -27,6 +28,7 @@ services:
       start_period: 5s
 
   redis:
+    restart: unless-stopped
     image: redis:7.4-alpine
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     ports:
@@ -43,6 +45,7 @@ services:
   # so this uses Bitnami's archived (bitnamilegacy) build of the same MinIO server, pinned by tag.
   # Dev/test only; swap for any S3-compatible endpoint in real environments.
   minio:
+    restart: unless-stopped
     image: bitnamilegacy/minio:2025.7.23-debian-12-r5
     environment:
       MINIO_ROOT_USER: thali
@@ -81,6 +84,7 @@ services:
         echo "buckets ready"
 
   mailpit:
+    restart: unless-stopped
     image: axllent/mailpit:v1.31.4
     ports:
       - "1025:1025"
