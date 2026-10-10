@@ -53,6 +53,8 @@ export const deliveryConfigShape = {
   GEO_PROVIDER: z.enum(['google', 'demo']).default('demo'),
   GOOGLE_MAPS_API_KEY: z.string().optional(),
   S3_ENDPOINT: z.string().optional(),
+  /** Browser-reachable endpoint for presigned URLs (compose: http://localhost:9000 while S3_ENDPOINT=http://minio:9000). */
+  S3_PUBLIC_ENDPOINT: envOptionalUrl(),
   S3_REGION: z.string().default('ap-south-1'),
   S3_ACCESS_KEY_ID: z.string().optional(),
   S3_SECRET_ACCESS_KEY: z.string().optional(),

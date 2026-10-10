@@ -15,6 +15,14 @@ import type { ObjectHead, PresignedGet, PresignedPut, PresignPutInput, StoragePr
 export interface S3StorageOptions {
   /** e.g. `http://localhost:9000` (MinIO). When set, `forcePathStyle` defaults to true. */
   endpoint?: string;
+  /**
+   * Browser-reachable endpoint for presigned URLs (and `publicUrl` when `publicBaseUrl` is unset), for when
+   * the server reaches the store on a private hostname the browser cannot resolve (docker compose:
+   * `endpoint=http://minio:9000`, `publicEndpoint=http://localhost:9000`). SigV4 signs the Host header, so a
+   * URL must be signed for the host the browser will call: presigning uses a second client on this endpoint;
+   * head/read/delete keep using `endpoint`. Default: `endpoint`.
+   */
+  publicEndpoint?: string;
   region: string;
   /** Omit both to use the default AWS credential chain (IAM role). */
   accessKeyId?: string;
@@ -28,17 +36,22 @@ export interface S3StorageOptions {
 const encodeKey = (key: string) => key.split('/').map(encodeURIComponent).join('/');
 
 export function createS3Storage(opts: S3StorageOptions): StorageProvider {
-  const client = new S3Client({
-    region: opts.region,
-    ...(opts.endpoint ? { endpoint: opts.endpoint } : {}),
-    forcePathStyle: opts.forcePathStyle ?? !!opts.endpoint,
-    ...(opts.accessKeyId && opts.secretAccessKey
-      ? { credentials: { accessKeyId: opts.accessKeyId, secretAccessKey: opts.secretAccessKey } }
-      : {}),
-    // no SDK-default CRC32 checksum params in presigned URLs (browsers cannot supply them)
-    requestChecksumCalculation: 'WHEN_REQUIRED',
-    responseChecksumValidation: 'WHEN_REQUIRED',
-  });
+  const makeClient = (endpoint: string | undefined) =>
+    new S3Client({
+      region: opts.region,
+      ...(endpoint ? { endpoint } : {}),
+      forcePathStyle: opts.forcePathStyle ?? !!endpoint,
+      ...(opts.accessKeyId && opts.secretAccessKey
+        ? { credentials: { accessKeyId: opts.accessKeyId, secretAccessKey: opts.secretAccessKey } }
+        : {}),
+      // no SDK-default CRC32 checksum params in presigned URLs (browsers cannot supply them)
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
+    });
+  /** Server-side operations (head, read, delete). */
+  const client = makeClient(opts.endpoint);
+  /** Presigning only (never sends requests): signed for the browser-facing host. */
+  const presignClient = opts.publicEndpoint && opts.publicEndpoint !== opts.endpoint ? makeClient(opts.publicEndpoint) : client;
 
   const isNotFound = (err: unknown) => {
     const e = err as { name?: string; $metadata?: { httpStatusCode?: number } };
@@ -55,7 +68,7 @@ export function createS3Storage(opts: S3StorageOptions): StorageProvider {
         });
       }
       const url = await getSignedUrl(
-        client,
+        presignClient,
         new PutObjectCommand({ Bucket: input.bucket, Key: input.key, ContentType: input.contentType, ContentLength: len }),
         { expiresIn: expiresSec, signableHeaders: new Set(['content-type', 'content-length']) },
       );
@@ -65,7 +78,7 @@ export function createS3Storage(opts: S3StorageOptions): StorageProvider {
     },
 
     async presignGet({ bucket, key, expiresSec = 300 }): Promise<PresignedGet> {
-      const url = await getSignedUrl(client, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: expiresSec });
+      const url = await getSignedUrl(presignClient, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: expiresSec });
       return { url, expiresAt: new Date(Date.now() + expiresSec * 1000).toISOString() };
     },
 
@@ -88,7 +101,8 @@ export function createS3Storage(opts: S3StorageOptions): StorageProvider {
 
     publicUrl(key) {
       if (opts.publicBaseUrl) return `${opts.publicBaseUrl.replace(/\/+$/, '')}/${encodeKey(key)}`;
-      if (opts.endpoint) return `${opts.endpoint.replace(/\/+$/, '')}/${opts.publicBucket}/${encodeKey(key)}`;
+      const endpoint = opts.publicEndpoint || opts.endpoint;
+      if (endpoint) return `${endpoint.replace(/\/+$/, '')}/${opts.publicBucket}/${encodeKey(key)}`;
       return `https://${opts.publicBucket}.s3.${opts.region}.amazonaws.com/${encodeKey(key)}`;
     },
 
@@ -100,6 +114,8 @@ export function createS3Storage(opts: S3StorageOptions): StorageProvider {
 
 export interface StorageConfig {
   S3_ENDPOINT?: string;
+  /** Browser-reachable endpoint for presigned URLs (see `S3StorageOptions.publicEndpoint`). */
+  S3_PUBLIC_ENDPOINT?: string;
   S3_REGION: string;
   S3_ACCESS_KEY_ID?: string;
   S3_SECRET_ACCESS_KEY?: string;
@@ -107,10 +123,11 @@ export interface StorageConfig {
   S3_PUBLIC_BASE_URL?: string;
 }
 
-/** `createS3Storage` from LLD 12 env vars (`S3_ENDPOINT` set → MinIO path-style). */
+/** `createS3Storage` from LLD 12 env vars (`S3_ENDPOINT` set → MinIO path-style; optional `S3_PUBLIC_ENDPOINT`). */
 export function createStorageProvider(config: StorageConfig): StorageProvider {
   return createS3Storage({
     endpoint: config.S3_ENDPOINT || undefined,
+    publicEndpoint: config.S3_PUBLIC_ENDPOINT || undefined,
     region: config.S3_REGION,
     accessKeyId: config.S3_ACCESS_KEY_ID || undefined,
     secretAccessKey: config.S3_SECRET_ACCESS_KEY || undefined,
