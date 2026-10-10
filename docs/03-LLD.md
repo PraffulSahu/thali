@@ -279,8 +279,8 @@ and `AWAITING_PAYMENT → PAYMENT_FAILED | EXPIRED`.
 Non-terminal DELIVERY_FAILED counts as non-terminal (awaiting admin).
 
 ### 4.3 Payment intent
-`CREATED → AUTHORIZED → CAPTURED`, `CREATED|AUTHORIZED → FAILED`, `CAPTURED → PARTIALLY_REFUNDED → REFUNDED`,
-`CAPTURED → REFUNDED`. Out-of-order rule: an event that implies an earlier state than current is
+`CREATED → AUTHORIZED → CAPTURED`, `CREATED → CAPTURED` (captured webhook/reconcile without a seen authorization), `CREATED|AUTHORIZED → FAILED`, `FAILED → CAPTURED` (a later successful attempt on the same provider order — Razorpay allows retries), `CAPTURED → PARTIALLY_REFUNDED → REFUNDED`, `PARTIALLY_REFUNDED → PARTIALLY_REFUNDED` (further partial refunds),
+`CAPTURED → REFUNDED`. All payment transitions actor SYSTEM. Out-of-order rule: an event that implies an earlier state than current is
 recorded (`IGNORED_STALE`) and not applied (e.g. `payment.authorized` after CAPTURED; `payment.failed`
 after CAPTURED is ignored + alert). Razorpay auto-capture is configured; if AUTHORIZED persists
 > 5 min, reconciliation calls capture API.
