@@ -1,23 +1,11 @@
 /**
- * Partner area routes. OWNED BY THE PARTNER AREA IMPLEMENTER: replace the placeholder.
- * Contract (see src/README-FOUNDATION.md "Role areas"): export `routes` (paths relative to the area root,
- * index = area home, keep a '*' NotFound), optional `nav`, `HeaderActions`, `wide`.
- * Lazy-load pages: { path: 'orders', lazy: () => import('./OrdersPage').then((m) => ({ Component: m.default })) }
+ * Partner area routes (mounted at /partner/*, guard: DELIVERY_PARTNER; /partner/onboarding* needs sign-in only).
  */
 import type { RouteObject } from 'react-router';
 import { NotFoundPage } from '../../components/layout/ErrorBoundary';
 import type { NavItem } from '../../components/layout/RoleNav';
-import { EmptyState } from '../../components/ui/EmptyState';
-import { PageHeader } from '../../components/ui/PageHeader';
 
-function Placeholder() {
-  return (
-    <>
-      <PageHeader title="Partner home" description="Go online, take delivery offers and track your earnings." />
-      <EmptyState icon="bike" title="Coming together" description="This area is being built on the shared foundation." />
-    </>
-  );
-}
+const page = <T extends { default: React.ComponentType }>(load: () => Promise<T>) => ({ lazy: () => load().then((m) => ({ Component: m.default })) });
 
 export const nav: NavItem[] = [
   { to: '/partner', label: 'Home', icon: 'home', end: true },
@@ -26,6 +14,9 @@ export const nav: NavItem[] = [
 ];
 
 export const routes: RouteObject[] = [
-  { index: true, element: <Placeholder /> },
+  { index: true, ...page(() => import('./PartnerHome')) },
+  { path: 'onboarding', ...page(() => import('./PartnerOnboarding')) },
+  { path: 'history', ...page(() => import('./HistoryPage')) },
+  { path: 'earnings', ...page(() => import('./EarningsPage')) },
   { path: '*', element: <NotFoundPage home="/partner" /> },
 ];
