@@ -1,7 +1,9 @@
 /**
  * Idempotent startup migration (leader-locked like the sweepers; the scheduler's first tick runs it
- * at boot, later ticks are a cheap indexed no-op that also catch rows written by an older instance
- * during a rolling deploy):
+ * at boot). Predicates are `$exists:false` on the indexed `customerContact.phoneLast4`. A run that
+ * finds nothing left to fix (normally the tick after the fixing one — so rows written by an older
+ * instance during a rolling deploy are still caught) writes a completion marker in `migrations`;
+ * from then on every tick returns immediately without scanning.
  *  - ORD-7: `child_orders.customerContact.phoneLast4` from the stored masked phone (`+91******3210`
  *    → `3210`; null when no digits are known, so the row is never picked again).
  *  - ORD-1: `checkout_groups.customerContact {name, phoneMasked, phoneLast4}` copied from the group's
@@ -21,6 +23,9 @@ import type { JobModule } from './types.js';
 
 const BATCH = 500;
 export const CONTACT_BACKFILL_INTERVAL_MS = 5 * 60_000;
+export const CONTACT_BACKFILL_MARKER = 'orders:contact-backfill:v1';
+
+const markers = (ctx: OrdersContext) => ctx.conn.collection<{ _id: string; doneAt: Date }>('migrations');
 
 export interface ContactBackfillCounts {
   children: number;
@@ -52,7 +57,8 @@ async function backfillChildren(ctx: OrdersContext, batch: number, signal?: Abor
 }
 
 async function backfillGroups(ctx: OrdersContext, batch: number, signal?: AbortSignal): Promise<number> {
-  const missing = { $or: [{ customerContact: { $exists: false } }, { customerContact: null }, { 'customerContact.phoneLast4': { $exists: false } }] };
+  // every group written since ORD-1 has customerContact.phoneLast4 (string or null), so this one indexed predicate covers all legacy shapes
+  const missing = { 'customerContact.phoneLast4': { $exists: false } };
   let updated = 0;
   let after: unknown = null;
   for (;;) {
@@ -95,14 +101,23 @@ async function backfillSetKeys(ctx: OrdersContext): Promise<number> {
   return res.modifiedCount;
 }
 
-export async function runContactBackfill(ctx: OrdersContext, opts: { signal?: AbortSignal; batch?: number } = {}): Promise<ContactBackfillCounts> {
+export async function runContactBackfill(
+  ctx: OrdersContext,
+  opts: { signal?: AbortSignal; batch?: number; /** ignore the completion marker (tests / manual re-run) */ force?: boolean } = {},
+): Promise<ContactBackfillCounts> {
   const batch = opts.batch ?? BATCH;
+  if (!opts.force && (await markers(ctx).findOne({ _id: CONTACT_BACKFILL_MARKER }))) return { children: 0, groups: 0, setKeys: 0 };
   // children first: groups copy the child snapshot incl. its phoneLast4
   const children = await backfillChildren(ctx, batch, opts.signal);
   const groups = await backfillGroups(ctx, batch, opts.signal);
   const setKeys = opts.signal?.aborted ? 0 : await backfillSetKeys(ctx);
   const counts: ContactBackfillCounts = { children, groups, setKeys };
   if (children || groups || setKeys) ctx.logger.info({ counts }, 'contact backfill');
+  else if (!opts.signal?.aborted && !(await ctx.models.CheckoutGroup.exists({ restaurantSetKey: { $exists: false } }))) {
+    // clean pass with nothing pending (AWAITING_PAYMENT legacy groups would still need their key) → done for good
+    await markers(ctx).updateOne({ _id: CONTACT_BACKFILL_MARKER }, { $set: { doneAt: new Date() } }, { upsert: true });
+    ctx.logger.info('contact backfill complete; marker written');
+  }
   return counts;
 }
 

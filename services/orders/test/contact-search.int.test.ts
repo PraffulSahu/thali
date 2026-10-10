@@ -5,8 +5,8 @@
 import { Types } from 'mongoose';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { jobModules } from '../src/jobs/index.js';
-import { CONTACT_BACKFILL_INTERVAL_MS, runContactBackfill } from '../src/jobs/contact-backfill.js';
-import { phoneTermLast4 } from '../src/routes/admin-orders.js';
+import { CONTACT_BACKFILL_INTERVAL_MS, CONTACT_BACKFILL_MARKER, runContactBackfill } from '../src/jobs/contact-backfill.js';
+import { phoneTermLast4 } from '../src/domain/codes.js';
 import { setup, type Harness } from './helpers.js';
 import { asAdmin, child, placedCheckout, type Agent } from './lifecycle-helpers.js';
 
@@ -73,5 +73,12 @@ describe('orders:contact-backfill migration', () => {
     expect((await child(h, p.b.id))!.customerContact.phoneLast4).toBeNull();
 
     expect((await runContactBackfill(h.ctx)).children).toBe(0);
+
+    // that clean run wrote the completion marker: later ticks do not scan at all (force re-runs)
+    expect(await h.db.conn.collection('migrations').findOne({ _id: CONTACT_BACKFILL_MARKER as never })).not.toBeNull();
+    await C.updateOne({ _id: oidOf(p.a.id) }, { $unset: { 'customerContact.phoneLast4': '' } });
+    expect((await runContactBackfill(h.ctx)).children).toBe(0);
+    expect((await child(h, p.a.id))!.customerContact.phoneLast4).toBeUndefined();
+    expect((await runContactBackfill(h.ctx, { force: true })).children).toBe(1);
   });
 });

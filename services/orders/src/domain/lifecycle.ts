@@ -85,9 +85,8 @@ function plainPoint(p: GeoJsonPoint | null | undefined): GeoJsonPoint {
 }
 
 /**
- * Drop "area" shown on a partner offer before pickup (contract 2 / DLV-2): the address locality, else
- * the pincode. (The service-area name step of the contract is skipped: orders does not receive it
- * from marketplace — the quote / internal restaurant carry no area name.)
+ * Drop "area" shown on a partner offer before pickup (contract 2 / DLV-2, as relaxed by the controller
+ * ruling): the address locality, else the pincode.
  */
 export function dropAreaOf(a: Partial<AddressSnapshot> | null | undefined): string {
   return (a?.locality ?? '').trim() || (a?.pincode ?? '').trim();

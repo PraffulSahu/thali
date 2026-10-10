@@ -1,5 +1,5 @@
 /**
- * ORD-2: admin overview additions — today's child status cohort, refunded / refund-pending today,
+ * ORD-2: admin overview additions — today's child status cohort, refunded today, all-time outstanding refunds,
  * support ticket counts (own DB so the counts are exact).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -17,11 +17,12 @@ afterAll(async () => {
 });
 
 describe('GET /admin/orders/overview (ORD-2)', () => {
-  it('today.byStatus, refundedPaise, refundPendingPaise and support counts', async () => {
+  it('today.byStatus, today.refundedPaise, refundsPendingPaise (same population as refundsPending) and support counts', async () => {
     const empty = await admin.get('/api/v1/admin/orders/overview');
     expect(empty.status).toBe(200);
     expect(Object.keys(empty.body.today.byStatus)).toHaveLength(13);
-    expect(empty.body.today).toMatchObject({ refundedPaise: 0, refundPendingPaise: 0 });
+    expect(empty.body.today).toMatchObject({ refundedPaise: 0 });
+    expect(empty.body).toMatchObject({ refundsPending: 0, refundsPendingPaise: 0 });
     expect(empty.body.support).toEqual({ open: 0, inProgress: 0 });
 
     const p = await placedCheckout(h);
@@ -32,7 +33,8 @@ describe('GET /admin/orders/overview (ORD-2)', () => {
     const ov = (await admin.get('/api/v1/admin/orders/overview')).body;
     expect(ov.today.byStatus).toMatchObject({ PLACED: 2, ACCEPTED: 1, REJECTED: 1, DELIVERED: 0 });
     expect(ov.today.placed).toBe(4);
-    expect(ov.today.refundPendingPaise).toBe(p.b.total);
+    expect(ov.refundsPending).toBe(1);
+    expect(ov.refundsPendingPaise).toBe(p.b.total);
     expect(ov.today.refundedPaise).toBe(0);
 
     // payments reports the refund done today (+ an old refund on another child that must not count)
@@ -53,7 +55,8 @@ describe('GET /admin/orders/overview (ORD-2)', () => {
     );
     const after = (await admin.get('/api/v1/admin/orders/overview')).body;
     expect(after.today.refundedPaise).toBe(p.b.total);
-    expect(after.today.refundPendingPaise).toBe(0);
+    expect(after.refundsPendingPaise).toBe(0);
+    expect(after.refundsPending).toBe(0);
 
     const t1 = await p.u.post('/api/v1/support/tickets', { subject: 'Missing dosa', category: 'ORDER_ISSUE', body: 'Where is it?', childOrderId: p.b.id });
     const t2 = await q.u.post('/api/v1/support/tickets', { subject: 'Payment', category: 'PAYMENT', body: 'Charged twice?' });
@@ -61,6 +64,15 @@ describe('GET /admin/orders/overview (ORD-2)', () => {
     expect(t2.status).toBe(201);
     await h.ctx.models.SupportTicket.updateOne({ _id: t2.body.id }, { $set: { status: 'IN_PROGRESS' } });
     expect((await admin.get('/api/v1/admin/orders/overview')).body.support).toEqual({ open: 1, inProgress: 1 });
+
+    // all-time: a failed refund of an order placed days ago still counts (count and amount alike)
+    await h.ctx.models.ChildOrder.updateOne(
+      { _id: q.b.id },
+      { $set: { placedAt: new Date(now.getTime() - 5 * 86_400_000), refundStatus: 'FAILED', refundRequestedPaise: 1234, refundedPaise: 0 } },
+    );
+    const old = (await admin.get('/api/v1/admin/orders/overview')).body;
+    expect(old.refundsPending).toBe(1);
+    expect(old.refundsPendingPaise).toBe(1234);
   });
 
   it('has the gap-analysis §5.2.9 child_orders indexes', async () => {

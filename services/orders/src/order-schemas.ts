@@ -56,7 +56,10 @@ export const AdminOrdersQuery = PaginationQuerySchema.extend({
     .min(1)
     .max(100)
     .optional()
-    .meta({ description: 'Child or checkout code (TH-…), child/checkout/user id, restaurant name prefix, or a phone (4–13 digits → last-4 match)' }),
+    .meta({
+      description:
+        'Child or checkout code (TH-…), child/checkout/user id, restaurant name prefix, or a phone (4–13 digits → last-4 match; a digit-only term is always a phone search, and `phone` wins when both are given)',
+    }),
   status: statusList.optional(),
   restaurantId: z.string().min(1).max(64).optional(),
   userId: z.string().min(1).max(64).optional(),
@@ -377,13 +380,16 @@ export const OrdersOverview = z
         .record(ChildOrderStatusSchema, z.number().int())
         .meta({ description: 'Child orders placed today (IST) by their current status — every status key present' }),
       refundedPaise: z.number().int().meta({ description: 'Refunds that succeeded today (child refund mirror entries)' }),
-      refundPendingPaise: z.number().int().meta({ description: 'Outstanding refund (requested − refunded) of children placed today whose refund is REQUESTED / PROCESSING' }),
     }),
     activeByStatus: z.record(z.string(), z.number().int()),
     awaitingAcceptance: z.number().int(),
     overdueAcceptance: z.number().int(),
     deliveryFailed: z.number().int(),
-    refundsPending: z.number().int(),
+    refundsPending: z.number().int().meta({ description: 'All-time: child orders whose refund is REQUESTED / PROCESSING / FAILED' }),
+    refundsPendingPaise: z
+      .number()
+      .int()
+      .meta({ description: 'All-time: outstanding refund amount (requested − refunded) of the same children counted by refundsPending' }),
     refundsFailed: z.number().int(),
     support: z.object({ open: z.number().int(), inProgress: z.number().int() }).meta({ description: 'Support ticket counts (sidebar badge)' }),
   })

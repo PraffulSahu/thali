@@ -5,7 +5,7 @@
 import type { Connection, Model } from 'mongoose';
 import { initEventCollections, idempotencyModel } from '@thali/service-kit';
 import { cartModel, type Cart } from './cart.js';
-import { checkoutGroupModel, LEGACY_ACTIVE_CHECKOUT_INDEX, type CheckoutGroup } from './checkout-group.js';
+import { ACTIVE_CHECKOUT_INDEX, checkoutGroupModel, LEGACY_ACTIVE_CHECKOUT_INDEX, type CheckoutGroup } from './checkout-group.js';
 import { childOrderModel, type ChildOrder } from './child-order.js';
 import { orderEventModel, type OrderEvent } from './order-event.js';
 import { restaurantProjectionModel, type RestaurantProjection } from './restaurant-projection.js';
@@ -63,6 +63,10 @@ export async function migrateCheckoutIndexes(conn: Connection): Promise<void> {
     throw e;
   }
   if (!names.includes(LEGACY_ACTIVE_CHECKOUT_INDEX)) return;
+  // never leave the collection without a duplicate-submit backstop
+  if (!names.includes(ACTIVE_CHECKOUT_INDEX)) {
+    throw new Error(`orders: ${ACTIVE_CHECKOUT_INDEX} missing; refusing to drop ${LEGACY_ACTIVE_CHECKOUT_INDEX}`);
+  }
   try {
     await coll.dropIndex(LEGACY_ACTIVE_CHECKOUT_INDEX);
   } catch (e) {

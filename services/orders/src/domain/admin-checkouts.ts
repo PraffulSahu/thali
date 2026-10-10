@@ -16,6 +16,7 @@ import { DomainError, type CheckoutStatus, type ChildOrderStatus } from '@thali/
 import type { OrdersContext } from '../context.js';
 import type { CheckoutGroup } from '../models/checkout-group.js';
 import type { ChildOrder } from '../models/child-order.js';
+import { escapeRegex } from './codes.js';
 import { adjustedTotals } from './derive.js';
 
 export type CheckoutAttention = 'DELIVERY_FAILED' | 'REFUND_FAILED' | 'FINDING_PARTNER' | 'AWAITING_ACCEPTANCE';
@@ -118,7 +119,6 @@ export interface AdminCheckoutsQuery {
   limit: number;
 }
 
-const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 async function groupIdsOfChildren(ctx: OrdersContext, filter: Record<string, unknown>): Promise<Types.ObjectId[]> {
   return (await ctx.models.ChildOrder.distinct('checkoutGroupId', filter)) as Types.ObjectId[];

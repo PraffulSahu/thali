@@ -22,6 +22,7 @@ import { PREP_MINUTES_MAX, PREP_MINUTES_MIN, transitionChild, type TransitionExt
 import { adminChildRow, adminChildView, adminOrderDetail } from '../domain/order-views.js';
 import { ordersOverview } from '../domain/stats.js';
 import { listAdminCheckouts } from '../domain/admin-checkouts.js';
+import { escapeRegex, phoneParamLast4, phoneTermLast4 } from '../domain/codes.js';
 import {
   AdminCancelBody,
   AdminCheckoutPage,
@@ -42,25 +43,6 @@ const BASE = '/api/v1/admin/orders';
 const adminRead = () => requireAuth({ roles: ['ADMIN'], mfa: true });
 const adminWrite = () => requireAuth({ roles: ['ADMIN'], mfa: true, adminRoles: ['OPS', 'SUPPORT', 'FINANCE'] });
 
-const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-/** A `q` that is a phone (4–13 digits, optionally with +, spaces, dashes, brackets) → its last 4 digits (ORD-7). */
-export function phoneTermLast4(term: string): string | null {
-  if (!/^\+?[\d\s()-]+$/.test(term)) return null;
-  const digits = term.replace(/\D/g, '');
-  return digits.length >= 4 && digits.length <= 13 ? digits.slice(-4) : null;
-}
-
-/** `phone` query param → last 4 digits (only a masked snapshot is stored); fewer than 4 digits → 400. */
-export function phoneParamLast4(phone: string): string {
-  const digits = phone.replace(/\D/g, '');
-  if (digits.length < 4) {
-    throw new DomainError('VALIDATION_FAILED', 'Enter at least the last 4 digits of the phone number', 400, {
-      issues: [{ path: 'query.phone', code: 'too_small', message: 'At least 4 digits' }],
-    });
-  }
-  return digits.slice(-4);
-}
 
 async function searchFilter(ctx: OrdersContext, q: ReturnType<typeof parseQuery>): Promise<Record<string, unknown>> {
   const and: Record<string, unknown>[] = [];

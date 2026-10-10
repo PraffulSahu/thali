@@ -13,8 +13,8 @@
  * Admin overview "today" (since IST midnight) additions for the redesign (ORD-2):
  *  - today.byStatus: children placed today by CURRENT status (all 13 keys) — the status bar cohort
  *  - today.refundedPaise: Σ child refund mirror entries (`refunds[]`) SUCCEEDED today (entry `updatedAt`)
- *  - today.refundPendingPaise: Σ (requested − refunded) over children placed today whose refund is
- *    still REQUESTED / PROCESSING (FAILED is counted by `refundsFailed`, not as pending)
+ *  - refundsPendingPaise (all-time, same population as the `refundsPending` count beside it):
+ *    Σ (requested − refunded) over children whose refund is REQUESTED / PROCESSING / FAILED
  *  - support: open / in-progress ticket counts (admin sidebar badge)
  */
 import { bpsOf, enumValues, ChildOrderStatus } from '@thali/contracts';
@@ -85,6 +85,9 @@ export function istDayStart(now = new Date()): Date {
   return new Date(ist - (ist % 86_400_000) - IST_OFFSET_MS);
 }
 
+/** Refunds not yet completed (FAILED ones still owe the customer money and are retried). */
+const PENDING_REFUND = ['REQUESTED', 'PROCESSING', 'FAILED'];
+
 const ACTIVE: ChildOrderStatus[] = ['PLACED', 'ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKED_UP', 'OUT_FOR_DELIVERY', 'DELIVERY_FAILED'];
 
 export async function ordersOverview(ctx: OrdersContext, now = new Date()) {
@@ -98,7 +101,7 @@ export async function ordersOverview(ctx: OrdersContext, now = new Date()) {
     C.countDocuments({ status: 'REJECTED', statusHistory: { $elemMatch: { to: 'REJECTED', at: { $gte: since } } } }),
     C.countDocuments({ status: 'CANCELLED', cancelledAt: { $gte: since } }),
     C.countDocuments({ status: 'PLACED', acceptBy: { $lt: now } }),
-    C.countDocuments({ refundStatus: { $in: ['REQUESTED', 'PROCESSING', 'FAILED'] } }),
+    C.countDocuments({ refundStatus: { $in: PENDING_REFUND } }),
     C.countDocuments({ refundStatus: 'FAILED' }),
     G.aggregate<{ _id: null; n: number; gmv: number }>([
       { $match: { placedAt: { $gte: since } } },
@@ -112,7 +115,7 @@ export async function ordersOverview(ctx: OrdersContext, now = new Date()) {
       { $group: { _id: null, paise: { $sum: '$refunds.amountPaise' } } },
     ]),
     C.aggregate<{ _id: null; paise: number }>([
-      { $match: { placedAt: { $gte: since }, refundStatus: { $in: ['REQUESTED', 'PROCESSING'] } } },
+      { $match: { refundStatus: { $in: PENDING_REFUND } } },
       {
         $group: {
           _id: null,
@@ -139,13 +142,13 @@ export async function ordersOverview(ctx: OrdersContext, now = new Date()) {
       gmvPaise: gmv[0]?.gmv ?? 0,
       byStatus,
       refundedPaise: refunded[0]?.paise ?? 0,
-      refundPendingPaise: pending[0]?.paise ?? 0,
     },
     activeByStatus,
     awaitingAcceptance: activeByStatus.PLACED ?? 0,
     overdueAcceptance: overdue,
     deliveryFailed: activeByStatus.DELIVERY_FAILED ?? 0,
     refundsPending,
+    refundsPendingPaise: pending[0]?.paise ?? 0,
     refundsFailed,
     support: { open: ticketsOpen, inProgress: ticketsInProgress },
   };
