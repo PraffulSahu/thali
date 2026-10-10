@@ -76,6 +76,19 @@ async function onLifecycle(ctx: OrdersContext, session: ClientSession, e: EventE
   const child = await loadChild(ctx, session, e);
   if (!child) return;
   const path = pathFor(e.type, child.status);
+  if (!path.length && e.type === 'delivery.failed' && child.status === 'DELIVERY_FAILED') {
+    // Already applied: an admin marked the order "Delivery failed" here (order.delivery_failed), delivery ended
+    // the job and reports it back. Only refresh the delivery mirror — no transition, no new order event (no loop).
+    if (child.deliveryStatus !== 'FAILED') {
+      if (!child.deliveryJobId) child.deliveryJobId = e.payload.jobId;
+      child.deliveryStatus = 'FAILED';
+      child.deliveryUpdatedAt = new Date(e.occurredAt);
+      await child.save({ session });
+      await publishMirror(ctx, session, child);
+    }
+    ctx.logger.info({ childOrderId: String(child._id), type: e.type, eventId: e.id }, 'delivery.failed for a child already DELIVERY_FAILED; mirror only');
+    return;
+  }
   if (!path.length) {
     ctx.logger.info({ childOrderId: String(child._id), status: child.status, type: e.type, eventId: e.id }, 'stale or inapplicable delivery event; ignored');
     return;

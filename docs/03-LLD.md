@@ -468,7 +468,7 @@ release. (b) PLACED children with `acceptBy < now` → REJECTED reason RESTAURAN
 | `order.preparing` / `order.ready` | orders | `{childOrderId, restaurantId, userId}` | delivery (ready flag), notifications |
 | `order.picked_up` / `order.out_for_delivery` | orders | `{childOrderId, userId}` | notifications |
 | `order.delivered` | orders | `{childOrderId, checkoutId, userId, restaurantId, restaurantOwnerId, breakdown, commissionBps, deliveryJobId, partnerUserId, deliveryDistanceKm}` | payments (ledger), notifications |
-| `order.delivery_failed` | orders | `{childOrderId, reason}` | notifications (admin) |
+| `order.delivery_failed` | orders | `{childOrderId, reason}` | notifications (admin), delivery (ends the job: PICKED_UP/OUT_FOR_DELIVERY → FAILED as ADMIN, else CANCELLED; releases capacity; its `delivery.failed` is a mirror-only no-op in orders) |
 | `payment.captured` | payments | `{paymentIntentId, purpose, referenceId, userId, amountPaise, providerPaymentId}` | orders / marketplace (membership) |
 | `payment.failed` | payments | `{paymentIntentId, purpose, referenceId, userId, reason}` | orders / marketplace |
 | `refund.requested` / `refund.processing` / `refund.succeeded` / `refund.failed` | payments | `{refundId, childOrderId?, checkoutGroupId, amountPaise, reason, status}` | orders, notifications |

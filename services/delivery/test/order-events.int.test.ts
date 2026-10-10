@@ -83,4 +83,52 @@ describe('consumed order events', () => {
       deliverEvent(h, envelope('order.cancelled', { childOrderId: '6650f0f0f0f0f0f0f0f0f0f0', checkoutId: 'c', userId: 'u', restaurantId: 'r', actor: 'CUSTOMER', reason: 'changed mind', refundPaise: 0 }, 'x')),
     ).resolves.toBeUndefined();
   });
+
+  describe('order.delivery_failed (admin "Delivery failed" in orders)', () => {
+    const failed = (childOrderId: string) => envelope('order.delivery_failed', { childOrderId, reason: 'Customer unreachable' }, childOrderId);
+
+    it.each(['PICKED_UP', 'OUT_FOR_DELIVERY'] as const)('%s job → FAILED (actor ADMIN), capacity released, one delivery.failed; replay is a no-op', async (status) => {
+      const p = await createPartner(h, { location: at(0.1, 0) });
+      const { job, payload } = await createJob(h);
+      await h.ctx.models.Job.updateOne({ _id: job._id }, { $set: { status, partnerId: p._id, partnerUserId: p.userId } });
+      await h.ctx.models.Partner.updateOne({ _id: p._id }, { $push: { activeJobIds: job._id } });
+
+      await deliverEvent(h, failed(payload.childOrderId));
+      const after = (await h.ctx.models.Job.findById(job.id).lean())!;
+      expect(after.status).toBe('FAILED');
+      expect(after.failureReason).toBe('Customer unreachable');
+      expect(after.statusHistory.at(-1)).toMatchObject({ from: status, to: 'FAILED', actor: 'ADMIN' });
+      expect((await h.ctx.models.Partner.findById(p._id).lean())!.activeJobIds).toHaveLength(0);
+      expect(await outboxEvents(h, 'delivery.failed', { childOrderId: payload.childOrderId })).toHaveLength(1);
+
+      await deliverEvent(h, failed(payload.childOrderId));
+      expect((await h.ctx.models.Job.findById(job.id).lean())!.statusHistory).toHaveLength(after.statusHistory.length);
+      expect(await outboxEvents(h, 'delivery.failed', { childOrderId: payload.childOrderId })).toHaveLength(1);
+    });
+
+    it('a job the partner already failed (the source of this event) is left alone and emits nothing', async () => {
+      const { job, payload } = await createJob(h);
+      await h.ctx.models.Job.updateOne({ _id: job._id }, { $set: { status: 'FAILED', failureReason: 'partner said so' } });
+      await deliverEvent(h, failed(payload.childOrderId));
+      const after = (await h.ctx.models.Job.findById(job.id).lean())!;
+      expect(after.status).toBe('FAILED');
+      expect(after.failureReason).toBe('partner said so');
+      expect(await outboxEvents(h, 'delivery.failed', { childOrderId: payload.childOrderId })).toHaveLength(0);
+    });
+
+    it('a pre-pickup job is cancelled (offers cancelled, capacity released) without emitting delivery.failed', async () => {
+      await createPartner(h, { location: at(0.1, 0) });
+      const { job, payload } = await createJob(h);
+      await runDispatchTick(h.ctx);
+      await deliverEvent(h, failed(payload.childOrderId));
+      const after = (await h.ctx.models.Job.findById(job.id).lean())!;
+      expect(after.status).toBe('CANCELLED');
+      expect(await h.ctx.models.Offer.countDocuments({ jobId: job._id, status: 'OFFERED' })).toBe(0);
+      expect(await outboxEvents(h, 'delivery.failed', { childOrderId: payload.childOrderId })).toHaveLength(0);
+    });
+
+    it('no job → ignored', async () => {
+      await expect(deliverEvent(h, failed('6650f0f0f0f0f0f0f0f0f0f1'))).resolves.toBeUndefined();
+    });
+  });
 });

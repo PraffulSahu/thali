@@ -3,6 +3,12 @@
  *  - order.accepted  → create the delivery job (idempotent per childOrderId; codes stored as hashes)
  *  - order.ready     → set readyAt
  *  - order.cancelled → cancel the job, cancel live offers, release partner capacity
+ *  - order.delivery_failed → (admin marked the order "Delivery failed" in orders) end the job: PICKED_UP /
+ *    OUT_FOR_DELIVERY → FAILED (actor ADMIN — the decision is an admin's; SYSTEM may not fail a job), a
+ *    pre-pickup job → CANCELLED; release partner capacity. Emits `delivery.failed` only for the FAILED case,
+ *    which orders treats as already applied (child is DELIVERY_FAILED already: mirror update only, no new
+ *    order event), so nothing loops. A job already terminal (e.g. the partner reported the failure, which
+ *    is what produced this event) is a no-op.
  * Handlers run inside the consumer's transaction (inbox row first) and write only with `session`.
  * The GeoProvider call in order.accepted is a side-effect-free read (Google with haversine fallback),
  * so a transaction retry only repeats the estimate.
@@ -71,10 +77,31 @@ export function createEventHandlers(ctx: DeliveryContext): EventHandlers {
     await releasePartnerCapacity(ctx, session, job.partnerId, job._id);
   }
 
+  async function onDeliveryFailed(e: EventEnvelope<'order.delivery_failed'>, session: ClientSession) {
+    const job = await ctx.models.Job.findOne({ childOrderId: e.payload.childOrderId }, null, { session }).lean<JobLean>();
+    if (!job) {
+      ctx.logger.warn({ childOrderId: e.payload.childOrderId, eventId: e.id }, 'order.delivery_failed for an order without a delivery job; ignored');
+      return;
+    }
+    if ((TERMINAL_JOB_STATUSES as readonly string[]).includes(job.status)) return; // already ended (partner/admin fail in delivery)
+    const reason = `order marked delivery failed: ${e.payload.reason}`;
+    if (job.status === 'PICKED_UP' || job.status === 'OUT_FOR_DELIVERY') {
+      await transitionJob(ctx, session, job, 'FAILED', 'ADMIN', { reason, set: { failureReason: e.payload.reason, nextDispatchAt: null } });
+      await releasePartnerCapacity(ctx, session, job.partnerId, job._id);
+      await emit(ctx, session, 'delivery.failed', { jobId: job._id.toString(), childOrderId: job.childOrderId, reason: e.payload.reason }, job._id.toString());
+      return;
+    }
+    // The job never got the food (orders moved ahead of it): stop it like a cancellation.
+    await transitionJob(ctx, session, job, 'CANCELLED', 'SYSTEM', { reason, set: { cancelledAt: ctx.now(), nextDispatchAt: null } });
+    await cancelOpenOffers(ctx, session, job._id);
+    await releasePartnerCapacity(ctx, session, job.partnerId, job._id);
+  }
+
   return {
     'order.accepted': onAccepted,
     'order.ready': onReady,
     'order.cancelled': onCancelled,
+    'order.delivery_failed': onDeliveryFailed,
   };
 }
 

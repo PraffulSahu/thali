@@ -212,6 +212,39 @@ describe('delivery events → child transitions', () => {
     expect((await outboxEvents(h, 'order.delivery_failed')).filter((e) => e.payload.childOrderId === p.a.id)).toHaveLength(1);
   });
 
+  it('admin "Delivery failed" → one order.delivery_failed; delivery reporting delivery.failed back is treated as already applied (mirror only, no loop)', async () => {
+    const p = await placedCheckout(h);
+    await acceptedA(p);
+    const jobId = oid();
+    await send('delivery.picked_up', { jobId, childOrderId: p.a.id, partnerUserId: oid(), at: at() });
+    await send('delivery.started', { jobId, childOrderId: p.a.id, partnerUserId: oid(), at: at() });
+    const admin = await asAdmin(h);
+    let r = await admin.post(`/api/v1/admin/orders/child/${p.a.id}/transition`, { to: 'DELIVERY_FAILED', reason: 'Customer unreachable' });
+    await waitFor(async () => {
+      if (r.status === 409) r = await admin.post(`/api/v1/admin/orders/child/${p.a.id}/transition`, { to: 'DELIVERY_FAILED', reason: 'Customer unreachable' });
+      return r.status !== 409;
+    }, { timeoutMs: 10_000, intervalMs: 100 });
+    expect(r.status, JSON.stringify(r.body)).toBe(200);
+    let c = await child(h, p.a.id);
+    expect(c!.status).toBe('DELIVERY_FAILED');
+    expect(c!.deliveryStatus).toBe('OUT_FOR_DELIVERY');
+    const len = c!.statusHistory.length;
+    const failedEvents = async () => (await outboxEvents(h, 'order.delivery_failed')).filter((e) => e.payload.childOrderId === p.a.id);
+    expect(await failedEvents()).toHaveLength(1);
+
+    // delivery consumed order.delivery_failed, failed the job and reports it
+    await send('delivery.failed', { jobId, childOrderId: p.a.id, reason: 'Customer unreachable' });
+    c = await child(h, p.a.id);
+    expect(c!.status).toBe('DELIVERY_FAILED');
+    expect(c!.deliveryStatus).toBe('FAILED');
+    expect(c!.statusHistory).toHaveLength(len);
+    expect(await failedEvents()).toHaveLength(1);
+    // and again (re-published copy): still nothing new
+    await send('delivery.failed', { jobId, childOrderId: p.a.id, reason: 'Customer unreachable' });
+    expect((await child(h, p.a.id))!.statusHistory).toHaveLength(len);
+    expect(await failedEvents()).toHaveLength(1);
+  });
+
   it('unassigned → stale assigned does not overwrite the partner; order.delivered credits the delivering partner', async () => {
     const p = await placedCheckout(h);
     await acceptedA(p);
