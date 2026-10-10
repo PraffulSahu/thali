@@ -23,6 +23,7 @@ test('3 parallel checkouts with a limit-1 coupon: exactly one gets it', async ()
   };
   const flat100 = (await listCoupons()).find((c) => c.code === 'FLAT100');
   let coupon: Json;
+  let created = false;
   if (flat100 && flat100.active && flat100.totalLimit === 1 && flat100.usedCount === 0 && flat100.heldCount === 0) {
     coupon = flat100;
   } else {
@@ -44,6 +45,7 @@ test('3 parallel checkouts with a limit-1 coupon: exactly one gets it', async ()
       }),
       'create limit-1 coupon',
     );
+    created = true;
   }
   const code: string = coupon.code;
 
@@ -75,6 +77,12 @@ test('3 parallel checkouts with a limit-1 coupon: exactly one gets it', async ()
     const c = (await listCoupons()).find((x) => x.code === code)!;
     expect(c.heldCount + c.usedCount, JSON.stringify(c)).toBe(1);
   } finally {
-    for (const b of buyers) await clearCart(b.token).catch(() => undefined);
+    for (const b of buyers) await clearCart(b.token);
+    // a fresh race coupon must not stay usable in the demo
+    if (created) {
+      const r = await call('PATCH', `/admin/marketplace/coupons/${coupon.id}`, { token: await adminToken(), body: { active: false } });
+      expect(r.status, `deactivate ${code}: ${JSON.stringify(r.body)}`).toBe(200);
+      expect(r.body.active).toBe(false);
+    }
   }
 });

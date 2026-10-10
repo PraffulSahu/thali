@@ -8,7 +8,7 @@
  */
 import { expect, test } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
-import { addToCart, call, clearCart, defaultAddress, findItem, getOrder, login, ok, restaurantPage, toAddressInput, waitFor, type Json } from '../fixtures/api.js';
+import { addToCart, call, clearCart, defaultAddress, expectStable, findItem, getOrder, login, ok, restaurantPage, toAddressInput, waitFor, type Json } from '../fixtures/api.js';
 import { RESTAURANTS, SIMPLE_ITEMS, formatINR, PHONES } from '../fixtures/env.js';
 import { signInViaPage } from '../fixtures/otp.js';
 import { newRoleContext } from '../fixtures/ui.js';
@@ -143,11 +143,7 @@ test('server-side totals, demo payment, child orders placed exactly once', async
         placedEntries: o.checkout.children.map((c: Json) => c.statusHistory.filter((h: Json) => h.to === 'PLACED').length),
       };
     };
-    const want = JSON.stringify({ ids: childIds, placedEntries: [1, 1] });
-    let stableSamples = 0;
-    await expect
-      .poll(async () => (stableSamples = JSON.stringify(await snapshot()) === want ? stableSamples + 1 : 0), { intervals: [1000], timeout: 15_000 })
-      .toBeGreaterThanOrEqual(3); // 3 consecutive identical samples ~1 s apart
+    await expectStable('children + PLACED entries', snapshot, { ids: childIds, placedEntries: [1, 1] }, { samples: 3, intervalMs: 1000 });
     const orders = ok(await call('GET', '/orders?limit=50', { token: consumer.token }), 'GET /orders').items as Json[];
     expect(orders.filter((o) => o.id === checkoutId)).toHaveLength(1);
 

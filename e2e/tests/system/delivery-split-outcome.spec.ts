@@ -93,8 +93,13 @@ test('one part delivered, one failed -> IN_PROGRESS -> admin cancel + refund -> 
     // leave nothing in flight if the scenario aborted midway (best effort)
     for (const c of [spice, green]) {
       const now = await childNow(c.id).catch(() => null);
-      if (now && ['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'DELIVERY_FAILED'].includes(now.status)) await adminCancelChild(c.id, c.breakdown.totalPaise).catch(() => undefined);
+      if (now && ['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'DELIVERY_FAILED'].includes(now.status)) {
+        const r = await adminCancelChild(c.id, c.breakdown.totalPaise);
+        expect(r.status, `cleanup cancel ${c.code}: ${JSON.stringify(r.body)}`).toBe(200);
+      }
     }
-    await call('POST', '/partner/offline', { token: p1.token }).catch(() => undefined);
+    await waitFor('partner has no active job', async () => ((ok(await call('GET', '/deliveries/active', { token: p1.token }), 'active').items as Json[]).length === 0 ? true : null), { timeoutMs: 60_000 });
+    const off = await call('POST', '/partner/offline', { token: p1.token });
+    expect(off.status, `partner offline: ${JSON.stringify(off.body)}`).toBe(200);
   }
 });

@@ -53,8 +53,10 @@ test('5 parallel checkouts for the last unit: exactly one succeeds', async () =>
     expect(after.reservedQty).toBe(one.reservedQty + 1);
     expect(after.availableQty).toBe(0);
   } finally {
-    for (const b of buyers) await clearCart(b.token).catch(() => undefined);
+    for (const b of buyers) await clearCart(b.token);
     // restore the demo stock (the winner's unpaid reservation expires with its checkout)
-    await call('PATCH', `/owner/restaurants/${rid}/items/${itemId}/availability`, { token: owner1.token, body: { stockQty: Math.max(originalStock, 3) } });
+    const restore = await call('PATCH', `/owner/restaurants/${rid}/items/${itemId}/availability`, { token: owner1.token, body: { stockQty: Math.max(originalStock, 3) } });
+    expect(restore.status, `stock restore: ${JSON.stringify(restore.body)}`).toBe(200);
+    expect(restore.body.stockQty).toBe(Math.max(originalStock, 3));
   }
 });

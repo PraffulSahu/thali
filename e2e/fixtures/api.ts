@@ -301,3 +301,27 @@ export const partner = {
   },
   rejectOffer: (token: string, offerId: string) => call('POST', `/deliveries/offers/${offerId}/reject`, { token, body: {} }),
 };
+
+/* ------------------------------------------------------------------ stability */
+
+/**
+ * Assert a value settles on `expected` and then STAYS there: waits (up to `settleMs`) for the first matching
+ * sample, then takes `samples` further samples `intervalMs` apart and fails on the first deviation.
+ * Use for "exactly once" checks where a late duplicate event could still change the state.
+ */
+export async function expectStable<T>(
+  what: string,
+  fn: () => Promise<T>,
+  expected: T,
+  opts: { samples?: number; intervalMs?: number; settleMs?: number } = {},
+): Promise<void> {
+  const samples = opts.samples ?? 3;
+  const intervalMs = opts.intervalMs ?? 1000;
+  const want = JSON.stringify(expected);
+  await waitFor(`${what} (settle)`, async () => (JSON.stringify(await fn()) === want ? true : null), { timeoutMs: opts.settleMs ?? 30_000, intervalMs });
+  for (let i = 1; i <= samples; i++) {
+    await sleep(intervalMs);
+    const got = JSON.stringify(await fn());
+    if (got !== want) throw new Error(`${what}: not stable — sample ${i}/${samples} was ${got}, expected ${want}`);
+  }
+}

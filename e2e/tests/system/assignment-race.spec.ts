@@ -78,7 +78,15 @@ test('3 partners accept the same job concurrently: exactly one is assigned', asy
     });
   } finally {
     // cleanup: cancel the test order (cancels its delivery job) and take everyone offline
-    if (childId) await adminCancelChild(childId, childTotal, 'e2e cleanup: assignment race').catch(() => undefined);
-    for (const p of partners) await call('POST', '/partner/offline', { token: p.token }).catch(() => undefined);
+    if (childId) {
+      const r = await adminCancelChild(childId, childTotal, 'e2e cleanup: assignment race');
+      expect([200, 409], `cleanup cancel: ${JSON.stringify(r.body)}`).toContain(r.status); // 409 = already terminal
+    }
+    for (const p of partners) {
+      // the order cancellation cancels the delivery job asynchronously (event): wait until it is released
+      await waitFor('partner has no active job', async () => ((await partner.active(p.token)).length === 0 ? true : null), { timeoutMs: 60_000 });
+      const r = await call('POST', '/partner/offline', { token: p.token });
+      expect(r.status, `partner offline: ${JSON.stringify(r.body)}`).toBe(200);
+    }
   }
 });

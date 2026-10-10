@@ -6,17 +6,23 @@
  * The orders service is restarted in `finally` even if the test fails.
  */
 import { expect, test } from '@playwright/test';
-import { call, getOrder, login, ok, placeOrder, waitFor, type Json } from '../../fixtures/api.js';
+import { call, expectStable, getOrder, login, ok, placeOrder, waitFor, type Json, type PlacedOrder } from '../../fixtures/api.js';
 import { RESTAURANTS, SIMPLE_ITEMS } from '../../fixtures/env.js';
 import { composePs } from '../../fixtures/stack.js';
 import { startService, stopService, waitHealthy } from '../../fixtures/system.js';
 
 test.setTimeout(300_000);
 
+// belt and braces: never leave the stack with orders stopped
+test.afterAll(async () => {
+  if (composePs().find((c) => c.Service === 'orders')?.State !== 'running') await startService('orders');
+  await waitHealthy('orders');
+});
+
 test('orders down during payment capture: PLACED within 60 s after restart, exactly once', async () => {
   const consumer = await login('consumer2');
   const owner1 = await login('owner1');
-  const order = await placeOrder(
+  const order: PlacedOrder = await placeOrder(
     consumer.token,
     [
       { restaurant: SIMPLE_ITEMS.paneerTikka.restaurant, name: SIMPLE_ITEMS.paneerTikka.name },
@@ -49,13 +55,16 @@ test('orders down during payment capture: PLACED within 60 s after restart, exac
     expect(Date.now() - t0).toBeLessThan(60_000);
     expect(placed.checkout.paymentStatus).toBe('CAPTURED');
 
-    // exactly once: one PLACED entry per child, one child per restaurant board, stable over a few seconds
-    await expect
-      .poll(async () => {
+    // exactly once: same children with one PLACED entry each, stable over 3 samples after the catch-up
+    const ids = placed.checkout.children.map((c: Json) => c.id).sort();
+    await expectStable(
+      'children + PLACED entries after recovery',
+      async () => {
         const o = await getOrder(consumer.token, order.checkoutId);
-        return o.checkout.children.map((c: Json) => c.statusHistory.filter((h: Json) => h.to === 'PLACED').length);
-      }, { intervals: [1000], timeout: 8000 })
-      .toEqual([1, 1]);
+        return { status: o.checkout.status, ids: o.checkout.children.map((c: Json) => c.id).sort(), placed: o.checkout.children.map((c: Json) => c.statusHistory.filter((h: Json) => h.to === 'PLACED').length) };
+      },
+      { status: 'PAID_PLACED', ids, placed: [1, 1] },
+    );
     const spice = order.child(RESTAURANTS.spiceRoute.id);
     const board = ok(await call('GET', `/owner/orders?restaurantId=${RESTAURANTS.spiceRoute.id}&status=PLACED&limit=100`, { token: owner1.token }), 'owner board');
     expect((board.items as Json[]).filter((x) => x.id === spice.id)).toHaveLength(1);
@@ -63,12 +72,15 @@ test('orders down during payment capture: PLACED within 60 s after restart, exac
     expect(orders.filter((o) => o.id === order.checkoutId)).toHaveLength(1);
     const payment = ok(await call('GET', `/payments/checkout/${order.checkoutId}`, { token: consumer.token }), 'GET payment');
     expect(payment).toMatchObject({ status: 'CAPTURED', capturedPaise: order.totalPaise, refundedPaise: 0 });
-
-    // tidy: restaurants decline (refund path)
-    await call('POST', `/owner/orders/${spice.id}/reject`, { token: owner1.token, body: { reason: 'e2e cleanup' } });
-    const owner2 = await login('owner2');
-    await call('POST', `/owner/orders/${order.child(RESTAURANTS.greenLeaf.id).id}/reject`, { token: owner2.token, body: { reason: 'e2e cleanup' } });
   } finally {
     if (!restarted) await startService('orders');
+    // tidy: restaurants decline whatever was placed (refund path); responses checked
+    const now = await getOrder(consumer.token, order.checkoutId).catch(() => null);
+    for (const [user, rid] of [['owner1', RESTAURANTS.spiceRoute.id], ['owner2', RESTAURANTS.greenLeaf.id]] as const) {
+      const c = now?.checkout.children.find((x: Json) => x.restaurantId === rid);
+      if (c?.status !== 'PLACED') continue;
+      const r = await call('POST', `/owner/orders/${c.id}/reject`, { token: (await login(user)).token, body: { reason: 'e2e cleanup' } });
+      expect(r.status, `cleanup reject ${c.code}: ${JSON.stringify(r.body)}`).toBe(200);
+    }
   }
 });
