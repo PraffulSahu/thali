@@ -1,5 +1,5 @@
 /**
- * Partner job execution (LLD 4.5): ASSIGNED → AT_PICKUP → PICKED_UP (pickup code) → OUT_FOR_DELIVERY
+ * Partner job execution (LLD 4.5): ASSIGNED → AT_PICKUP (delivery.arrived) → PICKED_UP (pickup code) → OUT_FOR_DELIVERY
  * → DELIVERED (customer delivery code); PICKED_UP/OUT_FOR_DELIVERY → FAILED (reason).
  * Only the assigned partner may act (others get 404). Handover codes: each guess first reserves an
  * attempt atomically (`codeAttempts < MAX` → $inc), so even concurrent guessing can never exceed
@@ -20,10 +20,14 @@ async function myJob(ctx: DeliveryContext, userId: string, jobId: string, sessio
   return job;
 }
 
+/** ASSIGNED → AT_PICKUP; DLV-6: emits `delivery.arrived` (outbox, same transaction) so orders can show "at restaurant". */
 export async function markArrived(ctx: DeliveryContext, userId: string, jobId: string): Promise<JobLean> {
   return withTransaction(ctx.conn, async (session) => {
     const job = await myJob(ctx, userId, jobId, session);
-    return transitionJob(ctx, session, job, 'AT_PICKUP', 'PARTNER', { actorId: userId });
+    const now = ctx.now();
+    const updated = await transitionJob(ctx, session, job, 'AT_PICKUP', 'PARTNER', { actorId: userId });
+    await emit(ctx, session, 'delivery.arrived', { jobId: job._id.toString(), childOrderId: job.childOrderId, partnerUserId: userId, at: atIso(now) }, job._id.toString());
+    return updated;
   });
 }
 

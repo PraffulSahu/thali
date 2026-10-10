@@ -68,7 +68,17 @@ describe('pickup / drop execution with handover codes', () => {
     expect(early.status).toBe(409);
     expect(early.body.error.code).toBe('DELIVERY_INVALID_TRANSITION');
 
-    await request(h.app).post(`/api/v1/deliveries/${job.id}/arrived`).set(bearer(token));
+    const arrived = await request(h.app).post(`/api/v1/deliveries/${job.id}/arrived`).set(bearer(token));
+    expect(arrived.body.status).toBe('AT_PICKUP');
+    // DLV-6: delivery.arrived (DeliveryAtPayload) via the outbox on events.delivery
+    const ae = await outboxEvents(h, 'delivery.arrived', { jobId: job.id });
+    expect(ae).toHaveLength(1);
+    expect(ae[0]!.envelope).toMatchObject({ producer: 'delivery', aggregateId: job.id });
+    expect(ae[0]!.envelope.payload).toEqual({ jobId: job.id, childOrderId: job.childOrderId, partnerUserId: p.userId, at: h.clock.now().toISOString() });
+    expect(ae[0]!.stream).toBe('events.delivery');
+    // a repeated arrive is an invalid transition and emits nothing more
+    expect((await request(h.app).post(`/api/v1/deliveries/${job.id}/arrived`).set(bearer(token))).status).toBe(409);
+    expect(await outboxEvents(h, 'delivery.arrived', { jobId: job.id })).toHaveLength(1);
     const wrongOnce = await request(h.app).post(`/api/v1/deliveries/${job.id}/pickup`).set(bearer(token)).send({ code: '9999' });
     expect(wrongOnce.status).toBe(400);
     const picked = await request(h.app).post(`/api/v1/deliveries/${job.id}/pickup`).set(bearer(token)).send({ code: '1234' });
