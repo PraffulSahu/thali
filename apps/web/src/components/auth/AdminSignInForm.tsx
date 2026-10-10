@@ -238,14 +238,15 @@ export function AdminSignInForm({ onSignedIn, onStepChange }: AdminSignInFormPro
               onChange={(e) => setPassword(e.target.value)}
               className="pr-12"
             />
-            <IconButton
-              icon={show ? 'eye-off' : 'eye'}
-              label={show ? 'Hide password' : 'Show password'}
-              size="md"
-              onClick={() => setShow((v) => !v)}
-              className="absolute right-0.5 top-[3px]"
-              aria-pressed={show}
-            />
+            <span className="absolute right-0.5 top-[3px]">
+              <IconButton
+                icon={show ? 'eye-off' : 'eye'}
+                label={show ? 'Hide password' : 'Show password'}
+                size="md"
+                onClick={() => setShow((v) => !v)}
+                aria-pressed={show}
+              />
+            </span>
           </div>
         </div>
         {error ? <InlineError error={new Error(error)} /> : null}

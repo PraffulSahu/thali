@@ -68,14 +68,14 @@ function LocationButton({ compact }: { compact?: boolean }) {
       type="button"
       onClick={focusAddress}
       aria-label={loc ? `Deliver to ${loc.label}. Change delivery location` : 'Deliver to: Set your location. Choose delivery location'}
-      className="flex min-w-0 items-center gap-2.5 rounded-control py-1.5 pl-1.5 pr-2.5 text-left hover:bg-fill"
+      className="flex max-w-full min-w-0 items-center gap-2.5 overflow-hidden rounded-control py-1.5 pl-1.5 pr-2.5 text-left hover:bg-fill max-sm:gap-2 max-sm:px-1"
     >
       <span className="grid size-[34px] shrink-0 place-items-center rounded-item bg-acc-soft text-acc-fg">
         <Icon name="location" size={17} />
       </span>
-      <span className={cn('flex min-w-0 flex-col', compact && 'max-sm:max-w-[7.5rem]')}>
+      <span className={cn('flex min-w-0 flex-col', compact && 'max-sm:max-w-[6.5rem]')}>
         <span className="text-[11px] font-bold uppercase leading-tight tracking-[.08em] text-fg-3 max-sm:hidden">Deliver to</span>
-        <span className="flex items-center gap-1 text-[15px] font-extrabold leading-tight text-fg">
+        <span className="flex min-w-0 items-center gap-1 text-[15px] font-extrabold leading-tight text-fg">
           <span className="truncate">{loc ? loc.label : 'Set your location'}</span>
           <Icon name="chevron-down" size={14} className="shrink-0" />
         </span>
@@ -162,7 +162,7 @@ function PublicHeader() {
       </div>
       <div className="border-b border-line bg-[color-mix(in_srgb,var(--bg)_80%,transparent)] backdrop-blur-[16px]">
         <div className="mx-auto flex max-w-[1240px] flex-wrap items-center gap-x-[18px] gap-y-3 px-6 py-3 max-sm:gap-x-2 max-sm:px-4">
-          <Logo size="public" />
+          <Logo size="public" className="max-sm:[&>span]:text-[21px] max-sm:[&>svg]:size-7" />
           <span aria-hidden="true" className="h-8 w-px bg-line max-sm:hidden" />
           <div className="min-w-0 max-sm:flex-1">
             <LocationButton compact />

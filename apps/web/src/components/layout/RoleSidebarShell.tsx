@@ -83,7 +83,11 @@ export function RoleSidebarShell({ role, nav = [], showNav = true, Context, Mobi
   const auth = useAuth();
   const { pathname } = useLocation();
   const [drawer, setDrawer] = useState(false);
-  useEffect(() => setDrawer(false), [pathname]);
+  useEffect(() => {
+    setDrawer(false);
+    // ≥641px the main column is the scroll container: reset it on navigation.
+    document.getElementById('main')?.scrollTo?.({ top: 0 });
+  }, [pathname]);
   const items = showNav ? nav : [];
   const hasNav = items.length > 0;
   const admin = role === 'admin';
@@ -91,7 +95,7 @@ export function RoleSidebarShell({ role, nav = [], showNav = true, Context, Mobi
   const home = AREA_HOME[role];
 
   return (
-    <div className="flex min-h-dvh flex-col page-glow">
+    <div className="flex min-h-dvh flex-col page-glow sm:h-dvh sm:min-h-0 sm:overflow-hidden">
       <SkipLink />
       <ModeBanner />
 
@@ -104,11 +108,11 @@ export function RoleSidebarShell({ role, nav = [], showNav = true, Context, Mobi
         <AccountMenu area={role} size={32} />
       </header>
 
-      <div className="flex flex-1">
+      <div className="flex flex-1 sm:min-h-0">
         {/* ≥641: rail (tablet) / sidebar (desktop) */}
         <aside
           className={cn(
-            'sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-line bg-side backdrop-blur-md sm:flex',
+            'hidden shrink-0 flex-col overflow-y-auto border-r border-line bg-side backdrop-blur-md sm:flex',
             'w-[72px] items-center gap-4 px-2 py-[18px] lg:items-stretch',
             admin ? 'lg:w-[224px] lg:gap-4 lg:px-3' : 'lg:w-[232px] lg:gap-[18px] lg:px-3.5',
           )}
@@ -153,7 +157,7 @@ export function RoleSidebarShell({ role, nav = [], showNav = true, Context, Mobi
 
         <MainRegion
           className={cn(
-            'min-w-0',
+            'min-w-0 sm:overflow-y-auto',
             admin ? 'px-[clamp(16px,2.4vw,32px)] pb-10 pt-6' : 'px-[clamp(16px,2.4vw,32px)] pb-10 pt-[22px]',
             hasNav && 'max-sm:pb-24',
           )}

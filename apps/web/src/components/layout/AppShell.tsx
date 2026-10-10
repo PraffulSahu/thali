@@ -33,11 +33,17 @@ export interface AppShellProps {
   shell?: ConsumerShellConfig | RoleShellConfig;
 }
 
+function NoLocation() {
+  return null;
+}
+
 export function AppShell({ variant, children, nav = [], HeaderActions, showNav = true, wide, shell }: AppShellProps) {
   if (variant === 'consumer') {
     const cfg = (shell ?? {}) as ConsumerShellConfig;
+    // Legacy HeaderActions (consumer LocationChip + CartButton) already include a location chip.
+    const legacy = !cfg.Actions && !cfg.Location && HeaderActions;
     return (
-      <ConsumerShell {...cfg} Actions={cfg.Actions ?? HeaderActions} container={wide ? 'none' : 'page'}>
+      <ConsumerShell {...cfg} Location={legacy ? NoLocation : cfg.Location} Actions={cfg.Actions ?? HeaderActions} container={wide ? 'none' : 'page'}>
         {children}
       </ConsumerShell>
     );

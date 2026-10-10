@@ -531,7 +531,7 @@ export default function LandingPage() {
               </ButtonLink>
             </div>
           </div>
-          <div id="riders" className="on-color relative flex min-h-[320px] flex-col gap-4 overflow-hidden rounded-block bg-[#141414] p-10 text-white max-sm:p-7">
+          <div id="riders" className="on-color relative flex min-h-[320px] flex-col gap-4 overflow-hidden rounded-block bg-[#141414] p-10 text-white dark:border dark:border-line-2 max-sm:p-7">
             <PromoRidersBike className="pointer-events-none absolute -bottom-10 -right-[30px] h-[200px] w-[240px] opacity-[.16]" />
             <p className="eyebrow text-[#ffc145]!">For delivery partners</p>
             <h2 className="max-w-[24rem] text-[34px] leading-[1.05]">Clear offers. Honest earnings.</h2>

@@ -3,6 +3,11 @@
 Read this before building a role area. Everything here is shared, so use it instead of re-implementing it.
 Each module's file header has more examples.
 
+> **UI redesign (Masala):** components, shells, theme, tokens and responsive rules are documented in
+> [`README-DESIGN-SYSTEM.md`](./README-DESIGN-SYSTEM.md). Where it disagrees with §10–§12 below (component props,
+> shells, design tokens), the design-system guide wins. Sign-in is now `/signin?role=…` (`/admin/login`
+> redirects there); `/` shows the public landing until a delivery location is chosen.
+
 - Stack: React 19, react-router 7 (data router, `createBrowserRouter`), TanStack Query 5, Tailwind v4 (CSS-first tokens in `styles.css`), Leaflet.
 - Imports from contracts: root only (`import { formatINR, ChildOrderStatus } from '@thali/contracts'`). Never import `@thali/contracts/seed`.
 - Error codes are open strings. Compare with `err.code === 'PRICE_CHANGED'`, but never `switch` exhaustively; the server may send new codes.
@@ -258,6 +263,9 @@ Props: `center`, `zoom` (14), `markers [{id, position:{lat,lng}, kind: restauran
 - Focus moves to `<main id="main">` on navigation; a skip link exists. Don't add another `<main>`.
 
 ## 12. Design tokens
+
+**Superseded** — see README-DESIGN-SYSTEM.md §3. The legacy names below still compile (bridged to the new
+semantic tokens) but must not be used in rebuilt screens.
 
 Defined in `src/styles.css` (`@theme`). Use the tokens rather than raw hex values.
 - Brand saffron: `brand-500 #E8590C` (marks, focus rings, accents; **not for text**), `brand-600` (primary button fill, white text 5.2:1), `brand-700` (brand text and links), `brand-50/100` (selected/tinted backgrounds).
