@@ -50,11 +50,17 @@ export const StatsQuery = z
 export const MyOrdersQuery = PaginationQuerySchema.extend({ status: CheckoutStatusSchema.optional() });
 
 export const AdminOrdersQuery = PaginationQuerySchema.extend({
-  q: z.string().trim().min(1).max(100).optional().meta({ description: 'Child or checkout code (TH-…), child/checkout/user id, or restaurant name prefix' }),
+  q: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .optional()
+    .meta({ description: 'Child or checkout code (TH-…), child/checkout/user id, restaurant name prefix, or a phone (4–13 digits → last-4 match)' }),
   status: statusList.optional(),
   restaurantId: z.string().min(1).max(64).optional(),
   userId: z.string().min(1).max(64).optional(),
-  phone: z.string().trim().min(4).max(20).optional().meta({ description: 'Customer phone; matched on the last 4 digits of the masked contact snapshot' }),
+  phone: z.string().trim().min(4).max(20).optional().meta({ description: 'Customer phone (or its last 4+ digits); matched on the last 4 digits of the contact snapshot' }),
   from: z.iso.datetime({ offset: true }).optional(),
   to: z.iso.datetime({ offset: true }).optional(),
 });

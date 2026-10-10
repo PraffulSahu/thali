@@ -1,6 +1,7 @@
 /**
  * Admin order routes (LLD §10 orders 🛡 — ADMIN role + MFA; mutations audited in the same txn):
  *   GET  /admin/orders?q&status&restaurantId&userId&phone&from&to&cursor   child-order search
+ *        (`phone`, or a `q` of 4–13 digits, matches the indexed `customerContact.phoneLast4` — ORD-7)
  *   GET  /admin/orders/overview
  *   GET  /admin/orders/:checkoutId                 group + children + timeline + explanations
  *   POST /admin/orders/child/:childId/cancel {reason, refundPaise}       refundPaise ≤ remaining
@@ -10,7 +11,7 @@
  */
 import express from 'express';
 import { Types } from 'mongoose';
-import { DomainError, normalizePhone, type ChildOrderStatus } from '@thali/contracts';
+import { DomainError, type ChildOrderStatus } from '@thali/contracts';
 import { auditEvent, buildPage, cursorFilter, PAGE_SORT, requireAuth, validate, withTransaction, type OpenApi } from '@thali/service-kit';
 import type { OrdersContext } from '../context.js';
 import type { CheckoutGroup } from '../models/checkout-group.js';
@@ -39,11 +40,32 @@ const adminWrite = () => requireAuth({ roles: ['ADMIN'], mfa: true, adminRoles: 
 
 const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
+/** A `q` that is a phone (4–13 digits, optionally with +, spaces, dashes, brackets) → its last 4 digits (ORD-7). */
+export function phoneTermLast4(term: string): string | null {
+  if (!/^\+?[\d\s()-]+$/.test(term)) return null;
+  const digits = term.replace(/\D/g, '');
+  return digits.length >= 4 && digits.length <= 13 ? digits.slice(-4) : null;
+}
+
+/** `phone` query param → last 4 digits (only a masked snapshot is stored); fewer than 4 digits → 400. */
+export function phoneParamLast4(phone: string): string {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 4) {
+    throw new DomainError('VALIDATION_FAILED', 'Enter at least the last 4 digits of the phone number', 400, {
+      issues: [{ path: 'query.phone', code: 'too_small', message: 'At least 4 digits' }],
+    });
+  }
+  return digits.slice(-4);
+}
+
 async function searchFilter(ctx: OrdersContext, q: ReturnType<typeof parseQuery>): Promise<Record<string, unknown>> {
   const and: Record<string, unknown>[] = [];
   if (q.q) {
     const term = q.q.trim();
-    if (/^TH-/i.test(term)) {
+    const phone4 = phoneTermLast4(term);
+    if (phone4) {
+      and.push({ 'customerContact.phoneLast4': phone4 });
+    } else if (/^TH-/i.test(term)) {
       const code = term.toUpperCase();
       const groups = await ctx.models.CheckoutGroup.find({ code }, { _id: 1 }).lean();
       and.push({ $or: [{ code }, { checkoutGroupId: { $in: groups.map((g) => g._id) } }] });
@@ -58,9 +80,8 @@ async function searchFilter(ctx: OrdersContext, q: ReturnType<typeof parseQuery>
   if (q.restaurantId) and.push({ restaurantId: q.restaurantId });
   if (q.userId) and.push({ userId: q.userId });
   if (q.phone) {
-    // only a masked contact snapshot is stored (`+91******3210`): match its last 4 digits
-    const last4 = normalizePhone(q.phone).slice(-4);
-    and.push({ 'customerContact.phoneMasked': { $regex: `${last4}$` } });
+    // only a masked contact snapshot is stored (`+91******3210`): match its (indexed) last 4 digits
+    and.push({ 'customerContact.phoneLast4': phoneParamLast4(q.phone) });
   }
   if (q.from || q.to) and.push({ createdAt: { ...(q.from ? { $gte: new Date(q.from) } : {}), ...(q.to ? { $lte: new Date(q.to) } : {}) } });
   return and.length ? { $and: and } : {};

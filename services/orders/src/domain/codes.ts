@@ -24,6 +24,24 @@ export function handoverCodePair(): { pickupCode: string; deliveryCode: string }
   return { pickupCode, deliveryCode };
 }
 
+/**
+ * Last 4 digits of a phone (or of its masked snapshot `+91******3210`) for indexed admin phone
+ * search (ORD-7); null when fewer than 4 digits are known.
+ */
+export function phoneLast4(phone: string | null | undefined): string | null {
+  const digits = (phone ?? '').replace(/\D/g, '');
+  return digits.length >= 4 ? digits.slice(-4) : null;
+}
+
+/** Customer contact snapshot stored on child orders and checkout groups (name + masked phone + last 4 digits). */
+export function customerContactOf(user: { name?: string | null; phone?: string | null } | null | undefined): {
+  name: string;
+  phoneMasked: string;
+  phoneLast4: string | null;
+} {
+  return { name: user?.name ?? 'Customer', phoneMasked: maskPhone(user?.phone), phoneLast4: phoneLast4(user?.phone) };
+}
+
 /** `+919876543210` → `+91******3210`; other formats keep the first 3 and last 4 characters. */
 export function maskPhone(phone: string | null | undefined): string {
   if (!phone) return '';

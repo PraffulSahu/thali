@@ -40,7 +40,7 @@ import type { ChildOrder } from '../models/child-order.js';
 import type { AddressSnapshot } from '../models/common.js';
 import { appendOrderEvents } from '../models/order-event.js';
 import { DELIVERY_NOTE, findCart, primaryProblemCode, problemError, toAddressSnapshot, addressView } from './cart.js';
-import { handoverCodePair, maskPhone, orderCode } from './codes.js';
+import { customerContactOf, handoverCodePair, orderCode } from './codes.js';
 import { emitOrdersEvent } from './events.js';
 import { matchQuoteLines } from './quote-lines.js';
 import { queueOrderUpdated } from './realtime.js';
@@ -573,7 +573,7 @@ async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult
   // 7: persist checkout + children + outbox in one transaction
   const now = new Date();
   const expiresAt = new Date(now.getTime() + ctx.config.CHECKOUT_TTL_SEC * 1000);
-  const customerContact = { name: user?.name ?? 'Customer', phoneMasked: maskPhone(user?.phone) };
+  const customerContact = customerContactOf(user);
   const isDemo = ctx.config.APP_MODE === 'demo';
 
   let group: CheckoutGroupDoc | null = null;

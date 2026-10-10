@@ -106,7 +106,7 @@ describe('POST /checkouts — happy path', () => {
     expect(childA.restaurantAddress).toMatchObject({ line1: '1 MG Road', city: 'Bengaluru', pincode: '560001' });
     expect(childA.commissionBps).toBe(1800);
     expect(childA.dropAddress).toMatchObject({ line1: DROP_ADDRESS.line1, location: { type: 'Point', coordinates: [77.5946, 12.9716] } });
-    expect(childA.customerContact).toEqual({ name: 'Asha Rao', phoneMasked: '+91******3210' });
+    expect(childA.customerContact).toEqual({ name: 'Asha Rao', phoneMasked: '+91******3210', phoneLast4: '3210' });
     expect(childA.pickupCode).toMatch(/^\d{4}$/);
     expect(childA.deliveryCode).toMatch(/^\d{4}$/);
     expect(childA.lines[0].selections).toHaveLength(2);

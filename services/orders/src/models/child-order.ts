@@ -84,7 +84,8 @@ export interface ChildOrder {
   pickupCode: string;
   /** 4 digits, shown to the customer; partner enters it at drop. */
   deliveryCode: string;
-  customerContact: { name: string; phoneMasked: string };
+  /** `phoneLast4` (ORD-7): indexed admin phone search; null when unknown. Backfilled by `orders:contact-backfill`. */
+  customerContact: { name: string; phoneMasked: string; phoneLast4?: string | null };
   /** Customer drop address snapshot (with location). */
   dropAddress: AddressSnapshot;
   distanceKm?: number | null;
@@ -169,7 +170,7 @@ export const ChildOrderSchema = new Schema<ChildOrder>(
     pickupCode: { type: String, required: true },
     deliveryCode: { type: String, required: true },
     customerContact: {
-      type: new Schema({ name: String, phoneMasked: String }, { _id: false }),
+      type: new Schema({ name: String, phoneMasked: String, phoneLast4: { type: String, default: undefined } }, { _id: false }),
       required: true,
     },
     dropAddress: { type: AddressSnapshotSchema, required: true },
@@ -221,6 +222,7 @@ ChildOrderSchema.index({ restaurantId: 1, status: 1, createdAt: -1 });
 ChildOrderSchema.index({ restaurantOwnerId: 1, createdAt: -1 });
 ChildOrderSchema.index({ userId: 1, createdAt: -1 });
 ChildOrderSchema.index({ status: 1, acceptBy: 1 });
+ChildOrderSchema.index({ 'customerContact.phoneLast4': 1 });
 
 export const childOrderModel = (conn: Connection): Model<ChildOrder> =>
   (conn.models.ChildOrder as Model<ChildOrder> | undefined) ?? conn.model<ChildOrder>('ChildOrder', ChildOrderSchema);
