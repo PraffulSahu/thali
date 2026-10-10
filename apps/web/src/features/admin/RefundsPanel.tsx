@@ -9,6 +9,7 @@ import { Field } from '../../components/ui/Field';
 import { FormActions } from '../../components/ui/FormActions';
 import { Input, Textarea } from '../../components/ui/Input';
 import { Pagination, useCursorPages } from '../../components/ui/Pagination';
+import { RadioGroup } from '../../components/ui/Radio';
 import { formatPaise, Price } from '../../components/ui/Price';
 import { Select } from '../../components/ui/Select';
 import { StatusPill, humanize } from '../../components/ui/StatusPill';
@@ -28,6 +29,7 @@ function ManualRefundDialog({ open, onClose }: { open: boolean; onClose: () => v
   const idem = useIdempotencyKey();
   const [intentId, setIntentId] = useState('');
   const [payment, setPayment] = useState<PaymentRow | null>(null);
+  const [candidates, setCandidates] = useState<PaymentRow[]>([]);
   const [lookupError, setLookupError] = useState<string | null>(null);
   const [looking, setLooking] = useState(false);
   const [amount, setAmount] = useState('');
@@ -45,7 +47,7 @@ function ManualRefundDialog({ open, onClose }: { open: boolean; onClose: () => v
 
   useEffect(() => {
     if (!open) return;
-    setIntentId(''); setPayment(null); setLookupError(null); setAmount(''); setReason('ADMIN'); setNote('');
+    setIntentId(''); setPayment(null); setCandidates([]); setLookupError(null); setAmount(''); setReason('ADMIN'); setNote('');
     setChildOrderId(''); setRestaurantId(''); setCharge(''); setError(null);
   }, [open]);
   const { renew } = idem;
@@ -57,14 +59,15 @@ function ManualRefundDialog({ open, onClose }: { open: boolean; onClose: () => v
     setLooking(true);
     setLookupError(null);
     setPayment(null);
+    setCandidates([]);
     try {
       const page = await searchPayments(q);
-      const hit = page.items.find((p) => p.paymentIntentId === q || p.referenceId === q) ?? page.items[0];
-      if (!hit) setLookupError('No payment found for that id.');
-      else {
-        setPayment(hit);
-        setIntentId(hit.paymentIntentId);
-      }
+      // Only an exact payment id / order reference is selected automatically; anything else (the search also
+      // matches user and provider ids) must be picked explicitly so a refund never lands on the wrong payment.
+      const exact = page.items.find((p) => p.paymentIntentId === q || p.referenceId === q);
+      if (exact) setPayment(exact);
+      else if (page.items.length === 0) setLookupError('No payment found for that id.');
+      else setCandidates(page.items);
     } catch (e) {
       setLookupError(errorMessage(e));
     } finally {
@@ -107,6 +110,7 @@ function ManualRefundDialog({ open, onClose }: { open: boolean; onClose: () => v
           ...(chargePaise ? { chargeRestaurantPaise: chargePaise } : {}),
         },
       });
+      idem.renew();
       onClose();
     } catch (err) {
       setError(err);
@@ -136,15 +140,30 @@ function ManualRefundDialog({ open, onClose }: { open: boolean; onClose: () => v
       <form onSubmit={submit} className="flex flex-col gap-4">
         <div className="flex flex-col gap-2">
           <Field label="Payment id" required hint="The payment reference shown on the order page" error={lookupError ?? undefined}>
-            <Input value={intentId} onChange={(e) => { setIntentId(e.target.value); setPayment(null); }} className="font-mono" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void lookup(); } }} />
+            <Input value={intentId} onChange={(e) => { setIntentId(e.target.value); setPayment(null); setCandidates([]); }} className="font-mono" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void lookup(); } }} />
           </Field>
           <div>
             <Button type="button" size="sm" variant="secondary" onClick={() => void lookup()} loading={looking} disabled={!intentId.trim()}>
               Look up payment
             </Button>
           </div>
+          {candidates.length > 0 && !payment ? (
+            <RadioGroup
+              legend="No exact match. Choose the payment to refund"
+              name="refund-payment"
+              variant="cards"
+              value={null}
+              onChange={(id) => setPayment(candidates.find((c) => c.paymentIntentId === id) ?? null)}
+              options={candidates.map((c) => ({
+                value: c.paymentIntentId,
+                label: <span className="font-mono text-sm">{c.paymentIntentId}</span>,
+                description: `Reference ${c.referenceId} · ${formatPaise(c.amountPaise)} · ${humanize(c.status)}`,
+              }))}
+            />
+          ) : null}
           {payment ? (
             <p role="status" className="rounded-control bg-surface-muted p-3 text-sm text-slate-800">
+              <span className="block">{`Selected payment ${payment.paymentIntentId} (reference ${payment.referenceId})`}</span>
               {`Captured ${formatPaise(payment.capturedPaise)}, refunded ${formatPaise(payment.refundedPaise)}${payment.refundReservedPaise ? `, in progress ${formatPaise(payment.refundReservedPaise)}` : ''}. Still refundable: ${formatPaise(remaining)}.`}
             </p>
           ) : null}

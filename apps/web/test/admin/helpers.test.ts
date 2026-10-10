@@ -24,6 +24,8 @@ describe('admin input helpers', () => {
     expect(istInputToIso('2026-10-10T18:30')).toBe('2026-10-10T13:00:00.000Z');
     expect(isoToIstInput('2026-10-10T13:00:00.000Z')).toBe('2026-10-10T18:30');
     expect(istDateToIso('2026-10-10', 'start')).toBe('2026-10-09T18:30:00.000Z');
+    expect(istDateToIso('2026-10-10', 'end')).toBe('2026-10-10T18:29:59.999Z');
+    expect(istDateToIso('bad', 'end')).toBeUndefined();
     expect(istInputToIso('garbage')).toBeNull();
   });
 
@@ -46,9 +48,11 @@ describe('admin input helpers', () => {
   it('round-trips service area polygons as closed [lng, lat] rings', () => {
     const points = [{ lat: 12.9, lng: 77.5 }, { lat: 12.95, lng: 77.6 }, { lat: 13, lng: 77.55 }];
     const poly = pointsToPolygon(points);
-    expect(poly.coordinates[0]![0]).toEqual([77.5, 12.9]);
-    const closed = { ...poly, coordinates: [[...poly.coordinates[0]!, poly.coordinates[0]![0]!]] };
-    expect(ringToPoints({ polygon: closed } as never)).toEqual(points);
+    const ring = poly.coordinates[0]!;
+    expect(ring).toHaveLength(points.length + 1);
+    expect(ring[0]).toEqual([77.5, 12.9]);
+    expect(ring[ring.length - 1]).toEqual(ring[0]);
+    expect(ringToPoints({ polygon: poly } as never)).toEqual(points);
   });
 
   it('only redirects to admin pages after login', () => {

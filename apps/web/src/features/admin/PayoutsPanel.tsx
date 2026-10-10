@@ -133,6 +133,7 @@ function CreatePayoutDialog({ open, onClose, prefill }: { open: boolean; onClose
     setError(null);
     try {
       await create.mutateAsync({ body: { accountType, accountId: accountId.trim(), amountPaise: paise, ...(notes.trim() ? { notes: notes.trim() } : {}) }, key: idem.key });
+      idem.renew();
       onClose();
     } catch (err) {
       setError(err);

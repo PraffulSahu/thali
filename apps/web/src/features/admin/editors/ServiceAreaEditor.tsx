@@ -2,7 +2,7 @@
  * Service area editor: click the map to add polygon vertices (or use "Pin map centre" / the vertex list for
  * keyboard-only use), plus the delivery fee rule and minimum order. The server validates the geometry.
  */
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { GeoPoint } from '@thali/contracts';
 import { Button } from '../../../components/ui/Button';
 import { Checkbox } from '../../../components/ui/Checkbox';
@@ -12,8 +12,9 @@ import { Skeleton } from '../../../components/ui/Skeleton';
 import { DEFAULT_CENTER } from '../../../lib/geo';
 import { paiseToRupees, rupeesToPaise, type ServiceArea } from '../api';
 import { EditorDialog, useCatalogSave } from './EditorShell';
+import type { CenterGetter } from './PolygonMap';
 
-const MapView = lazy(() => import('../../../components/ui/Map').then((m) => ({ default: m.MapView })));
+const PolygonMap = lazy(() => import('./PolygonMap'));
 
 /** GeoJSON ring ([lng, lat], closed) to vertices without the closing duplicate. */
 export function ringToPoints(area: ServiceArea | null): GeoPoint[] {
@@ -22,7 +23,12 @@ export function ringToPoints(area: ServiceArea | null): GeoPoint[] {
   if (pts.length > 1 && pts[0]!.lat === pts[pts.length - 1]!.lat && pts[0]!.lng === pts[pts.length - 1]!.lng) pts.pop();
   return pts;
 }
-export const pointsToPolygon = (points: GeoPoint[]) => ({ type: 'Polygon' as const, coordinates: [points.map((p) => [round(p.lng), round(p.lat)])] });
+/** GeoJSON Polygon with the ring explicitly closed (first point repeated at the end). */
+export const pointsToPolygon = (points: GeoPoint[]) => {
+  const ring = points.map((p) => [round(p.lng), round(p.lat)]);
+  if (ring.length) ring.push([...ring[0]!]);
+  return { type: 'Polygon' as const, coordinates: [ring] };
+};
 const round = (n: number) => Math.round(n * 1e6) / 1e6;
 const decimal = (s: string) => (/^\d{1,3}(\.\d{1,3})?$/.test(s.trim()) ? Number(s.trim()) : null);
 
@@ -35,6 +41,10 @@ export default function ServiceAreaEditor({ open, item, onClose }: { open: boole
   const [baseKm, setBaseKm] = useState('');
   const [perKm, setPerKm] = useState('');
   const [max, setMax] = useState('');
+  const [latText, setLatText] = useState('');
+  const [lngText, setLngText] = useState('');
+  const [cornerError, setCornerError] = useState<string | null>(null);
+  const centerRef = useRef<CenterGetter | null>(null);
   const save = useCatalogSave<ServiceArea>('service-areas', 'Service area', item);
 
   useEffect(() => {
@@ -47,7 +57,30 @@ export default function ServiceAreaEditor({ open, item, onClose }: { open: boole
     setBaseKm(item ? String(item.deliveryFee.baseKm) : '');
     setPerKm(paiseToRupees(item?.deliveryFee.perKmPaise));
     setMax(paiseToRupees(item?.deliveryFee.maxPaise));
+    setLatText('');
+    setLngText('');
+    setCornerError(null);
   }, [open, item]);
+
+  const addCorner = (p: GeoPoint) => setPoints((cur) => [...cur, { lat: round(p.lat), lng: round(p.lng) }]);
+  const addTyped = () => {
+    const lat = Number(latText.trim());
+    const lng = Number(lngText.trim());
+    if (latText.trim() === '' || lngText.trim() === '' || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
+      setCornerError('Enter a latitude between -90 and 90 and a longitude between -180 and 180.');
+      return;
+    }
+    setCornerError(null);
+    addCorner({ lat, lng });
+    setLatText('');
+    setLngText('');
+  };
+  const onCornerKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addTyped();
+    }
+  };
 
   const basePaise = rupeesToPaise(base);
   const baseKmNum = decimal(baseKm);
@@ -86,20 +119,26 @@ export default function ServiceAreaEditor({ open, item, onClose }: { open: boole
 
           <div className="flex flex-col gap-2">
             <p className="text-sm font-medium text-slate-800">Boundary <span className="text-danger-700" aria-hidden="true">*</span></p>
-            <p className="text-sm text-slate-600">Click the map to add corners in order around the area. Use “Pin map centre” to add the point under the crosshair with the keyboard.</p>
+            <p className="text-sm text-slate-600">Click the map to add corners in order around the area. Without a mouse, pan the map with the arrow keys and use “Add corner at map centre”, or type coordinates below.</p>
             <Suspense fallback={<Skeleton className="h-72 w-full" />}>
-              <MapView
-                center={center}
-                zoom={12}
-                followCenter={false}
-                fitToMarkers={false}
-                ariaLabel="Service area map. Click to add polygon corners."
-                className="h-72"
-                polygons={points.length >= 2 ? [{ id: 'area', points, tone: 'brand', open: points.length < 3 }] : []}
-                markers={points.map((p, i) => ({ id: `v${i}`, position: p, kind: 'point' as const, label: `Corner ${i + 1}` }))}
-                onPick={(p) => setPoints((cur) => [...cur, { lat: round(p.lat), lng: round(p.lng) }])}
-              />
+              <PolygonMap points={points} center={center} onAdd={addCorner} centerRef={centerRef} />
             </Suspense>
+            <div className="flex flex-wrap items-end gap-2">
+              <Button type="button" size="sm" variant="secondary" icon="crosshair" onClick={() => { const c = centerRef.current?.(); if (c) addCorner(c); }}>
+                Add corner at map centre
+              </Button>
+            </div>
+            <div className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[1fr_1fr_auto]">
+              <Field label="Corner latitude" error={cornerError ?? undefined}>
+                <Input inputMode="decimal" value={latText} onChange={(e) => setLatText(e.target.value)} onKeyDown={onCornerKey} placeholder="12.9716" />
+              </Field>
+              <Field label="Corner longitude">
+                <Input inputMode="decimal" value={lngText} onChange={(e) => setLngText(e.target.value)} onKeyDown={onCornerKey} placeholder="77.5946" />
+              </Field>
+              <Button type="button" variant="secondary" onClick={addTyped}>
+                Add corner
+              </Button>
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               <span role="status" className="text-sm text-slate-700">
                 {points.length} {points.length === 1 ? 'corner' : 'corners'}{points.length < 3 ? ` (need at least 3)` : ''}

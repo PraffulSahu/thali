@@ -71,10 +71,14 @@ export function isoToIstInput(iso: string | null | undefined): string {
   const shifted = new Date(d.getTime() + 330 * 60_000);
   return shifted.toISOString().slice(0, 16);
 }
-/** Local calendar date ("2026-10-10") in IST to the instant at the start (or end) of that day. */
+/**
+ * Calendar date ("2026-10-10") in IST to an instant. `start` = 00:00 that day; `end` = the start of the
+ * NEXT day minus 1 ms (inclusive upper bound that includes the whole day, seconds and milliseconds).
+ */
 export function istDateToIso(date: string, edge: 'start' | 'end'): string | undefined {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return undefined;
-  return istInputToIso(`${date}T${edge === 'start' ? '00:00' : '23:59'}`) ?? undefined;
+  const start = istInputToIso(`${date}T00:00`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !start) return undefined;
+  return edge === 'start' ? start : new Date(new Date(start).getTime() + 86_400_000 - 1).toISOString();
 }
 
 /* ------------------------------------------------------------------ restaurants (VERIFIED: services/marketplace admin-restaurants) */
