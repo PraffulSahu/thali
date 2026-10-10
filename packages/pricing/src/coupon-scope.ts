@@ -14,11 +14,12 @@ export function couponNotApplicableError(): DomainError {
 /**
  * Which cart groups a coupon applies to (MKT-8). `couponRestaurantIds` absent/empty = all groups.
  * Marketplace computes the discount against `eligibleSubtotalPaise`, then passes the same ids to
- * `priceCheckout` as `couponRestaurantIds`. Result order follows the input order.
+ * `priceCheckout` as `couponRestaurantIds` (which uses this same rule). Ids match case-insensitively
+ * (like `RestaurantIdsSubsetSchema` / `restaurantSetKey`); returned ids keep the input casing and order.
  */
 export function couponScope(groups: readonly CouponScopeGroup[], couponRestaurantIds?: readonly string[] | null): CouponScopeResult {
-  const scope = couponRestaurantIds && couponRestaurantIds.length > 0 ? new Set(couponRestaurantIds) : null;
-  const eligible = scope ? groups.filter((g) => scope.has(g.restaurantId)) : [...groups];
+  const scope = couponRestaurantIds && couponRestaurantIds.length > 0 ? new Set(couponRestaurantIds.map((i) => i.toLowerCase())) : null;
+  const eligible = scope ? groups.filter((g) => scope.has(g.restaurantId.toLowerCase())) : [...groups];
   if (scope && eligible.length === 0) return { ok: false, reason: COUPON_NOT_APPLICABLE };
   return {
     ok: true,

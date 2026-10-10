@@ -232,7 +232,8 @@ export function createGoogleGeo(opts: GoogleGeoOptions): GeoProvider {
           headers: { 'X-Goog-Api-Key': opts.apiKey, 'X-Goog-FieldMask': GOOGLE_PLACE_DETAILS_FIELD_MASK },
         });
       } catch (err) {
-        if (err instanceof ProviderError && err.status === 404) return null; // unknown place id: not a provider fault
+        // unknown (404) or malformed (400 INVALID_ARGUMENT) place id is caller input, not a provider fault
+        if (err instanceof ProviderError && (err.status === 404 || err.status === 400)) return null;
         await failed('google-places', err);
         throw unavailable('Place lookup');
       }
@@ -278,7 +279,7 @@ export function createGoogleGeo(opts: GoogleGeoOptions): GeoProvider {
           ? `${parts.route}, ${parts.locality}`
           : parts.locality && parts.city
             ? `${parts.locality}, ${parts.city}`
-            : (parts.route ?? parts.locality ?? formattedAddress.split(',').slice(0, 2).join(',').trim()) || formattedAddress;
+            : formattedAddress.split(',').slice(0, 2).join(',').trim() || parts.route || parts.locality || formattedAddress;
       return {
         label,
         formattedAddress,

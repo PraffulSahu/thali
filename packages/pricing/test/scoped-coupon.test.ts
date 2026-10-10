@@ -41,6 +41,18 @@ describe('scoped coupons (MKT-8)', () => {
     expect(o.children.map((c) => c.breakdown.membershipDiscountPaise)).toEqual([5300, 1000]);
   });
 
+  it('scope ids match case-insensitively (consistent with RestaurantIdsSubsetSchema / restaurantSetKey)', () => {
+    const X: RestaurantInput = { ...A, restaurantId: 'aaaaaaaaaaaaaaaaaaaaaaaa' };
+    const Y: RestaurantInput = { ...B, restaurantId: 'bbbbbbbbbbbbbbbbbbbbbbbb' };
+    const o = priceCheckout([X, Y], { couponDiscountPaise: 1000, couponRestaurantIds: ['BBBBBBBBBBBBBBBBBBBBBBBB'] }, null, config);
+    expect(o.children.map((c) => c.breakdown.couponDiscountPaise)).toEqual([0, 1000]);
+    expect(couponScope([{ restaurantId: 'aaaaaaaaaaaaaaaaaaaaaaaa', itemsSubtotalPaise: 5 }], ['AAAAAAAAAAAAAAAAAAAAAAAA'])).toEqual({
+      ok: true,
+      eligibleRestaurantIds: ['aaaaaaaaaaaaaaaaaaaaaaaa'],
+      eligibleSubtotalPaise: 5,
+    });
+  });
+
   it('a scoped coupon may not exceed the eligible subtotal', () => {
     expect(() => priceCheckout([A, B], { couponDiscountPaise: 15001, couponRestaurantIds: ['rB'] }, null, config)).toThrow(RangeError);
     expect(() => priceCheckout([A, B], { couponDiscountPaise: 15000, couponRestaurantIds: ['rB'] }, null, config)).not.toThrow();

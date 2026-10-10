@@ -139,6 +139,13 @@ describe('google place details (Places API New)', () => {
     expect(errors).toEqual([]);
   });
 
+  it('400 INVALID_ARGUMENT (malformed place id, caller input) → null without recording a provider error', async () => {
+    stubFetch(async () => json({ error: { code: 400, message: 'Not a valid Place ID', status: 'INVALID_ARGUMENT' } }, 400));
+    const { geo, errors } = geoWithErrors();
+    expect(await geo.placeDetails!('!!garbage!!')).toBeNull();
+    expect(errors).toEqual([]);
+  });
+
   it('5xx or a place without a location → google-places error + UPSTREAM_UNAVAILABLE', async () => {
     stubFetch(async () => json({}, 500));
     const a = geoWithErrors();
@@ -206,6 +213,26 @@ describe('google reverse geocode (Geocoding API)', () => {
     );
     const r = await geoWithErrors().geo.reverse!({ lat: 12.93, lng: 77.62 });
     expect(r).toMatchObject({ label: 'Koramangala, Bengaluru', locality: 'Koramangala', city: 'Bengaluru', pincode: null });
+  });
+
+  it('label falls back to the formatted address (first two parts) when there is a route but no locality', async () => {
+    stubFetch(async () =>
+      json({
+        status: 'OK',
+        results: [
+          {
+            formatted_address: 'NH 44, Devanahalli, Karnataka 562110, India',
+            geometry: { location: { lat: 13.2, lng: 77.7 } },
+            address_components: [
+              { long_name: 'National Highway 44', short_name: 'NH 44', types: ['route'] },
+              { long_name: '562110', short_name: '562110', types: ['postal_code'] },
+            ],
+          },
+        ],
+      }),
+    );
+    const r = await geoWithErrors().geo.reverse!({ lat: 13.2, lng: 77.7 });
+    expect(r).toMatchObject({ label: 'NH 44, Devanahalli', locality: null, city: null, pincode: '562110' });
   });
 
   it('ZERO_RESULTS → null; transport failure → google-geocode error + UPSTREAM_UNAVAILABLE', async () => {

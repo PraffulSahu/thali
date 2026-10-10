@@ -72,6 +72,28 @@ describe('ensureDocsBulk', () => {
     expect(await M.exists({ _id: hexId(301) })).toBeTruthy();
   });
 
+  it('a chunk with one invalid doc writes nothing (validated before any write)', async () => {
+    const M = People();
+    await expect(
+      ensureDocsBulk(M, [{ _id: hexId(500), phone: '+96500' }, { _id: hexId(501) }, { _id: hexId(502), phone: '+96502' }], {}),
+    ).rejects.toThrow(/phone/);
+    expect(await M.countDocuments({ _id: { $in: [hexId(500), hexId(501), hexId(502)] } })).toBe(0);
+  });
+
+  it('validates each document exactly once', async () => {
+    let calls = 0;
+    const counted = new Schema(
+      { v: { type: String, required: true, validate: { validator: () => (calls++, true) } } },
+      { collection: 'bulk_counted', timestamps: true },
+    );
+    const C = db.conn.models.BulkCounted ?? db.conn.model('BulkCounted', counted);
+    const r: SeedReport = {};
+    await ensureDocsBulk(C, [{ _id: hexId(600), v: 'a' }, { _id: hexId(601), v: 'b' }, { _id: hexId(602), v: 'c' }], r, { chunk: 2 });
+    expect(r.bulk_counted).toEqual({ inserted: 3, existing: 0 });
+    expect(calls).toBe(3);
+    expect(await C.findById(hexId(600)).lean()).toMatchObject({ v: 'a', __v: 0 });
+  });
+
   it('requires a deterministic _id and validates through the model', async () => {
     const M = People();
     await expect(ensureDocsBulk(M, [{ phone: '+95000' }], {})).rejects.toThrow(/_id/);

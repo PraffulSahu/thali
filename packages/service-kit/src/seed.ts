@@ -80,7 +80,7 @@ type SeedDoc = Record<string, unknown>;
  * Bulk variant of `ensureDocs` for large generated seeds (gap analysis §5.2): per chunk,
  * `find({_id:{$in}}, {_id:1})` then `insertMany(missing, {ordered:false, timestamps:false})`.
  * Same rules: never overwrites; every doc needs a deterministic `_id`; the whole chunk is validated
- * through the model before anything is written (a validation error throws and the chunk is not written);
+ * (once) through the model before anything is written (a validation error throws and the chunk is not written);
  * explicit `createdAt`/`updatedAt` are kept, else both default to now; a duplicate `_id` (repeated in
  * the input, or inserted concurrently) counts as existing; a unique clash with a non-seed document
  * throws `SeedConflictError` naming the key (after the rest of the chunk has been inserted).
@@ -113,14 +113,17 @@ export async function ensureDocsBulk(
       pending.push({ id: d._id, doc });
     }
     if (pending.length === 0) return;
+    // validate once, here (the whole chunk, before any write); insert as raw objects (lean: no second
+    // validation/hydration, no timestamp handling, so explicit createdAt/updatedAt are kept as built above)
     await Promise.all(pending.map((p) => p.doc.validate()));
+    const versionKey = model.schema.get('versionKey') as string | false | undefined;
+    const raw = pending.map((p) => {
+      const o = p.doc.toObject({ depopulate: true, virtuals: false, getters: false, transform: false }) as Record<string, unknown>;
+      if (versionKey) o[versionKey] = 0;
+      return o;
+    });
     try {
-      // `timestamps: false` (honoured by mongoose insertMany, not in its typings): keep explicit createdAt/updatedAt
-      const insertOpts = { ordered: false, timestamps: false };
-      await model.insertMany(
-        pending.map((p) => p.doc),
-        insertOpts,
-      );
+      await model.insertMany(raw, { ordered: false, lean: true });
       tally.inserted += pending.length;
     } catch (e) {
       const writeErrors = (e as { writeErrors?: unknown[] }).writeErrors;

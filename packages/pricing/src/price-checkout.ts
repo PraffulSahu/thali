@@ -1,5 +1,5 @@
 import { allocateProRata, assertNonNegativeInt } from './allocate.js';
-import { couponNotApplicableError } from './coupon-scope.js';
+import { couponNotApplicableError, couponScope } from './coupon-scope.js';
 import type {
   Breakdown,
   GroupDiscountInput,
@@ -83,12 +83,14 @@ export function priceCheckout(
   });
 
   // Step 2: coupon pro-rata by itemsSubtotal, across the eligible children only (MKT-8).
-  const scope = d.couponRestaurantIds && d.couponRestaurantIds.length > 0 ? new Set(d.couponRestaurantIds) : null;
-  const eligible = scope ? priced.filter((p) => scope.has(p.r.restaurantId)) : priced;
-  if (scope && eligible.length === 0) throw couponNotApplicableError();
-  const eligibleSubtotal = eligible.reduce((acc, p) => acc + p.subtotal, 0);
+  const scoped = !!d.couponRestaurantIds && d.couponRestaurantIds.length > 0;
+  const sc = couponScope(priced.map((p) => ({ restaurantId: p.r.restaurantId, itemsSubtotalPaise: p.subtotal })), d.couponRestaurantIds);
+  if (!sc.ok) throw couponNotApplicableError();
+  const eligibleIds = new Set(sc.eligibleRestaurantIds);
+  const eligible = priced.filter((p) => eligibleIds.has(p.r.restaurantId));
+  const eligibleSubtotal = sc.eligibleSubtotalPaise;
   if (d.couponDiscountPaise > eligibleSubtotal) {
-    throw new RangeError(`couponDiscountPaise (${d.couponDiscountPaise}) exceeds ${scope ? 'eligible ' : ''}items subtotal (${eligibleSubtotal})`);
+    throw new RangeError(`couponDiscountPaise (${d.couponDiscountPaise}) exceeds ${scoped ? 'eligible ' : ''}items subtotal (${eligibleSubtotal})`);
   }
 
   const couponAlloc: Record<string, number> = Object.fromEntries(priced.map((p) => [p.r.restaurantId, 0]));
