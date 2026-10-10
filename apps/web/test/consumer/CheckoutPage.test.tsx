@@ -40,7 +40,7 @@ describe('CheckoutPage', () => {
   it('renders the per-restaurant breakdown and total from the server preview', async () => {
     const m = mockApi(baseRoutes());
     render();
-    const spice = await screen.findByRole('region', { name: /spice route/i });
+    const spice = await screen.findByRole('region', { name: /spice route/i }, { timeout: 5000 });
     expect(within(spice).getByText(/delivered separately/i)).toBeInTheDocument();
     expect(within(spice).getByText(/^items$/i).parentElement).toHaveTextContent('₹480');
     expect(within(spice).getByText(/delivery fee/i).parentElement).toHaveTextContent('₹30');

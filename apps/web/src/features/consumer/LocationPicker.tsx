@@ -3,7 +3,7 @@
  * The choice is checked against `/discovery/serviceability` (deliverable ≠ nearby) and persisted to localStorage.
  *
  *   <LocationPicker onDone={close} />            inline (home page when nothing is chosen yet)
- *   <LocationDialog open onClose={...} />        from the header chip
+ *   <LocationDialog open onClose={...} />        from the header chip (HeaderActions.tsx)
  */
 import { useQuery } from '@tanstack/react-query';
 import { lazy, Suspense, useState } from 'react';
@@ -154,26 +154,5 @@ export function LocationDialog({ open, onClose }: { open: boolean; onClose: () =
     <Dialog open={open} onClose={onClose} title="Delivery location" description="Restaurants are listed only if they deliver to this point." size="lg">
       <LocationPicker onDone={onClose} />
     </Dialog>
-  );
-}
-
-/** Header chip: shows the chosen location and opens the picker. */
-export function LocationChip() {
-  const loc = useChosenLocation();
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        className="flex min-h-touch max-w-[10rem] items-center gap-1.5 rounded-control px-2 text-sm font-medium text-slate-800 hover:bg-slate-100 sm:max-w-[16rem]"
-        aria-label={loc ? `Delivery location: ${loc.label}. Change` : 'Choose delivery location'}
-      >
-        <Icon name="location" size={18} className="shrink-0 text-brand-600" />
-        <span className="truncate">{loc ? loc.label : 'Set location'}</span>
-        <Icon name="chevron-down" size={14} className="shrink-0 text-slate-500" />
-      </button>
-      <LocationDialog open={open} onClose={() => setOpen(false)} />
-    </>
   );
 }

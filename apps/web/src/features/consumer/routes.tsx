@@ -1,23 +1,45 @@
 /**
- * Consumer area routes. OWNED BY THE CONSUMER AREA IMPLEMENTER: replace the placeholder.
- * Contract (see src/README-FOUNDATION.md "Role areas"): export `routes` (paths relative to the area root,
- * index = area home, keep a '*' NotFound), optional `nav`, `HeaderActions`, `wide`.
- * Lazy-load pages: { path: 'orders', lazy: () => import('./OrdersPage').then((m) => ({ Component: m.default })) }
+ * Consumer area routes (Task 17). Guests can browse, build a cart and pay only after OTP sign-in; private pages
+ * wrap themselves in <RequireAuth>. Pages are code-split with React.lazy + Suspense because area routes are
+ * descendant routes rendered by `useRoutes` (route-object `lazy` is a data-router-only feature).
  */
+import { lazy, Suspense, type ComponentType, type LazyExoticComponent } from 'react';
 import type { RouteObject } from 'react-router';
 import { NotFoundPage } from '../../components/layout/ErrorBoundary';
 import type { NavItem } from '../../components/layout/RoleNav';
-import { EmptyState } from '../../components/ui/EmptyState';
-import { PageHeader } from '../../components/ui/PageHeader';
+import { SkeletonList } from '../../components/ui/Skeleton';
+import { ConsumerHeaderActions } from './HeaderActions';
 
-function Placeholder() {
+function page(Component: LazyExoticComponent<ComponentType>) {
   return (
-    <>
-      <PageHeader title="Order food" description="Discover restaurants that deliver to you." />
-      <EmptyState icon="store" title="Coming together" description="This area is being built on the shared foundation." />
-    </>
+    <Suspense
+      fallback={
+        <div role="status" aria-busy="true">
+          <span className="sr-only">Loading…</span>
+          <SkeletonList count={3} />
+        </div>
+      }
+    >
+      <Component />
+    </Suspense>
   );
 }
+
+const HomePage = lazy(() => import('./HomePage'));
+const SearchPage = lazy(() => import('./SearchPage'));
+const RestaurantPage = lazy(() => import('./RestaurantPage'));
+const CartPage = lazy(() => import('./CartPage'));
+const CheckoutPage = lazy(() => import('./CheckoutPage'));
+const CheckoutStatusPage = lazy(() => import('./CheckoutStatusPage'));
+const DemoPayPage = lazy(() => import('./DemoPayPage'));
+const OrdersPage = lazy(() => import('./OrdersPage'));
+const OrderDetailPage = lazy(() => import('./OrderDetailPage'));
+const ProfilePage = lazy(() => import('./ProfilePage'));
+const AddressesPage = lazy(() => import('./AddressesPage'));
+const MembershipPage = lazy(() => import('./MembershipPage'));
+const SupportPage = lazy(() => import('./SupportPage'));
+const TicketPage = lazy(() => import('./SupportPage').then((m) => ({ default: m.TicketPage })));
+const NotificationsPage = lazy(() => import('./NotificationsPage'));
 
 export const nav: NavItem[] = [
   { to: '/', label: 'Home', icon: 'home', end: true },
@@ -27,7 +49,23 @@ export const nav: NavItem[] = [
   { to: '/account', label: 'Account', icon: 'user' },
 ];
 
+export const HeaderActions = ConsumerHeaderActions;
+
 export const routes: RouteObject[] = [
-  { index: true, element: <Placeholder /> },
+  { index: true, element: page(HomePage) },
+  { path: 'search', element: page(SearchPage) },
+  { path: 'restaurants/:idOrSlug', element: page(RestaurantPage) },
+  { path: 'cart', element: page(CartPage) },
+  { path: 'checkout', element: page(CheckoutPage) },
+  { path: 'checkout/status/:checkoutId', element: page(CheckoutStatusPage) },
+  { path: 'demo-pay/:intentId', element: page(DemoPayPage) },
+  { path: 'orders', element: page(OrdersPage) },
+  { path: 'orders/:checkoutId', element: page(OrderDetailPage) },
+  { path: 'account', element: page(ProfilePage) },
+  { path: 'account/addresses', element: page(AddressesPage) },
+  { path: 'membership', element: page(MembershipPage) },
+  { path: 'support', element: page(SupportPage) },
+  { path: 'support/:ticketId', element: page(TicketPage) },
+  { path: 'notifications', element: page(NotificationsPage) },
   { path: '*', element: <NotFoundPage home="/" /> },
 ];
