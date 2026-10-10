@@ -13,15 +13,22 @@
  *  8 payments intent; failure → PAYMENT_FAILED + checkout.released + 502
  *  9 201 { checkout, payment }
  *
- * Payment safety (ORD-3 fix round 1): a customer can never hold two payable checkouts for the same
- * restaurant. Inside the step-7 transaction every other AWAITING_PAYMENT checkout of the user that
- * shares a selected restaurant (any cart version) is SUPERSEDED: released as EXPIRED
- * (`checkout.released` → marketplace frees the holds); a capture that still arrives for it takes the
- * late-payment path and is refunded automatically. If such a checkout got paid meanwhile, the new
- * checkout is aborted with 409 CONFLICT `{reason:'CHECKOUT_ALREADY_PAID', checkoutId}`. The set of
- * checkouts to supersede is remembered across transaction retries, so a capture that commits first
- * (write conflict on the group) is seen as "already paid", never silently skipped. Concurrent
- * creations conflict on the cart document (`checkedOutVersion` write), so one retries and sees the other.
+ * Payment safety (ORD-3): a customer can never hold two payable checkouts for the same restaurant.
+ *  - Every other AWAITING_PAYMENT checkout of the user that shares a selected restaurant (any cart
+ *    version) is SUPERSEDED: released as EXPIRED (`checkout.released` → marketplace frees the
+ *    stock / coupon / membership holds). This happens BEFORE the new reservation (each in its own
+ *    transaction) so the old holds never block the new checkout, and again inside the step-7
+ *    transaction for overlaps that appeared concurrently.
+ *  - A capture that still arrives for a superseded checkout takes the late-payment path and is
+ *    refunded automatically; a capture already recorded as an amount mismatch is routed there at
+ *    supersede time (`applyCapturedPayment` → `recordLatePayment`), so no captured money is stranded.
+ *  - If such a checkout got paid meanwhile, the new checkout is aborted with 409 CONFLICT
+ *    `{reason:'CHECKOUT_ALREADY_PAID', checkoutId}`. The ids to supersede are remembered across
+ *    transaction retries, so a capture that commits first is seen as "already paid", never skipped.
+ *  - The step-7 cart write is conditional on the cart version the checkout was built from and always
+ *    a real change (`$inc checkoutSeq`): concurrent creations conflict on it (one retries and sees the
+ *    other), and a cart that moved on (e.g. an overlapping checkout was placed meanwhile, which bumps
+ *    `cartVersion`) aborts with 409 CONFLICT `{reason:'CART_CHANGED'}`.
  *
  * Concurrency: a short Redis lock per {userId, cartVersion, restaurantSetKey} serialises concurrent submits so the
  * losers simply return the winner's checkout; the unique partial index is the backstop (a loser
@@ -55,6 +62,7 @@ import { customerContactOf, handoverCodePair, orderCode } from './codes.js';
 import { emitOrdersEvent } from './events.js';
 import { matchQuoteLines } from './quote-lines.js';
 import { queueOrderUpdated } from './realtime.js';
+import { applyCapturedPayment } from './place.js';
 import { releaseCheckout, releaseOrphanReservation } from './release.js';
 import { checkoutView, paymentView, type CheckoutView, type PaymentView } from './views.js';
 
@@ -540,7 +548,34 @@ async function overlappingActiveCheckouts(
     .map((g) => String(g._id));
 }
 
-/** Release every overlapping payable checkout (see file header); 409 when one was paid meanwhile. */
+/**
+ * Supersede one payable checkout (see file header) inside the caller's transaction. Already closed
+ * (EXPIRED / PAYMENT_FAILED) → no-op; paid / placed → 409 CHECKOUT_ALREADY_PAID.
+ */
+export async function supersedeCheckout(ctx: OrdersContext, session: ClientSession, id: string, newCheckoutId: string): Promise<void> {
+  const old = await ctx.models.CheckoutGroup.findById(id).session(session);
+  if (!old) return;
+  if (await releaseCheckout(ctx, session, old, 'EXPIRED', { detail: `superseded by ${newCheckoutId}` })) {
+    if (old.paymentMismatch) {
+      // a capture was recorded but not placed (amount mismatch): the expiry sweeper would refund it via
+      // late payment — it never sees EXPIRED groups, so do the same here
+      await applyCapturedPayment(ctx, session, {
+        checkoutId: id,
+        paymentIntentId: old.paymentIntentId ?? null,
+        amountPaise: old.paymentMismatch.receivedPaise,
+        source: 'reconcile',
+      });
+    }
+    return;
+  }
+  if (old.status === 'EXPIRED' || old.status === 'PAYMENT_FAILED') return; // closed meanwhile (sweeper / payment.failed)
+  throw new DomainError('CONFLICT', 'You have already paid for an order from this restaurant; refresh your cart', 409, {
+    reason: 'CHECKOUT_ALREADY_PAID',
+    checkoutId: id,
+  });
+}
+
+/** In-transaction re-check: supersede the remembered ids plus any overlap that appeared concurrently. */
 async function supersedeOverlapping(
   ctx: OrdersContext,
   session: ClientSession,
@@ -548,16 +583,7 @@ async function supersedeOverlapping(
 ): Promise<void> {
   for (const id of await overlappingActiveCheckouts(ctx, a.userId, a.restaurantIds, a.sameKey, session)) a.ids.add(id);
   a.ids.delete(a.newCheckoutId);
-  for (const id of a.ids) {
-    const old = await ctx.models.CheckoutGroup.findById(id).session(session);
-    if (!old) continue;
-    if (await releaseCheckout(ctx, session, old, 'EXPIRED', { detail: `superseded by ${a.newCheckoutId}` })) continue;
-    if (old.status === 'EXPIRED' || old.status === 'PAYMENT_FAILED') continue; // closed meanwhile (sweeper / payment.failed)
-    throw new DomainError('CONFLICT', 'You have already paid for an order from this restaurant; refresh your cart', 409, {
-      reason: 'CHECKOUT_ALREADY_PAID',
-      checkoutId: id,
-    });
-  }
+  for (const id of a.ids) await supersedeCheckout(ctx, session, id, a.newCheckoutId);
 }
 
 interface SagaInput {
@@ -578,6 +604,9 @@ async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult
   // payment safety: other payable checkouts sharing a restaurant (re-checked inside the step-7 transaction)
   const selectedRestaurantIds = [...new Set(selection.lines.map((l) => l.restaurantId))];
   const toSupersede = new Set(await overlappingActiveCheckouts(ctx, userId, selectedRestaurantIds, { cartVersion: cart.cartVersion, setKey: selection.setKey }));
+  const checkoutId = new Types.ObjectId();
+  // release them before quoting / reserving, so their holds (stock, per-user coupon limit, membership) do not block this one
+  for (const id of toSupersede) await withTransaction(ctx.conn, (session) => supersedeCheckout(ctx, session, id, String(checkoutId)));
 
   // 2–5: quote, coupon, membership, pricing (+ customer contact in parallel)
   const [qpRes, userRes] = await Promise.allSettled([
@@ -621,7 +650,6 @@ async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult
   );
 
   // 6: reserve stock / coupon / membership under a pre-generated checkout id
-  const checkoutId = new Types.ObjectId();
   const childIds = new Map(qp.priced.children.map((c) => [c.restaurantId, new Types.ObjectId()]));
   const membershipHold =
     qp.membership?.membershipId && (totals.membershipDiscountPaise > 0 || totals.deliveryDiscountPaise > 0)
@@ -761,7 +789,14 @@ async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult
             { session },
           );
           await ctx.models.ChildOrder.create(childDocs, { session, ordered: true });
-          await ctx.models.Cart.updateOne({ _id: cart._id }, { $set: { checkedOutVersion: cart.cartVersion } }, { session });
+          const cartWrite = await ctx.models.Cart.updateOne(
+            { _id: cart._id, cartVersion: cart.cartVersion },
+            { $set: { checkedOutVersion: cart.cartVersion }, $inc: { checkoutSeq: 1 } },
+            { session },
+          );
+          if (cartWrite.matchedCount === 0) {
+            throw new DomainError('CONFLICT', 'Your cart changed while checking out; please review it and try again', 409, { reason: 'CART_CHANGED' });
+          }
           await emitOrdersEvent(ctx, session, 'checkout.created', {
             checkoutId: String(checkoutId),
             userId,

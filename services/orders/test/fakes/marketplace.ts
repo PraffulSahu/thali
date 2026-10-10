@@ -68,7 +68,14 @@ export class FakeMarketplace implements MarketplaceClient {
   restaurants = new Map<string, FakeRestaurant>();
   items = new Map<string, FakeItem>();
   /** `restaurantIds` (MKT-8 scope): empty/absent = every restaurant. */
-  coupons = new Map<string, { discountPaise: number; restaurantIds?: string[] }>();
+  coupons = new Map<string, { discountPaise: number; restaurantIds?: string[]; perUserLimit?: number }>();
+  /** Coupon holds taken by `reserve` (HELD redemptions count toward `perUserLimit`, like marketplace). */
+  couponHolds: { checkoutId: string; userId: string; code: string }[] = [];
+  /**
+   * Whether a checkout's holds are still HELD. Marketplace releases them on `checkout.released`; tests
+   * wire this to the orders DB (still AWAITING_PAYMENT) since the fake does not consume events.
+   */
+  isHoldLive: (checkoutId: string) => Promise<boolean> = async () => true;
   membership: MembershipBenefitsResponse | null = null;
   reserveCalls: ReservationRequest[] = [];
   quoteCalls: QuoteRequest[] = [];
@@ -249,6 +256,18 @@ export class FakeMarketplace implements MarketplaceClient {
     this.reserveCalls.push(structuredClone(req));
     if (this.reserveDelayMs) await new Promise((r) => setTimeout(r, this.reserveDelayMs));
     if (this.beforeReserve) await this.beforeReserve(req);
+    if (req.couponCode) {
+      const code = req.couponCode.toUpperCase();
+      const limit = this.coupons.get(code)?.perUserLimit;
+      if (limit !== undefined) {
+        let held = 0;
+        for (const hld of this.couponHolds) {
+          if (hld.userId === req.userId && hld.code === code && hld.checkoutId !== req.checkoutId && (await this.isHoldLive(hld.checkoutId))) held++;
+        }
+        if (held >= limit) throw new DomainError('COUPON_LIMIT_REACHED', 'You have already used this coupon', 422);
+      }
+      this.couponHolds.push({ checkoutId: req.checkoutId, userId: req.userId, code });
+    }
     if (this.failReserveWith) throw this.failReserveWith;
     return { checkoutId: req.checkoutId, status: 'HELD', expiresAt: new Date(Date.now() + req.ttlSec * 1000).toISOString() };
   }

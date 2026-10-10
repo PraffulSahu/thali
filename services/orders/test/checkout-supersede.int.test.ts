@@ -8,6 +8,7 @@ import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { withTransaction } from '@thali/service-kit';
 import { applyCapturedPayment } from '../src/domain/place.js';
+import { supersedeCheckout } from '../src/domain/checkout.js';
 import { asUser, DROP_ADDRESS, fillTwoRestaurantCart, idemKey, outboxEvents, setup, type Harness } from './helpers.js';
 
 let h: Harness;
@@ -80,14 +81,37 @@ describe('superseding overlapping checkouts', () => {
     expect(await released()).toContain(b.body.checkout.id);
   });
 
-  it('race: the old checkout is paid while the new one is being created → 409 CHECKOUT_ALREADY_PAID, new hold released', async () => {
+  it('the old checkout is already released before the new reservation; a capture during it is refunded, the new one proceeds', async () => {
     const { u, s } = await newUser();
     const a = await checkout(u, { restaurantIds: [s.a.id] });
     expect(a.status).toBe(201);
-    let newCheckoutId: string | null = null;
+    let atReserve: string | undefined;
+    h.marketplace.beforeReserve = async () => {
+      atReserve = (await groupOf(a.body.checkout.id))!.status;
+      expect(await capture(a)).toBe('LATE_PAYMENT');
+    };
+    let r;
+    try {
+      r = await checkout(u, {});
+    } finally {
+      h.marketplace.beforeReserve = null;
+    }
+    expect(atReserve).toBe('EXPIRED');
+    expect(r.status).toBe(201);
+    expect((await outboxEvents(h, 'checkout.late_payment')).some((e) => e.payload.checkoutId === a.body.checkout.id)).toBe(true);
+  });
+
+  it('a checkout created AND paid while another submit is in flight → 409 CART_CHANGED, no second payable checkout, hold released', async () => {
+    const { u, s } = await newUser();
+    let inFlightId: string | null = null;
+    let paidA: string | null = null;
     h.marketplace.beforeReserve = async (req) => {
-      newCheckoutId = req.checkoutId;
-      expect(await capture(a)).toBe('PLACED');
+      h.marketplace.beforeReserve = null; // only for the outer (whole-cart) submit
+      inFlightId = req.checkoutId;
+      const a = await checkout(u, { restaurantIds: [s.a.id] });
+      expect(a.status).toBe(201);
+      expect(await capture(a)).toBe('PLACED'); // bumps the cart version
+      paidA = a.body.checkout.id;
     };
     let r;
     try {
@@ -96,12 +120,92 @@ describe('superseding overlapping checkouts', () => {
       h.marketplace.beforeReserve = null;
     }
     expect(r.status).toBe(409);
-    expect(r.body.error.code).toBe('CONFLICT');
-    expect(r.body.error.details).toEqual({ reason: 'CHECKOUT_ALREADY_PAID', checkoutId: a.body.checkout.id });
+    expect(r.body.error.details).toEqual({ reason: 'CART_CHANGED' });
+    expect(await h.ctx.models.CheckoutGroup.findById(inFlightId).lean()).toBeNull();
+    expect(await released()).toContain(inFlightId);
+    expect((await groupOf(paidA!))!.status).toBe('PAID_PLACED');
+    expect(await h.ctx.models.CheckoutGroup.countDocuments({ userId: u.userId, status: 'AWAITING_PAYMENT' })).toBe(0);
+  });
+
+  it('an overlapping checkout created (unpaid) while another submit is in flight is superseded by the in-transaction re-check', async () => {
+    const { u, s } = await newUser();
+    let aId: string | null = null;
+    h.marketplace.beforeReserve = async () => {
+      h.marketplace.beforeReserve = null;
+      const a = await checkout(u, { restaurantIds: [s.a.id] });
+      expect(a.status).toBe(201);
+      aId = a.body.checkout.id;
+    };
+    let r;
+    try {
+      r = await checkout(u, {});
+    } finally {
+      h.marketplace.beforeReserve = null;
+    }
+    expect(r.status).toBe(201);
+    expect((await groupOf(aId!))!.status).toBe('EXPIRED');
+    expect(await h.ctx.models.CheckoutGroup.countDocuments({ userId: u.userId, status: 'AWAITING_PAYMENT' })).toBe(1);
+  });
+
+  it('supersedeCheckout refuses a checkout that is already paid (409 CHECKOUT_ALREADY_PAID) and is a no-op for closed ones', async () => {
+    const { u, s } = await newUser();
+    const a = await checkout(u, { restaurantIds: [s.a.id] });
+    expect(await capture(a)).toBe('PLACED');
+    const err = await withTransaction(h.ctx.conn, (session) => supersedeCheckout(h.ctx, session, a.body.checkout.id, 'new')).catch((e) => e);
+    expect(err).toMatchObject({ code: 'CONFLICT', httpStatus: 409, details: { reason: 'CHECKOUT_ALREADY_PAID', checkoutId: a.body.checkout.id } });
     expect((await groupOf(a.body.checkout.id))!.status).toBe('PAID_PLACED');
-    expect(newCheckoutId).not.toBeNull();
-    expect(await h.ctx.models.CheckoutGroup.findById(newCheckoutId).lean()).toBeNull();
-    expect(await released()).toContain(newCheckoutId);
+    const b = await checkout(u, { restaurantIds: [s.b.id] });
+    await withTransaction(h.ctx.conn, (session) => supersedeCheckout(h.ctx, session, b.body.checkout.id, 'x'));
+    await withTransaction(h.ctx.conn, (session) => supersedeCheckout(h.ctx, session, b.body.checkout.id, 'y')); // already EXPIRED → no-op
+    expect((await groupOf(b.body.checkout.id))!.status).toBe('EXPIRED');
+  });
+
+  it('superseding a checkout with a recorded amount-mismatch capture refunds that capture (late payment)', async () => {
+    const { u, s } = await newUser();
+    const a = await checkout(u, { restaurantIds: [s.a.id] });
+    const wrong = a.body.checkout.pricing.totalPaise - 100;
+    const outcome = await withTransaction(h.ctx.conn, (session) =>
+      applyCapturedPayment(h.ctx, session, { checkoutId: a.body.checkout.id, paymentIntentId: a.body.payment.intentId, amountPaise: wrong, source: 'payment.captured' }),
+    );
+    expect(outcome).toBe('AMOUNT_MISMATCH');
+    const all = await checkout(u, {});
+    expect(all.status).toBe(201);
+    const old = await groupOf(a.body.checkout.id);
+    expect(old!.status).toBe('EXPIRED');
+    expect(old!.latePayment).toMatchObject({ amountPaise: wrong, paymentIntentId: a.body.payment.intentId });
+    const late = (await outboxEvents(h, 'checkout.late_payment')).filter((e) => e.payload.checkoutId === a.body.checkout.id);
+    expect(late.map((e) => e.payload.amountPaise)).toEqual([wrong]);
+  });
+
+  it('{A} with a perUserLimit-1 coupon, then the whole cart with the same coupon → succeeds (old hold released first)', async () => {
+    const { u, s } = await newUser();
+    h.marketplace.coupons.set('ONCE50', { discountPaise: 5000, perUserLimit: 1 });
+    h.marketplace.isHoldLive = async (id) => (await groupOf(id))?.status === 'AWAITING_PAYMENT';
+    try {
+      const a = await checkout(u, { restaurantIds: [s.a.id], couponCode: 'ONCE50' });
+      expect(a.status).toBe(201);
+      expect(a.body.checkout.couponCode).toBe('ONCE50');
+      const all = await checkout(u, { couponCode: 'ONCE50' });
+      expect(all.status).toBe(201);
+      expect(all.body.checkout.pricing.couponDiscountPaise).toBe(5000);
+      expect((await groupOf(a.body.checkout.id))!.status).toBe('EXPIRED');
+    } finally {
+      h.marketplace.isHoldLive = async () => true;
+    }
+  });
+
+  it('concurrent submits with different restaurant sets → exactly one payable checkout contains A', async () => {
+    const { u, s } = await newUser();
+    h.marketplace.reserveDelayMs = 100;
+    let results;
+    try {
+      results = await Promise.all([checkout(u, { restaurantIds: [s.a.id] }), checkout(u, {})]);
+    } finally {
+      h.marketplace.reserveDelayMs = 0;
+    }
+    for (const r of results) expect([201, 409]).toContain(r.status);
+    const payableWithA = await h.ctx.models.ChildOrder.countDocuments({ userId: u.userId, restaurantId: s.a.id, status: 'AWAITING_PAYMENT' });
+    expect(payableWithA).toBe(1);
   });
 
   it('a duplicate submit of the same cart version + set is still answered with the existing checkout (not superseded)', async () => {

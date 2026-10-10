@@ -34,6 +34,8 @@ export interface Cart {
   cartVersion: number;
   /** cartVersion at the time of the latest checkout (LLD §8 step 7). */
   checkedOutVersion?: number | null;
+  /** Incremented by every checkout creation: a guaranteed write that makes concurrent creations conflict. */
+  checkoutSeq?: number;
   expiresAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -69,6 +71,7 @@ export const CartSchema = new Schema<Cart>(
     couponCode: { type: String, default: null },
     cartVersion: { type: Number, required: true, default: 0 },
     checkedOutVersion: { type: Number, default: null },
+    checkoutSeq: { type: Number, default: 0 },
     expiresAt: { type: Date, default: null },
   },
   { collection: 'carts', timestamps: true, optimisticConcurrency: true },
