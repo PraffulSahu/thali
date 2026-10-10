@@ -1,0 +1,49 @@
+{
+  "name": "@thali/service-kit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing/index.d.ts",
+      "default": "./dist/testing/index.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch",
+    "typecheck": "tsc -b",
+    "test": "vitest run --root ../.. --project @thali/service-kit"
+  },
+  "dependencies": {
+    "@thali/contracts": "0.0.0",
+    "express": "5.3.0",
+    "mongoose": "8.24.5",
+    "ioredis": "5.11.1",
+    "zod": "4.6.5",
+    "@asteasolutions/zod-to-openapi": "8.5.0",
+    "swagger-ui-express": "5.0.1",
+    "pino": "9.14.0",
+    "pino-http": "10.5.0",
+    "helmet": "8.3.0",
+    "cors": "2.8.6",
+    "cookie-parser": "1.4.7",
+    "jose": "6.2.12",
+    "@aws-sdk/client-s3": "3.1149.0",
+    "@aws-sdk/s3-request-presigner": "3.1149.0",
+    "file-type": "21.3.4"
+  }
+}

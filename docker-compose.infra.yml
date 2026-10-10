@@ -1,0 +1,97 @@
+# Infra-only stack for tests and local dev: MongoDB (single-node replica set), Redis, MinIO, Mailpit.
+# Host endpoints:
+#   mongodb://localhost:27017/?replicaSet=rs0&directConnection=true
+#   redis://localhost:6379
+#   S3 (MinIO) http://localhost:9000 (console :9001)   SMTP localhost:1025 (Mailpit UI :8025)
+name: thali-infra
+
+services:
+  mongo:
+    image: mongo:8.0
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      # Self-initiating: first run initiates rs0 (member host must be reachable from the host machine).
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - "try{rs.status().ok}catch(e){rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]}).ok}"
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 5s
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # NOTE: upstream minio/minio images are no longer pullable from Docker Hub or Quay (checked 2026-10-10),
+  # so this uses Bitnami's archived (bitnamilegacy) build of the same MinIO server, pinned by tag.
+  # Dev/test only; swap for any S3-compatible endpoint in real environments.
+  minio:
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
+    environment:
+      MINIO_ROOT_USER: thali
+      MINIO_ROOT_PASSWORD: thali-dev-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  # One-shot job: creates the buckets (idempotent) and exits 0.
+  minio-init:
+    image: bitnamilegacy/minio-client:2025.7.21-debian-12-r3
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        i=0
+        until mc alias set local http://minio:9000 thali thali-dev-secret && mc ls local >/dev/null; do
+          i=$$((i+1)); [ "$$i" -ge 30 ] && { echo "minio not ready"; exit 1; }
+          sleep 1
+        done
+        mc mb --ignore-existing local/thali-public
+        mc mb --ignore-existing local/thali-private
+        mc anonymous set download local/thali-public
+        mc anonymous set none local/thali-private
+        echo "buckets ready"
+
+  mailpit:
+    image: axllent/mailpit:v1.31.4
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  mongo-data:
+  redis-data:
+  minio-data:

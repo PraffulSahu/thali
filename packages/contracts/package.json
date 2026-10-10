@@ -1,0 +1,31 @@
+{
+  "name": "@thali/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./*": {
+      "types": "./dist/*.d.ts",
+      "default": "./dist/*.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch",
+    "typecheck": "tsc -b",
+    "test": "vitest run --root ../.. --project @thali/contracts"
+  },
+  "dependencies": {
+    "zod": "4.6.5",
+    "libphonenumber-js": "1.13.15"
+  }
+}
