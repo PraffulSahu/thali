@@ -21,7 +21,21 @@ import { QUOTE_PROBLEM_CODES } from './clients/marketplace.js';
 export const Breakdown = BreakdownSchema.meta({ id: 'Breakdown' });
 export const CartItemInput = CartItemInputSchema.meta({ id: 'CartItemInput' });
 export const CartItemUpdate = CartItemUpdateSchema.meta({ id: 'CartItemUpdate' });
-export const CreateCheckoutBody = CreateCheckoutBodySchema.meta({ id: 'CreateCheckoutBody' });
+/**
+ * Contracts body + `couponCode: null` (= no coupon, like the cart preview). Absent = the cart's coupon;
+ * on a subset checkout a cart coupon that does not apply to the selected restaurants is dropped.
+ */
+export const CreateCheckoutBody = z
+  .object({
+    ...CreateCheckoutBodySchema.shape,
+    couponCode: z.string().trim().min(1).max(40).nullable().optional().meta({ description: 'null = no coupon; absent = the cart coupon' }),
+  })
+  .refine((v) => (v.addressId === undefined) !== (v.address === undefined), {
+    message: 'Provide exactly one of addressId or address',
+    path: ['addressId'],
+  })
+  .meta({ id: 'CreateCheckoutBody' });
+export type CreateCheckoutBody = z.infer<typeof CreateCheckoutBody>;
 
 export const AddOnView = z.object({ id: z.string(), name: z.string(), pricePaise: z.number().int() }).meta({ id: 'AddOn' });
 

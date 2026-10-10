@@ -13,13 +13,24 @@
  *  8 payments intent; failure → PAYMENT_FAILED + checkout.released + 502
  *  9 201 { checkout, payment }
  *
+ * Payment safety (ORD-3 fix round 1): a customer can never hold two payable checkouts for the same
+ * restaurant. Inside the step-7 transaction every other AWAITING_PAYMENT checkout of the user that
+ * shares a selected restaurant (any cart version) is SUPERSEDED: released as EXPIRED
+ * (`checkout.released` → marketplace frees the holds); a capture that still arrives for it takes the
+ * late-payment path and is refunded automatically. If such a checkout got paid meanwhile, the new
+ * checkout is aborted with 409 CONFLICT `{reason:'CHECKOUT_ALREADY_PAID', checkoutId}`. The set of
+ * checkouts to supersede is remembered across transaction retries, so a capture that commits first
+ * (write conflict on the group) is seen as "already paid", never silently skipped. Concurrent
+ * creations conflict on the cart document (`checkedOutVersion` write), so one retries and sees the other.
+ *
  * Concurrency: a short Redis lock per {userId, cartVersion, restaurantSetKey} serialises concurrent submits so the
  * losers simply return the winner's checkout; the unique partial index is the backstop (a loser
  * that still reaches step 7 releases its own reservation and returns the winner).
  */
 import { randomUUID } from 'node:crypto';
-import mongoose, { Types } from 'mongoose';
-import { DomainError, restaurantSetKey, type CreateCheckoutBody } from '@thali/contracts';
+import mongoose, { Types, type ClientSession } from 'mongoose';
+import { DomainError, restaurantSetKey } from '@thali/contracts';
+import type { CreateCheckoutBody } from '../schemas.js';
 import { couponNotApplicableError, couponScope, lineTotal, priceCheckout, type PricedCheckout, type RestaurantInput } from '@thali/pricing';
 import { redisKey, withTransaction } from '@thali/service-kit';
 import type { OrdersContext } from '../context.js';
@@ -177,7 +188,13 @@ export async function quoteAndPrice(
   userId: string,
   cartLines: CartLine[],
   drop: LatLng,
-  opts: { couponCode?: string | null; useMembership: boolean; strictCoupon: boolean },
+  opts: {
+    couponCode?: string | null;
+    useMembership: boolean;
+    strictCoupon: boolean;
+    /** Checkout with a cart-level coupon: a NOT_APPLICABLE coupon is dropped (as preview reports it) instead of failing. */
+    dropInapplicableCoupon?: boolean;
+  },
 ): Promise<QuoteAndPrice> {
   const { quote, problems, restaurants } = await quoteCart(ctx, cartLines, drop);
   const inputs = pricingInputs(restaurants);
@@ -204,7 +221,10 @@ export async function quoteAndPrice(
         restaurantIds: [...v.restaurantIds],
       };
     } catch (e) {
-      if (opts.strictCoupon || !(e instanceof DomainError) || e.httpStatus >= 500) throw e;
+      const inapplicable =
+        e instanceof DomainError && e.code === 'COUPON_INVALID' && (e.details as { reason?: string } | undefined)?.reason === 'NOT_APPLICABLE';
+      const lenient = !opts.strictCoupon || (opts.dropInapplicableCoupon === true && inapplicable);
+      if (!lenient || !(e instanceof DomainError) || e.httpStatus >= 500) throw e;
       coupon = { code, valid: false, discountPaise: 0, restaurantIds: [], message: e.message };
     }
   }
@@ -468,7 +488,8 @@ export async function createCheckout(
   const existing = await findActive(ctx, userId, cart.cartVersion, setKey);
   if (existing) return respondExisting(ctx, existing);
 
-  const lockKey = `checkout-lock:${userId}:${cart.cartVersion}:${setKey}`;
+  // whole cart keeps the pre-ORD-3 key so old and new instances serialise during a rolling deploy
+  const lockKey = setKey === '*' ? `checkout-lock:${userId}:${cart.cartVersion}` : `checkout-lock:${userId}:${cart.cartVersion}:${setKey}`;
   const token = randomUUID();
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
@@ -488,6 +509,57 @@ export async function createCheckout(
   }
 }
 
+interface SameKey {
+  cartVersion: number;
+  setKey: string;
+}
+
+/**
+ * Ids of the user's AWAITING_PAYMENT checkouts (any cart version) with a child at one of
+ * `restaurantIds`, except those with the new checkout's own {cartVersion, setKey}: that is a
+ * duplicate submit, which `findActive` / the unique index resolve by returning the winner.
+ */
+async function overlappingActiveCheckouts(
+  ctx: OrdersContext,
+  userId: string,
+  restaurantIds: string[],
+  sameKey: SameKey,
+  session?: ClientSession,
+): Promise<string[]> {
+  const groupIds = await ctx.models.ChildOrder.distinct('checkoutGroupId', {
+    userId,
+    status: 'AWAITING_PAYMENT',
+    restaurantId: { $in: restaurantIds },
+  }).session(session ?? null);
+  if (!groupIds.length) return [];
+  const groups = await ctx.models.CheckoutGroup.find({ _id: { $in: groupIds } }, { cartVersion: 1, restaurantSetKey: 1 })
+    .session(session ?? null)
+    .lean();
+  return groups
+    .filter((g) => !(g.cartVersion === sameKey.cartVersion && (g.restaurantSetKey ?? '*') === sameKey.setKey))
+    .map((g) => String(g._id));
+}
+
+/** Release every overlapping payable checkout (see file header); 409 when one was paid meanwhile. */
+async function supersedeOverlapping(
+  ctx: OrdersContext,
+  session: ClientSession,
+  a: { ids: Set<string>; userId: string; restaurantIds: string[]; newCheckoutId: string; sameKey: SameKey },
+): Promise<void> {
+  for (const id of await overlappingActiveCheckouts(ctx, a.userId, a.restaurantIds, a.sameKey, session)) a.ids.add(id);
+  a.ids.delete(a.newCheckoutId);
+  for (const id of a.ids) {
+    const old = await ctx.models.CheckoutGroup.findById(id).session(session);
+    if (!old) continue;
+    if (await releaseCheckout(ctx, session, old, 'EXPIRED', { detail: `superseded by ${a.newCheckoutId}` })) continue;
+    if (old.status === 'EXPIRED' || old.status === 'PAYMENT_FAILED') continue; // closed meanwhile (sweeper / payment.failed)
+    throw new DomainError('CONFLICT', 'You have already paid for an order from this restaurant; refresh your cart', 409, {
+      reason: 'CHECKOUT_ALREADY_PAID',
+      checkoutId: id,
+    });
+  }
+}
+
 interface SagaInput {
   userId: string;
   body: CreateCheckoutBody;
@@ -499,11 +571,22 @@ interface SagaInput {
 
 async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult> {
   const { userId, body, cart, selection, dropAddress } = s;
-  const couponCode = body.couponCode ?? cart.couponCode ?? null;
+  // body `couponCode: null` = no coupon (like preview); absent = the cart's coupon
+  const fromCart = body.couponCode === undefined;
+  const couponCode = fromCart ? (cart.couponCode ?? null) : body.couponCode;
+
+  // payment safety: other payable checkouts sharing a restaurant (re-checked inside the step-7 transaction)
+  const selectedRestaurantIds = [...new Set(selection.lines.map((l) => l.restaurantId))];
+  const toSupersede = new Set(await overlappingActiveCheckouts(ctx, userId, selectedRestaurantIds, { cartVersion: cart.cartVersion, setKey: selection.setKey }));
 
   // 2–5: quote, coupon, membership, pricing (+ customer contact in parallel)
   const [qpRes, userRes] = await Promise.allSettled([
-    quoteAndPrice(ctx, userId, selection.lines, dropOf(dropAddress), { couponCode, useMembership: body.useMembership, strictCoupon: true }),
+    quoteAndPrice(ctx, userId, selection.lines, dropOf(dropAddress), {
+      couponCode,
+      useMembership: body.useMembership,
+      strictCoupon: true,
+      dropInapplicableCoupon: fromCart && selection.setKey !== '*',
+    }),
     ctx.clients.identity.getUser(userId),
   ]);
   if (qpRes.status === 'rejected') throw qpRes.reason;
@@ -593,6 +676,13 @@ async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult
     for (let attempt = 0; attempt < 3 && !group; attempt++) {
       try {
         group = await withTransaction(ctx.conn, async (session) => {
+          await supersedeOverlapping(ctx, session, {
+            ids: toSupersede,
+            userId,
+            restaurantIds: selectedRestaurantIds,
+            newCheckoutId: String(checkoutId),
+            sameKey: { cartVersion: cart.cartVersion, setKey: selection.setKey },
+          });
           const childDocs = qp.priced.children.map((pc) => {
             const r = qp.restaurants.find((x) => x.quote.restaurantId === pc.restaurantId)!;
             const info = restaurantInfo.get(pc.restaurantId)!;

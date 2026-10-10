@@ -80,6 +80,8 @@ export class FakeMarketplace implements MarketplaceClient {
   /** Do not echo lineRef (legacy marketplace) — orders must fall back to position or fail closed. */
   omitLineRef = false;
   reserveDelayMs = 0;
+  /** Runs inside `reserve` before it answers (race scenarios). */
+  beforeReserve: ((req: ReservationRequest) => Promise<void>) | null = null;
 
   addRestaurant(over: Partial<FakeRestaurant> = {}): FakeRestaurant {
     const r: FakeRestaurant = {
@@ -246,6 +248,7 @@ export class FakeMarketplace implements MarketplaceClient {
   async reserve(req: ReservationRequest): Promise<ReservationResponse> {
     this.reserveCalls.push(structuredClone(req));
     if (this.reserveDelayMs) await new Promise((r) => setTimeout(r, this.reserveDelayMs));
+    if (this.beforeReserve) await this.beforeReserve(req);
     if (this.failReserveWith) throw this.failReserveWith;
     return { checkoutId: req.checkoutId, status: 'HELD', expiresAt: new Date(Date.now() + req.ttlSec * 1000).toISOString() };
   }
