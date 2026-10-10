@@ -167,6 +167,22 @@ describe('restaurant-scoped coupons (MKT-8)', () => {
     expect(ok.body).toMatchObject({ discountPaise: 5000, restaurantIds: [], badgeLabel: null });
   });
 
+  it('duplicate restaurantSubtotals → 422 VALIDATION_FAILED; eligible sum is capped at itemsSubtotalPaise', async () => {
+    const c = await seedCoupon(h, { type: 'PERCENT', valuePaise: undefined, valueBps: 5000, restaurantIds: [r1] });
+    const dup = await request(h.app)
+      .post('/internal/coupons/validate')
+      .set(bearer(tok))
+      .send({ code: c.code, userId: oid(), itemsSubtotalPaise: 20000, restaurantSubtotals: [{ restaurantId: r1, subtotalPaise: 10000 }, { restaurantId: r1.toUpperCase(), subtotalPaise: 10000 }] });
+    expect(dup.status).toBe(422);
+    expect(dup.body.error.code).toBe('VALIDATION_FAILED');
+    const inflated = await request(h.app)
+      .post('/internal/coupons/validate')
+      .set(bearer(tok))
+      .send({ code: c.code, userId: oid(), itemsSubtotalPaise: 10000, restaurantSubtotals: [{ restaurantId: r1, subtotalPaise: 90000 }] });
+    expect(inflated.status).toBe(200);
+    expect(inflated.body.discountPaise).toBe(5000); // 50% of the capped 10000, not of 90000
+  });
+
   it('admin CRUD carries restaurantIds + badgeLabel', async () => {
     const admin = await h.adminToken();
     const created = await request(h.app)

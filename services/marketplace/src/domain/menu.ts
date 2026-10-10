@@ -118,7 +118,7 @@ async function assertFeaturedCap(ctx: AppContext, session: ClientSession, rid: s
   if (exceptItemId) filter._id = { $ne: exceptItemId };
   const n = await ctx.models.MenuItem.countDocuments(filter).session(session);
   if (n >= MAX_FEATURED_ITEMS) {
-    throw new DomainError('VALIDATION_FAILED', `At most ${MAX_FEATURED_ITEMS} items can be recommended`, undefined, {
+    throw new DomainError('VALIDATION_FAILED', `At most ${MAX_FEATURED_ITEMS} items can be recommended`, 422, {
       issues: [{ path: 'body.featured', message: `At most ${MAX_FEATURED_ITEMS} recommended items per restaurant` }],
     });
   }
@@ -189,6 +189,8 @@ export async function createItem(ctx: AppContext, rid: string, userId: string, i
   await assertCategory(ctx, rid, input.categoryId);
   await assertImage(ctx, rid, input.imageKey);
   const created = await withTransaction(ctx.conn, async (session) => {
+    // re-check under the transaction: a concurrent pureVeg=true commit makes this retry and fail here
+    assertPureVeg((await findOwned(ctx, rid, userId, session)).pureVeg, input);
     if (input.featured) await assertFeaturedCap(ctx, session, rid);
     const [doc] = await ctx.models.MenuItem.create([{
     restaurantId: rid,
@@ -229,6 +231,11 @@ export async function updateItem(ctx: AppContext, rid: string, userId: string, i
   const updated = await withTransaction(ctx.conn, async (session) => {
     const doc = await ctx.models.MenuItem.findOne({ _id, restaurantId: rid }).session(session);
     if (!doc) throw notFound();
+    assertPureVeg((await findOwned(ctx, rid, userId, session)).pureVeg, {
+      id: itemId,
+      isVeg: input.isVeg ?? doc.isVeg,
+      customizationGroups: input.customizationGroups ?? (doc.customizationGroups ?? []).map((g) => ({ options: (g.options ?? []).map((o) => ({ id: String(o._id), isVeg: o.isVeg })) })),
+    });
     if (rest.featured && !doc.featured) await assertFeaturedCap(ctx, session, rid, _id);
     doc.set(rest);
     if (imageKey === null) doc.set('imageKey', undefined);

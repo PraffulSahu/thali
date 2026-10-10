@@ -98,7 +98,7 @@ const CouponValidateBody = z
       .array(z.object({ restaurantId: z.string().min(1).max(64), subtotalPaise: Paise }))
       .max(50)
       .optional()
-      .describe('Per-restaurant item subtotals (MKT-8). Required for restaurant-scoped coupons; none eligible → 422 COUPON_INVALID NOT_APPLICABLE'),
+      .describe('Per-restaurant item subtotals (MKT-8), unique restaurantIds (duplicates → 422 VALIDATION_FAILED). Required for restaurant-scoped coupons; none eligible → 422 COUPON_INVALID NOT_APPLICABLE. The eligible sum is capped at itemsSubtotalPaise.'),
   })
   .meta({ id: 'CouponValidateRequest' });
 const CouponValidateResponse = z
@@ -183,7 +183,7 @@ export const internalCommerceRoutes: RouteModule = {
       summary: 'Validate a coupon and compute its discount against Σ itemsSubtotal, or the eligible restaurants\' subtotal for a scoped coupon (LLD §8 step 4, MKT-8)',
       request: { body: { content: json(CouponValidateBody) } },
       responses: { 200: { description: 'Discount', content: json(CouponValidateResponse) } },
-      errors: ['COUPON_INVALID', 'COUPON_LIMIT_REACHED'],
+      errors: ['COUPON_INVALID', 'COUPON_LIMIT_REACHED', 'VALIDATION_FAILED'],
     });
     api.route({
       ...base,

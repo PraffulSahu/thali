@@ -33,7 +33,6 @@ export const localitySchema = new Schema(
 );
 localitySchema.index({ tokens: 1 });
 localitySchema.index({ location: '2dsphere' });
-localitySchema.index({ name: 'text', aliases: 'text' });
 
 export type LocalityDoc = InferSchemaType<typeof localitySchema>;
 export type LocalityModel = Model<LocalityDoc>;

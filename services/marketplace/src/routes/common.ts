@@ -63,6 +63,7 @@ export const RestaurantView = z
     documents: z.array(z.object({ id: z.string(), type: z.string(), key: z.string(), verified: z.boolean(), uploadedAt: z.string().nullable() })),
     settlement: z.object({ accountHolder: z.string(), ifsc: z.string(), last4: z.string() }).nullable(),
     pureVeg: z.boolean().describe('Owner-declared pure-veg kitchen (MKT-4)'),
+    menuAllVeg: z.boolean().describe('Every current menu item and option is veg (derived; informational, not the pureVeg claim)'),
     packagingFeePaise: PaiseSchema,
     avgPrepMinutes: z.number(),
     commissionBps: z.number(),

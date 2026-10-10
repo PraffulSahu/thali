@@ -10,8 +10,6 @@ import { z } from 'zod';
 import { DomainError, RestaurantStatusSchema } from '@thali/contracts';
 import { requireInternal, validate } from '@thali/service-kit';
 import type { RouteModule } from '../context.js';
-import { effectivePureVeg } from '../domain/discovery.js';
-import { recomputeMenuStats } from '../domain/menu-stats.js';
 import { addressView, type ImageUrlFn, type RestaurantLean } from '../domain/restaurant-view.js';
 import { toLatLng } from '../domain/serviceability.js';
 import { json } from './common.js';
@@ -28,7 +26,7 @@ export const InternalRestaurant = z
     commissionBps: z.number().int(),
     packagingFeePaise: z.number().int(),
     avgPrepMinutes: z.number().int(),
-    pureVeg: z.boolean().describe('Declared pure-veg flag, else derived from the whole menu (MKT-4)'),
+    pureVeg: z.boolean().describe('Declared pure-veg flag (MKT-4; unset = false)'),
     images: z.object({ coverUrl: z.string().nullable(), logoUrl: z.string().nullable() }).describe('Resolved public URLs (MKT-10)'),
   })
   .meta({ id: 'InternalRestaurant' });
@@ -45,7 +43,7 @@ export function internalRestaurantView(r: RestaurantLean, imageUrl: ImageUrlFn) 
     commissionBps: r.commissionBps ?? 1800,
     packagingFeePaise: r.packagingFeePaise ?? 0,
     avgPrepMinutes: r.avgPrepMinutes ?? 20,
-    pureVeg: effectivePureVeg(r) === true,
+    pureVeg: r.pureVeg === true,
     images: { coverUrl: imageUrl(r.images?.cover), logoUrl: imageUrl(r.images?.logo) },
   };
 }
@@ -59,12 +57,8 @@ export const internalRoutes: RouteModule = {
     const v = validate({ params: Params });
     r.get('/internal/restaurants/:id', requireInternal([...CALLERS]), v, async (req, res) => {
       const { id } = v.get(req).params;
-      let doc = /^[a-f0-9]{24}$/i.test(id) ? await ctx.models.Restaurant.findById(id).lean<RestaurantLean>() : null;
+      const doc = /^[a-f0-9]{24}$/i.test(id) ? await ctx.models.Restaurant.findById(id).lean<RestaurantLean>() : null;
       if (!doc) throw new DomainError('NOT_FOUND', 'Restaurant not found');
-      if (doc.pureVeg == null && !doc.menuStats?.updatedAt) {
-        await recomputeMenuStats(ctx.conn, id); // legacy data: derive pureVeg from the menu once
-        doc = (await ctx.models.Restaurant.findById(id).lean<RestaurantLean>()) ?? doc;
-      }
       res.json(internalRestaurantView(doc, ctx.imageUrl));
     });
   },

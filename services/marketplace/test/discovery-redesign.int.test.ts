@@ -36,8 +36,8 @@ async function addItem(h: Harness, restaurantId: string, fields: Record<string, 
 describe('discovery: counts, facets, paused, closesAt, veg, locality, images', () => {
   let h: Harness;
   let biryani: string; // mixed, non-veg item toggled OFF (old bug: shown as pure veg)
-  let dosa: string; // all veg, never declared
-  let declaredMixed: string; // pureVeg false declared, all-veg menu
+  let dosa: string; // declared pure veg
+  let declaredMixed: string; // pureVeg not declared (false), all-veg menu → still MIXED
   let paused: string;
   beforeAll(async () => {
     h = await createHarness('disc_redesign', { EXTERNAL_IMAGE_HOSTS: 'upload.wikimedia.org' });
@@ -49,12 +49,12 @@ describe('discovery: counts, facets, paused, closesAt, veg, locality, images', (
       address: { line1: '1 Main', locality: 'Indiranagar', city: 'Bengaluru', pincode: '560038' },
       images: { cover: 'https://upload.wikimedia.org/biryani.jpg', logo: 'https://evil.example/logo.png' },
     });
-    dosa = await seedRestaurant(h.models, { name: 'Dosa Den', location: northOf(drop, 2), cuisines: ['south-indian'] });
-    declaredMixed = await seedRestaurant(h.models, { name: 'Declared Mixed', location: northOf(drop, 3), cuisines: ['biryani'], pureVeg: false });
-    paused = await seedRestaurant(h.models, { name: 'Kettle & Bun', location: northOf(drop, 0.5), cuisines: ['cafe'], pausedUntil: new Date(Date.now() + 3600_000) });
+    dosa = await seedRestaurant(h.models, { name: 'Dosa Den', location: northOf(drop, 2), cuisines: ['south-indian'], pureVeg: true });
+    declaredMixed = await seedRestaurant(h.models, { name: 'Declared Mixed', location: northOf(drop, 3), cuisines: ['biryani'] });
+    paused = await seedRestaurant(h.models, { name: 'Kettle & Bun', location: northOf(drop, 0.5), cuisines: ['cafe'], pureVeg: true, pausedUntil: new Date(Date.now() + 3600_000) });
     await addItem(h, biryani, { name: 'Chicken Biryani', isVeg: false, available: false, pricePaise: 30000 });
     await addItem(h, biryani, { name: 'Veg Biryani', isVeg: true, pricePaise: 25000 });
-    await addItem(h, dosa, { name: 'Masala Dosa', pricePaise: 9000 });
+    await addItem(h, dosa, { name: 'Masala Dosa', pricePaise: 9000, description: 'crispy chutney', tags: ['breakfast'] });
     await addItem(h, declaredMixed, { name: 'Paneer Tikka', pricePaise: 22000 });
     await addItem(h, paused, { name: 'Bun Maska', pricePaise: 6000 });
   });
@@ -97,12 +97,16 @@ describe('discovery: counts, facets, paused, closesAt, veg, locality, images', (
     expect(page.body.delivery).toMatchObject({ deliverable: false, reason: 'PAUSED' });
   });
 
-  it('veg: declared flag wins; undeclared derives from the WHOLE menu (unavailable non-veg still counts)', async () => {
+  it('veg: PURE_VEG only for a declared pureVeg; an all-veg menu alone is not a claim', async () => {
     const res = await list();
     expect(byId(res.body.items, biryani).isVeg).toBe('MIXED');
     expect(byId(res.body.items, dosa).isVeg).toBe('PURE_VEG');
-    expect(byId(res.body.items, declaredMixed).isVeg).toBe('MIXED');
+    expect(byId(res.body.items, declaredMixed).isVeg).toBe('MIXED'); // all-veg menu, never declared
     expect((await list({ veg: 'true' })).body.items.map((i: { id: string }) => i.id).sort()).toEqual([dosa, paused].sort());
+    const page = await request(h.app).get(`/api/v1/restaurants/${declaredMixed}`);
+    expect(page.body.restaurant).toMatchObject({ pureVeg: false, isVeg: 'MIXED' });
+    const internal = await request(h.app).get(`/internal/restaurants/${declaredMixed}`).set(bearer(await h.internalToken('orders')));
+    expect(internal.body.pureVeg).toBe(false);
     // price band from AVAILABLE items only: biryani avg = 25000 → band 2
     expect(byId(res.body.items, biryani).priceBand).toBe(2);
   });
@@ -122,7 +126,7 @@ describe('discovery: counts, facets, paused, closesAt, veg, locality, images', (
     expect(internal.status).toBe(200);
     expect(internal.body).toMatchObject({
       address: { locality: 'Indiranagar' },
-      pureVeg: false,
+      pureVeg: false, // undeclared
       images: { coverUrl: 'https://upload.wikimedia.org/biryani.jpg', logoUrl: null },
     });
     const internalDosa = await request(h.app).get(`/internal/restaurants/${dosa}`).set(bearer(await h.internalToken('delivery')));
@@ -170,11 +174,28 @@ describe('discovery: counts, facets, paused, closesAt, veg, locality, images', (
     expect(byId(res.body.items, paused).offer).toBeNull();
   });
 
-  it('item search goes through the menu_items text index', async () => {
-    const res = await list({ q: 'biryani' });
-    expect(res.body.items.map((i: { id: string }) => i.id)).toContain(biryani);
-    const plan = await h.models.MenuItem.find({ $text: { $search: 'dosa' }, restaurantId: { $in: [new Types.ObjectId(dosa)] }, available: true }).explain('queryPlanner');
-    expect(JSON.stringify(plan)).toMatch(/TEXT/);
+  it('item search-as-you-type: word prefixes of name + tags (not descriptions), through the searchTokens index', async () => {
+    const matched = async (q: string) => {
+      const res = await list({ q });
+      return res.body.items.filter((i: { matchedItems: unknown[] }) => i.matchedItems.length).map((i: { id: string; matchedItems: { name: string }[] }) => [i.id, i.matchedItems.map((m) => m.name)]);
+    };
+    expect(await matched('dos')).toEqual([[dosa, ['Masala Dosa']]]);
+    expect(await matched('masala do')).toEqual([[dosa, ['Masala Dosa']]]);
+    expect(await matched('breakf')).toEqual([[dosa, ['Masala Dosa']]]); // tag prefix
+    expect(await matched('chutney')).toEqual([]); // descriptions are not searched
+    expect(await matched('osa')).toEqual([]); // prefixes only
+    expect(await matched('veg bir')).toEqual([[biryani, ['Veg Biryani']]]); // every word must match; unavailable Chicken Biryani excluded
+    const plan = await h.models.MenuItem.find({ searchTokens: { $regex: '^dos' }, restaurantId: { $in: [new Types.ObjectId(dosa)] }, available: true }).explain('queryPlanner');
+    expect(JSON.stringify(plan)).toMatch(/searchTokens_1/);
+  });
+
+  it('recomputeSearchTokens backfills items written without the model hook', async () => {
+    const { recomputeSearchTokens } = await import('../src/domain/menu-stats.js');
+    await h.models.MenuItem.collection.insertOne({ restaurantId: new Types.ObjectId(declaredMixed), categoryId: new Types.ObjectId(), name: 'Chicken 65', pricePaise: 20000, isVeg: false, available: true, tags: [] });
+    expect((await list({ q: 'chick' })).body.items.map((i: { id: string }) => i.id)).not.toContain(declaredMixed);
+    expect(await recomputeSearchTokens(h.db.conn, { onlyMissing: true })).toBe(1);
+    const res = await list({ q: 'chick' });
+    expect(byId(res.body.items, declaredMixed).matchedItems).toEqual([expect.objectContaining({ name: 'Chicken 65' })]);
   });
 });
 
@@ -223,6 +244,8 @@ describe('menuStats maintained by menu writes (MKT-13) + recomputeMenuStats', ()
       { restaurantId: other, categoryId: new Types.ObjectId(), name: 'A', pricePaise: 10000, isVeg: true },
       { restaurantId: other, categoryId: new Types.ObjectId(), name: 'B', pricePaise: 30000, isVeg: true, available: false },
     ]);
+    // the validate hook also runs for insertMany (seed bulk path) → tokens present without a backfill
+    expect((await h.models.MenuItem.findOne({ restaurantId: other, name: 'A' }).lean())?.searchTokens).toEqual(['a']);
     const n = await recomputeMenuStats(h.db.conn);
     expect(n).toBeGreaterThanOrEqual(3);
     expect((await h.models.Restaurant.findById(other).lean())?.menuStats).toMatchObject({ itemCount: 2, availableItemCount: 1, avgItemPricePaise: 10000, priceBand: 1 });
@@ -288,10 +311,10 @@ describe('pure veg (MKT-4), featured (MKT-9), unavailableReason (MKT-6), localit
       ids.push(r.body.id);
     }
     const seventh = await request(h.app).post(url('/items')).set(bearer(token)).send({ categoryId: catId, name: 'Dish 7', pricePaise: 10000, isVeg: true, featured: true });
-    expect(seventh.status).toBe(400);
+    expect(seventh.status).toBe(422);
     expect(seventh.body.error.code).toBe('VALIDATION_FAILED');
     const plain = await request(h.app).post(url('/items')).set(bearer(token)).send({ categoryId: catId, name: 'Dish 8', pricePaise: 10000, isVeg: true });
-    expect((await request(h.app).patch(url(`/items/${plain.body.id}`)).set(bearer(token)).send({ featured: true })).status).toBe(400);
+    expect((await request(h.app).patch(url(`/items/${plain.body.id}`)).set(bearer(token)).send({ featured: true })).status).toBe(422);
     // re-saving an already featured item is fine
     expect((await request(h.app).patch(url(`/items/${ids[0]}`)).set(bearer(token)).send({ featured: true, name: 'Dish 0!' })).status).toBe(200);
 
@@ -302,6 +325,8 @@ describe('pure veg (MKT-4), featured (MKT-9), unavailableReason (MKT-6), localit
     expect(page.body.recommended).toHaveLength(6);
     expect(page.body.recommended[5]).toMatchObject({ id: ids[0], available: false, unavailableReason: 'UNAVAILABLE', featured: true });
     expect(page.body.restaurant).toMatchObject({ pureVeg: true, isVeg: 'PURE_VEG' });
+    const owner = await request(h.app).get(url()).set(bearer(token));
+    expect(owner.body).toMatchObject({ pureVeg: true, menuAllVeg: true });
   });
 
   it('unavailableReason SOLD_OUT vs UNAVAILABLE and stockLeft (≤ 5 only)', async () => {
@@ -353,6 +378,18 @@ describe('discovery listing cache (MKT-13)', () => {
     await h.models.Restaurant.updateOne({ _id: third }, { $set: { status: 'APPROVED' } });
     await bumpDiscoveryEpoch(h.tr.redis);
     expect(await names()).toEqual(['Third', 'First', 'Second']);
+  });
+
+  it('a cache hit with q re-hydrates matchedItems from the cached item ids', async () => {
+    const id = await seedRestaurant(h.models, { name: 'Dosa Corner', location: northOf(drop, 3) });
+    await addItem(h, id, { name: 'Ghee Roast Dosa' });
+    await bumpDiscoveryEpoch(h.tr.redis);
+    const first = await request(h.app).get('/api/v1/discovery/restaurants').query({ ...drop, q: 'ghee' });
+    expect(first.body.items.map((i: { name: string; matchedItems: { name: string }[] }) => [i.name, i.matchedItems.map((m) => m.name)])).toEqual([['Dosa Corner', ['Ghee Roast Dosa']]]);
+    const again = await request(h.app).get('/api/v1/discovery/restaurants').query({ ...drop, q: '  Ghee ' }); // same normalised key → cache hit
+    expect(again.body.items).toEqual(first.body.items);
+    const epoch = (await h.tr.redis.get(`${h.tr.prefix}disc:epoch`)) ?? '0';
+    expect(await h.tr.redis.exists(`${h.tr.prefix}disc:offers:${epoch}`)).toBe(1); // offers cached under the current epoch too
   });
 
   it('owner pause bumps the epoch (next listing reflects it)', async () => {

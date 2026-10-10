@@ -17,6 +17,7 @@
 import { Types, type ClientSession, type Connection } from 'mongoose';
 import { menuItemModel } from '../models/menu-item.js';
 import { restaurantModel } from '../models/restaurant.js';
+import { tokenize } from './search-tokens.js';
 
 export interface MenuStats {
   itemCount: number;
@@ -137,5 +138,32 @@ export async function recomputeMenuStats(
     const r = await Restaurant.bulkWrite(ops, { ordered: false, ...(session ? { session } : {}) });
     n += r.matchedCount;
   }
+  return n;
+}
+
+/**
+ * Backfill `menu_items.searchTokens` (discovery prefix search) for items written without the model
+ * hook (raw inserts, data from before the field). `onlyMissing` limits it to items lacking the field.
+ * Returns the number of items updated. The seed calls this after bulk inserts; boot runs it with
+ * `onlyMissing: true`.
+ */
+export async function recomputeSearchTokens(conn: Connection, opts: { onlyMissing?: boolean; restaurantId?: string | Types.ObjectId } = {}): Promise<number> {
+  const filter: Record<string, unknown> = {};
+  if (opts.onlyMissing) filter.searchTokens = { $exists: false };
+  if (opts.restaurantId) filter.restaurantId = toOid(opts.restaurantId);
+  const Item = menuItemModel(conn);
+  let n = 0;
+  let ops: { updateOne: { filter: { _id: Types.ObjectId }; update: { $set: { searchTokens: string[] } } } }[] = [];
+  const flush = async () => {
+    if (!ops.length) return;
+    const r = await Item.bulkWrite(ops, { ordered: false });
+    n += r.modifiedCount;
+    ops = [];
+  };
+  for await (const i of Item.find(filter, { name: 1, tags: 1 }).lean<{ _id: Types.ObjectId; name: string; tags?: string[] }[]>().cursor()) {
+    ops.push({ updateOne: { filter: { _id: i._id }, update: { $set: { searchTokens: tokenize(i.name, ...(i.tags ?? [])) } } } });
+    if (ops.length >= 1000) await flush();
+  }
+  await flush();
   return n;
 }

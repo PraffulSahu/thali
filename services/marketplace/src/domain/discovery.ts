@@ -10,7 +10,7 @@
  *  - veg / price band come from the denormalised `restaurants.menuStats` (no per-request item `$group`);
  *  - list-time distance/ETA is a haversine road estimate (`roadEstimate`, labelled DEMO_HAVERSINE /
  *    HAVERSINE_FALLBACK) — the geo provider (Google) is only called for the restaurant page and quote;
- *  - item search uses the `menu_items` text index;
+ *  - item search is prefix-per-word on the indexed `menu_items.searchTokens` (name + tags);
  *  - the ordered id list (+ counts, facets, matched item ids) is cached in Redis for
  *    `DISCOVERY_CACHE_TTL_SEC` (default 60) per (area, drop geohash-7, filters, epoch). Pages are
  *    hydrated fresh from Mongo (open status, rating, exact distance for the real drop point).
@@ -25,6 +25,7 @@ import type { MenuItemDoc } from '../models/menu-item.js';
 import { scopedOffers } from './coupons.js';
 import { discoveryEpoch } from './discovery-cache.js';
 import { geohash } from './geohash.js';
+import { prefixTokenFilter } from './search-tokens.js';
 import { computeMenuStats, emptyMenuStats, menuStatsFromItems, type MenuStats } from './menu-stats.js';
 import { statusBlock } from './open-status.js';
 import { ratingOf, type RestaurantLean } from './restaurant-view.js';
@@ -115,20 +116,11 @@ const matchedItemView = (ctx: AppContext, i: Pick<ItemLean, '_id' | 'name' | 'pr
 });
 
 /**
- * MKT-4: the owner-declared `pureVeg` flag wins. Restaurants that never declared it (data from before
- * the flag) fall back to their whole menu: pure veg iff no item/option is non-veg (availability is
- * ignored, fixing the old "toggle the chicken off and become pure veg" bug). null = no menu yet.
+ * MKT-4 (honest data): "Pure veg" is a claim only the restaurant (or an admin) makes. Only an explicit
+ * `pureVeg: true` yields PURE_VEG; unset or false is MIXED, whatever the menu currently holds.
  */
-export function effectivePureVeg(r: { pureVeg?: boolean | null; menuStats?: Pick<MenuStats, 'itemCount' | 'nonVegCount'> | null }): boolean | null {
-  if (typeof r.pureVeg === 'boolean') return r.pureVeg;
-  if (!r.menuStats || !r.menuStats.itemCount) return null;
-  return r.menuStats.nonVegCount === 0;
-}
-
-const vegField = (r: Candidate) => {
-  const v = effectivePureVeg(r);
-  return v === null ? {} : { isVeg: v ? ('PURE_VEG' as const) : ('MIXED' as const) };
-};
+const isPureVeg = (r: { pureVeg?: boolean | null }) => r.pureVeg === true;
+const vegField = (r: { pureVeg?: boolean | null }) => ({ isVeg: isPureVeg(r) ? ('PURE_VEG' as const) : ('MIXED' as const) });
 
 /** Fields a listing never needs (keeps the candidate query light). */
 const LIST_PROJECTION = { documents: 0, statusHistory: 0, settlement: 0, emailVerification: 0, emailVerificationLog: 0 } as const;
@@ -228,18 +220,15 @@ function compare(sort: DiscoverySort) {
   return (a: Row, b: Row) => (a.open === b.open ? by(a, b) : a.open ? -1 : 1);
 }
 
-/** Text-index item search (MKT-13). Whole words, stemmed; quotes and negations are stripped. */
+/**
+ * Item search-as-you-type (MKT-13): every query word must prefix-match a word of the item's name or
+ * tags (`searchTokens` multikey index, anchored regex). Descriptions are not searched.
+ */
 async function searchItems(ctx: AppContext, restaurantIds: Types.ObjectId[], q: string): Promise<ItemLean[]> {
-  const terms = q
-    .split(/\s+/)
-    .map((t) => t.replace(/["\\]/g, '').replace(/^-+/, ''))
-    .filter(Boolean);
-  if (!terms.length || !restaurantIds.length) return [];
-  return ctx.models.MenuItem.find(
-    { $text: { $search: terms.join(' ') }, restaurantId: { $in: restaurantIds }, available: true },
-    { score: { $meta: 'textScore' }, name: 1, restaurantId: 1, pricePaise: 1, isVeg: 1, imageKey: 1 },
-  )
-    .sort({ score: { $meta: 'textScore' }, name: 1 })
+  const filter = prefixTokenFilter('searchTokens', q);
+  if (!filter || !restaurantIds.length) return [];
+  return ctx.models.MenuItem.find({ ...filter, restaurantId: { $in: restaurantIds }, available: true }, { name: 1, restaurantId: 1, pricePaise: 1, isVeg: 1, imageKey: 1 })
+    .sort({ name: 1 })
     .limit(500)
     .lean<ItemLean[]>();
 }
@@ -275,7 +264,7 @@ async function computeListing(ctx: AppContext, query: DiscoveryQuery, area: Serv
       (r) => matchedItems.has(String(r._id)) || re.test(r.name) || re.test(r.description ?? '') || (r.cuisines ?? []).some((c) => re.test(c)),
     );
   }
-  if (query.veg) restaurants = restaurants.filter((r) => effectivePureVeg(r) === true);
+  if (query.veg) restaurants = restaurants.filter(isPureVeg);
   if (query.priceBand?.length) restaurants = restaurants.filter((r) => r.menuStats?.priceBand != null && query.priceBand!.includes(r.menuStats.priceBand));
 
   // MKT-11: cuisine facets after q/veg/price, before the cuisine filter itself (so the carousel keeps every option)
@@ -301,7 +290,7 @@ async function computeListing(ctx: AppContext, query: DiscoveryQuery, area: Serv
 
 function cacheKey(query: DiscoveryQuery, area: ServiceArea, epoch: string) {
   const filters = {
-    q: query.q?.trim().toLowerCase().replace(/\s+/g, ' ') || null,
+    q: query.q?.toLowerCase() || null, // already normalised by normaliseQuery
     veg: !!query.veg,
     cuisine: [...(query.cuisine ?? [])].map((c) => c.toLowerCase()).sort(),
     priceBand: [...(query.priceBand ?? [])].sort(),
@@ -362,16 +351,40 @@ async function hydrate(ctx: AppContext, ids: string[], listing: Listing & { rows
   return out;
 }
 
+/** Scoped-coupon badges, cached under the discovery epoch (coupon writes bump it; TTL bounds validity windows). */
+async function offersFor(ctx: AppContext): Promise<Offers> {
+  const ttl = ctx.config.DISCOVERY_CACHE_TTL_SEC;
+  if (!ttl) return scopedOffers(ctx);
+  let key: string | null = null;
+  try {
+    key = redisKey(ctx.redis, `disc:offers:${await discoveryEpoch(ctx.redis)}`);
+    const hit = await ctx.redis.get(key);
+    if (hit) return new Map(JSON.parse(hit) as [string, { label: string; code: string }][]);
+  } catch (err) {
+    ctx.logger.warn({ err }, 'offers cache read failed');
+  }
+  const offers = await scopedOffers(ctx);
+  if (key) await ctx.redis.set(key, JSON.stringify([...offers]), 'EX', ttl).catch(() => undefined);
+  return offers;
+}
+
+/** One normalisation of `q` shared by the cache key and the computation. */
+function normaliseQuery<T extends { q?: string }>(query: T): T {
+  const q = query.q?.trim().replace(/\s+/g, ' ');
+  return { ...query, q: q || undefined };
+}
+
 const areaView = (a: ServiceArea) => ({ id: String(a._id), name: a.name, minOrderPaise: a.minOrderPaise ?? 0 });
 
-export async function discoverRestaurants(ctx: AppContext, query: DiscoveryQuery) {
+export async function discoverRestaurants(ctx: AppContext, input: DiscoveryQuery) {
+  const query = normaliseQuery(input);
   const offset = decodeOffset(query.cursor);
   const limit = query.limit ?? 20;
   const area = await findServiceArea(ctx.conn, { lat: query.lat, lng: query.lng });
   if (!area) {
     return { items: [] as DiscoveryItem[], nextCursor: null, serviceable: false, serviceArea: null, counts: { total: 0, open: 0 }, facets: { cuisines: [] as { slug: string; count: number }[] } };
   }
-  const offers = await scopedOffers(ctx);
+  const offers = await offersFor(ctx);
   const listing = await getListing(ctx, query, area, offers);
   const items = await hydrate(ctx, listing.ids.slice(offset, offset + limit), listing, query, area, offers);
   return {
@@ -388,8 +401,8 @@ export async function discoverRestaurants(ctx: AppContext, query: DiscoveryQuery
 export async function searchCatalog(ctx: AppContext, query: { lat: number; lng: number; q: string }) {
   const area = await findServiceArea(ctx.conn, query);
   if (!area) return { serviceable: false, restaurants: [] as DiscoveryItem[], items: [] };
-  const q = { ...query, sort: 'distance' as const };
-  const offers = await scopedOffers(ctx);
+  const q = { ...normaliseQuery(query), sort: 'distance' as const };
+  const offers = await offersFor(ctx);
   const listing = await getListing(ctx, q, area, offers);
   const rows = await hydrate(ctx, listing.ids.slice(0, 50), listing, q, area, offers);
   const items = rows.flatMap((r) => (r.matchedItems ?? []).map((i) => ({ ...i, restaurantId: r.id, restaurantName: r.name })));
@@ -429,7 +442,7 @@ export async function getPublicRestaurant(ctx: AppContext, idOrSlug: string, dro
   }
 
   const activeCats = new Set(categories.map((c) => String(c._id)));
-  const pureVeg = effectivePureVeg({ pureVeg: r.pureVeg, menuStats: stats });
+  const pureVeg = isPureVeg(r);
   // MKT-9: owner-featured dishes from active categories, available first
   const recommended = items
     .filter((i) => (i as { featured?: boolean }).featured && activeCats.has(String(i.categoryId)))
@@ -457,8 +470,8 @@ export async function getPublicRestaurant(ctx: AppContext, idOrSlug: string, dro
       pausedUntil: iso(st.pausedUntil),
       acceptingOrders: st.acceptingOrders,
       closesAt: iso(st.closesAt),
-      ...(pureVeg === null ? {} : { isVeg: pureVeg ? ('PURE_VEG' as const) : ('MIXED' as const) }),
-      pureVeg: pureVeg === true,
+      isVeg: pureVeg ? ('PURE_VEG' as const) : ('MIXED' as const),
+      pureVeg,
       priceBand: stats.priceBand,
       rating: ratingOf(r),
       packagingFeePaise: r.packagingFeePaise ?? 0,

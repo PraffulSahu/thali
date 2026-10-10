@@ -1,5 +1,6 @@
 /** `menu_items` (LLD 3.2, OCC). `reservedQty` is owned by Task 9 reservations. */
 import { Schema, Types, type Connection, type InferSchemaType, type Model } from 'mongoose';
+import { tokenize } from '../domain/search-tokens.js';
 
 const optionSchema = new Schema({
   name: { type: String, required: true },
@@ -32,14 +33,21 @@ export const menuItemSchema = new Schema(
     tags: { type: [String], default: [] },
     /** MKT-9: owner-picked "Recommended" dish (≤ MAX_FEATURED_ITEMS per restaurant). */
     featured: { type: Boolean, default: false },
+    /** Discovery search-as-you-type: words of name + tags (set by the validate hook / recomputeSearchTokens). */
+    searchTokens: { type: [String], default: [] },
     /** Demo seed data (APP_MODE=demo). */
     isDemo: { type: Boolean, default: false },
   },
   { timestamps: true, optimisticConcurrency: true, collection: 'menu_items' },
 );
 menuItemSchema.index({ restaurantId: 1, categoryId: 1 });
-/** Discovery item search (MKT-13: `$text` + `restaurantId $in`). */
 menuItemSchema.index({ name: 'text', description: 'text', tags: 'text' });
+/** Discovery item search (MKT-13): anchored prefix regex per word on this multikey index. */
+menuItemSchema.index({ searchTokens: 1 });
+// every document write (create, save, insertMany, seed ensureDocs/ensureDocsBulk) keeps the tokens current
+menuItemSchema.pre('validate', function () {
+  this.set('searchTokens', tokenize(this.get('name') as string, ...((this.get('tags') as string[] | undefined) ?? [])));
+});
 menuItemSchema.index({ restaurantId: 1, featured: 1 });
 
 export type MenuItemDoc = InferSchemaType<typeof menuItemSchema>;

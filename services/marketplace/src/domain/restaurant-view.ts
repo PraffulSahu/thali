@@ -71,6 +71,8 @@ export function restaurantView(input: RestaurantHydrated | RestaurantLean, image
     })),
     settlement: r.settlement?.last4 ? { accountHolder: r.settlement.accountHolder, ifsc: r.settlement.ifsc, last4: r.settlement.last4 } : null,
     pureVeg: r.pureVeg === true,
+    /** Menu signal for the owner UI ("your menu is all veg — declare pure veg?"); never shown as a claim. */
+    menuAllVeg: !!r.menuStats?.itemCount && r.menuStats.nonVegCount === 0,
     packagingFeePaise: r.packagingFeePaise ?? 0,
     avgPrepMinutes: r.avgPrepMinutes ?? 20,
     commissionBps: r.commissionBps ?? 1800,

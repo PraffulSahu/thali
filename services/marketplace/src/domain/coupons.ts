@@ -102,11 +102,23 @@ export async function validateCoupon(ctx: AppContext, input: ValidateCouponInput
   assertCouponLive(c, ctx.now());
   const scope = scopeOf(c);
   let subtotal = input.itemsSubtotalPaise;
+  const subtotals = input.restaurantSubtotals ?? [];
+  const seen = new Set<string>();
+  for (const g of subtotals) {
+    const k = g.restaurantId.toLowerCase();
+    if (seen.has(k)) {
+      throw new DomainError('VALIDATION_FAILED', 'restaurantSubtotals lists a restaurant twice', 422, {
+        issues: [{ path: 'body.restaurantSubtotals', message: `Duplicate restaurantId ${g.restaurantId}` }],
+      });
+    }
+    seen.add(k);
+  }
   if (scope.length) {
-    const groups = (input.restaurantSubtotals ?? []).map((g) => ({ restaurantId: g.restaurantId, itemsSubtotalPaise: g.subtotalPaise }));
+    const groups = subtotals.map((g) => ({ restaurantId: g.restaurantId, itemsSubtotalPaise: g.subtotalPaise }));
     const s = couponScope(groups, scope);
     if (!s.ok) throw couponNotApplicableError();
-    subtotal = s.eligibleSubtotalPaise;
+    // never exceed the checkout's own Σ itemsSubtotal (priceCheckout would otherwise throw downstream)
+    subtotal = Math.min(s.eligibleSubtotalPaise, input.itemsSubtotalPaise);
   }
   if (subtotal < (c.minOrderPaise ?? 0)) {
     throw couponInvalid('MIN_ORDER', `Add items worth ₹${((c.minOrderPaise ?? 0) / 100).toFixed(2)} or more to use this coupon`, { minOrderPaise: c.minOrderPaise ?? 0 });

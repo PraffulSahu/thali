@@ -143,6 +143,23 @@ describe('gazetteer lazy load (demo mode, empty collection)', () => {
     }
   });
 
+  it('a failed load is not memoised: a broken file is retried on the next lookup', async () => {
+    const bad = await mkdtemp(path.join(tmpdir(), 'thali-seed-bad-'));
+    try {
+      await writeFile(path.join(bad, 'localities.json'), '{ not json');
+      const h = await createHarness('places_retry', { SEED_DATA_DIR: bad });
+      try {
+        expect((await request(h.app).get('/api/v1/discovery/places').query({ q: 'cmh' })).body.items).toEqual([]);
+        await writeFile(path.join(bad, 'localities.json'), JSON.stringify(ROWS));
+        expect((await request(h.app).get('/api/v1/discovery/places').query({ q: 'cmh' })).body.items).toHaveLength(1);
+      } finally {
+        await h.close();
+      }
+    } finally {
+      await rm(bad, { recursive: true, force: true });
+    }
+  });
+
   it('missing file → empty results, not an error', async () => {
     const h = await createHarness('places_nofile', { SEED_DATA_DIR: path.join(dir, 'missing') });
     try {

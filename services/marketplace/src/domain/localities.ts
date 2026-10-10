@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { Types, type Connection } from 'mongoose';
 import type { LatLng } from '@thali/service-kit';
 import { localityModel, type LocalityDoc } from '../models/locality.js';
+import { prefixTokenFilter, tokenize } from './search-tokens.js';
 
 export interface LocalitySeedRow {
   name: string;
@@ -32,18 +33,7 @@ export type LocalityLean = LocalityDoc & { _id: Types.ObjectId };
 
 const idFor = (key: string) => new Types.ObjectId(createHash('sha1').update(`thali-locality:${key.toLowerCase()}`).digest('hex').slice(0, 24));
 
-/** Lower-cased, accent-free words. */
-export function tokenize(...parts: (string | null | undefined)[]): string[] {
-  const words = parts
-    .filter((p): p is string => !!p)
-    .join(' ')
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(Boolean);
-  return [...new Set(words)];
-}
+export { tokenize };
 
 const point = (lat: number, lng: number) => ({ type: 'Point' as const, coordinates: [lng, lat] });
 
@@ -115,6 +105,7 @@ export function ensureGazetteer(conn: Connection, opts: { seedDataDir?: string; 
         const rows = Array.isArray(parsed) ? parsed : ((parsed as { localities?: unknown[] })?.localities ?? []);
         await upsertLocalities(conn, rows as LocalitySeedRow[]);
       } catch (err) {
+        loads.delete(conn); // retry on the next lookup (transient Mongo error, file being written…)
         opts.logger?.warn({ err }, 'gazetteer lazy load failed');
       }
     })();
@@ -123,17 +114,16 @@ export function ensureGazetteer(conn: Connection, opts: { seedDataDir?: string; 
   return p;
 }
 
-const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const KIND_RANK: Record<string, number> = { LOCALITY: 0, LANDMARK: 1, ROAD: 2 };
 const sqDist = (a: LatLng, b: LatLng) => (a.lat - b.lat) ** 2 + ((a.lng - b.lng) * Math.cos((a.lat * Math.PI) / 180)) ** 2;
 export const latLngOf = (l: LocalityLean): LatLng => ({ lat: l.location.coordinates[1]!, lng: l.location.coordinates[0]! });
 
 /** Every query word must prefix-match a token (multikey index on `tokens`). */
 export async function searchGazetteer(conn: Connection, q: string, opts: { bias?: LatLng; limit: number }): Promise<LocalityLean[]> {
-  const words = tokenize(q).slice(0, 6);
-  if (!words.length) return [];
+  const filter = prefixTokenFilter('tokens', q);
+  if (!filter) return [];
   const rows = await localityModel(conn)
-    .find({ $and: words.map((w) => ({ tokens: { $regex: `^${escapeRegex(w)}` } })) })
+    .find(filter)
     .limit(300)
     .lean<LocalityLean[]>();
   const ql = q.trim().toLowerCase();

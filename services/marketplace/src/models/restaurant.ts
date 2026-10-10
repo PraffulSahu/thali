@@ -62,11 +62,8 @@ export const restaurantSchema = new Schema(
         { _id: false },
       ),
     },
-    /**
-     * MKT-4: owner-declared pure-veg kitchen (admin can override). No default on purpose: restaurants that
-     * never declared it are classified from their whole menu (`effectivePureVeg`).
-     */
-    pureVeg: { type: Boolean },
+    /** MKT-4: owner-declared pure-veg kitchen (admin can override). Only `true` is ever shown as "Pure veg". */
+    pureVeg: { type: Boolean, default: false },
     packagingFeePaise: { type: Number, default: 0, min: 0 },
     avgPrepMinutes: { type: Number, default: 20, min: 1 },
     commissionBps: { type: Number, default: 1800, min: 0, max: 10000 },

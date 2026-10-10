@@ -32,7 +32,7 @@ async function addItem(restaurantId: string, fields: Record<string, unknown>) {
 beforeAll(async () => {
   h = await createHarness('discovery');
   await seedServiceArea(h.models);
-  near = await seedRestaurant(h.models, { name: 'Near Thali', location: northOf(drop, 1), cuisines: ['thali'], avgPrepMinutes: 40 });
+  near = await seedRestaurant(h.models, { name: 'Near Thali', location: northOf(drop, 1), cuisines: ['thali'], avgPrepMinutes: 40, pureVeg: true });
   far = await seedRestaurant(h.models, { name: 'Far Biryani', location: northOf(drop, 8), cuisines: ['biryani'] });
   pendingInside = await seedRestaurant(h.models, { name: 'Pending Place', status: 'APPROVAL_PENDING', location: northOf(drop, 0.5) });
   await addItem(near, { name: 'Paneer Butter Masala', isVeg: true, pricePaise: 25000 });
@@ -130,8 +130,9 @@ describe('discovery filters, sorting, rating, search', () => {
     h3 = await createHarness('discovery_sort');
     await seedServiceArea(h3.models);
     a = await seedRestaurant(h3.models, { name: 'Alpha Kitchen', location: northOf(drop, 0.5), avgPrepMinutes: 50, cuisines: ['north-indian'], ratingSum: 22, ratingCount: 5 });
-    b = await seedRestaurant(h3.models, { name: 'Bravo Dosa', location: northOf(drop, 2.5), avgPrepMinutes: 10, cuisines: ['south-indian'], ratingSum: 4, ratingCount: 4 });
-    c = await seedRestaurant(h3.models, { name: 'Charlie Cafe', location: northOf(drop, 4), avgPrepMinutes: 15, cuisines: ['cafe'], ratingSum: 30, ratingCount: 6 });
+    // MKT-4: PURE_VEG comes only from the declared flag (b, c declare it)
+    b = await seedRestaurant(h3.models, { name: 'Bravo Dosa', location: northOf(drop, 2.5), avgPrepMinutes: 10, cuisines: ['south-indian'], ratingSum: 4, ratingCount: 4, pureVeg: true });
+    c = await seedRestaurant(h3.models, { name: 'Charlie Cafe', location: northOf(drop, 4), avgPrepMinutes: 15, cuisines: ['cafe'], ratingSum: 30, ratingCount: 6, pureVeg: true });
     const add = async (restaurantId: string, name: string, isVeg: boolean, pricePaise = 15000) => {
       const cat = await h3.models.MenuCategory.create({ restaurantId, name: 'All', sortOrder: 1, active: true });
       await h3.models.MenuItem.create({ restaurantId, categoryId: cat._id, name, pricePaise, isVeg, available: true, trackStock: false, stockQty: 0, reservedQty: 0, customizationGroups: [], tags: [] });

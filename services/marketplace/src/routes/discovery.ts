@@ -49,7 +49,7 @@ export const DiscoveryItemView = z
     cuisines: z.array(z.string()),
     locality: z.string().nullable().describe('Neighbourhood, e.g. "Indiranagar" (MKT-5)'),
     imageUrl: z.string().nullable(),
-    isVeg: z.enum(['PURE_VEG', 'MIXED']).optional().describe('From the declared pureVeg flag (else the whole menu); absent when the menu is empty'),
+    isVeg: z.enum(['PURE_VEG', 'MIXED']).describe('PURE_VEG only when the restaurant declared pureVeg (MKT-4)'),
     open: z.boolean().describe('Within hours and not paused'),
     nextOpenAt: z.string().optional(),
     closedReason: z.enum(['PAUSED', 'OUTSIDE_HOURS']).nullable().describe('PAUSED = "Not accepting orders" (MKT-3); null when open'),

@@ -22,6 +22,7 @@ import type { MarketplaceDeps } from './context.js';
 import { buildEventHandlers } from './events/handlers.js';
 import { sweepExpiredReservations } from './jobs/reservation-expiry.js';
 import { ensureMarketplaceIndexes } from './models/index.js';
+import { recomputeSearchTokens } from './domain/menu-stats.js';
 
 async function main() {
   const config = loadMarketplaceConfig();
@@ -31,6 +32,9 @@ async function main() {
   const conn = await connectMongo(config.MONGO_URI, config.MONGO_DB_NAME);
   const redis = createRedis(config.REDIS_URL, { keyPrefix: config.REDIS_KEY_PREFIX });
   await ensureMarketplaceIndexes(conn);
+  // items written before searchTokens existed (or by raw inserts) become searchable
+  const tokenised = await recomputeSearchTokens(conn, { onlyMissing: true });
+  if (tokenised) logger.info({ tokenised }, 'menu item search tokens backfilled');
 
   const deps: MarketplaceDeps = {
     config,
