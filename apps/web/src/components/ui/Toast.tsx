@@ -14,7 +14,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../lib/cn';
-import { Icon, type IconName } from './Icon';
+import { Icon } from './Icon';
 
 export type ToastTone = 'neutral' | 'success' | 'warn' | 'danger' | 'info';
 
@@ -80,13 +80,32 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
-const toneStyle: Record<ToastTone, { icon: IconName; iconClass: string }> = {
-  neutral: { icon: 'info', iconClass: 'text-slate-500' },
-  info: { icon: 'info', iconClass: 'text-info-700' },
-  success: { icon: 'check', iconClass: 'text-success-700' },
-  warn: { icon: 'alert', iconClass: 'text-warn-700' },
-  danger: { icon: 'alert', iconClass: 'text-danger-700' },
+const toneStyle: Record<ToastTone, { dot: string }> = {
+  neutral: { dot: 'bg-neu' },
+  info: { dot: 'bg-info' },
+  success: { dot: 'bg-ok' },
+  warn: { dot: 'bg-warn' },
+  danger: { dot: 'bg-bad' },
 };
+
+/**
+ * Static toast pill (design-spec §3.33) for inline placements, e.g. under the cart dock:
+ *   <ToastPill tone="success">Added to Spice Route</ToastPill>
+ */
+export function ToastPill({ children, tone = 'neutral', className }: { children: ReactNode; tone?: ToastTone; className?: string }) {
+  return (
+    <span
+      role="status"
+      className={cn(
+        'inline-flex animate-toast items-center gap-1.5 rounded-pill border border-line bg-card px-2.5 py-[5px] text-xs text-fg-2 shadow-card',
+        className,
+      )}
+    >
+      {tone !== 'neutral' ? <span aria-hidden="true" className={cn('size-1.5 rounded-full', toneStyle[tone].dot)} /> : null}
+      {children}
+    </span>
+  );
+}
 
 function ToastView({ item, onDismiss }: { item: ToastItem; onDismiss: () => void }) {
   const tone = item.tone ?? 'neutral';
@@ -115,12 +134,12 @@ function ToastView({ item, onDismiss }: { item: ToastItem; onDismiss: () => void
       onMouseLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)}
       onBlur={() => setPaused(false)}
-      className="pointer-events-auto flex w-full max-w-sm animate-pop-in items-start gap-3 rounded-card border border-slate-200 bg-surface p-4 shadow-overlay"
+      className="pointer-events-auto flex w-full max-w-sm animate-pop-in items-start gap-2.5 rounded-field border border-line bg-card py-2.5 pl-3.5 pr-2 text-fg shadow-card"
     >
-      <Icon name={s.icon} size={20} className={cn('mt-0.5', s.iconClass)} />
+      <span aria-hidden="true" className={cn('mt-[7px] size-1.5 shrink-0 rounded-full', s.dot)} />
       <div className="min-w-0 flex-1">
-        <p className="text-[0.9375rem] font-semibold text-slate-900">{item.title}</p>
-        {item.description ? <p className="mt-0.5 text-sm text-slate-600">{item.description}</p> : null}
+        <p className="text-sm font-semibold text-fg">{item.title}</p>
+        {item.description ? <p className="mt-0.5 text-[13px] text-fg-3">{item.description}</p> : null}
         {item.action ? (
           <button
             type="button"
@@ -128,7 +147,7 @@ function ToastView({ item, onDismiss }: { item: ToastItem; onDismiss: () => void
               item.action?.onClick();
               onDismiss();
             }}
-            className="mt-2 text-sm font-semibold text-brand-700 hover:underline"
+            className="mt-1.5 text-[13px] font-bold text-acc-fg hover:underline"
           >
             {item.action.label}
           </button>
@@ -138,9 +157,9 @@ function ToastView({ item, onDismiss }: { item: ToastItem; onDismiss: () => void
         type="button"
         onClick={onDismiss}
         aria-label="Dismiss notification"
-        className="-m-2 grid size-touch shrink-0 place-items-center rounded-control text-slate-500 hover:bg-slate-100 hover:text-slate-800"
+        className="grid size-7 shrink-0 place-items-center rounded-pill text-fg-3 hover:bg-fill hover:text-fg [@media(pointer:coarse)]:size-touch"
       >
-        <Icon name="x" size={18} />
+        <Icon name="x" size={16} />
       </button>
     </div>
   );

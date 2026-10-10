@@ -62,21 +62,21 @@ export function Field({ label, children, hint, error, required = false, optional
     required,
   };
   return (
-    <div className={cn('flex flex-col gap-1.5', className)}>
-      <label htmlFor={controlId} className={cn('text-sm font-medium text-slate-800', hideLabel && 'sr-only')}>
+    <div className={cn('flex flex-col gap-2', className)}>
+      <label htmlFor={controlId} className={cn('text-sm font-medium text-fg', hideLabel && 'sr-only')}>
         {label}
-        {required ? <span aria-hidden="true" className="ml-0.5 text-danger-700">*</span> : null}
-        {optional && !required ? <span className="ml-1 font-normal text-slate-500">(optional)</span> : null}
+        {required ? <span aria-hidden="true" className="ml-0.5 text-bad">*</span> : null}
+        {optional && !required ? <span className="ml-1 font-normal text-fg-3">(optional)</span> : null}
       </label>
       <FieldContext.Provider value={ctx}>{children}</FieldContext.Provider>
       {hint ? (
-        <p id={hintId} className="text-sm text-slate-600">
+        <p id={hintId} className="text-[13px] text-fg-3">
           {hint}
         </p>
       ) : null}
       {error ? (
-        <p id={errorId} className="flex items-start gap-1.5 text-sm font-medium text-danger-700">
-          <Icon name="alert" size={16} className="mt-0.5" />
+        <p id={errorId} className="flex items-start gap-1.5 text-[13px] font-medium text-bad">
+          <Icon name="alert" size={14} className="mt-0.5" />
           <span>{error}</span>
         </p>
       ) : null}
@@ -84,10 +84,18 @@ export function Field({ label, children, hint, error, required = false, optional
   );
 }
 
-/** Shared control styling (inputs, selects, textareas). */
+/**
+ * Shared control styling (inputs, selects, textareas), app tier (design-spec §3.2): 1px --line, 12px radius,
+ * --bg fill; focus = --fg3 border + 4px --muted ring; invalid = --bad border + 4px --bad-bg ring.
+ */
 export const controlClasses =
-  'w-full rounded-control border border-slate-300 bg-surface text-slate-900 placeholder:text-slate-400 ' +
-  'transition-[border-color,box-shadow] duration-150 hover:border-slate-400 ' +
-  'focus:outline-none focus-visible:outline-none focus:border-brand-500 focus:ring-3 focus:ring-brand-500/25 ' +
-  'aria-invalid:border-danger-600 aria-invalid:focus:ring-danger-600/20 ' +
-  'disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500 read-only:bg-slate-50';
+  'w-full rounded-control border border-line bg-bg text-fg placeholder:text-fg-3 ' +
+  'transition-[border-color,box-shadow] duration-150 ' +
+  'focus:outline-none focus-visible:outline-none focus:border-fg-3 focus:shadow-[0_0_0_4px_var(--muted)] ' +
+  'aria-invalid:border-bad aria-invalid:focus:shadow-[0_0_0_4px_var(--bad-bg)] ' +
+  'disabled:cursor-not-allowed disabled:opacity-45 read-only:bg-bg-2';
+
+/** Marketing tier (board 00/02): 48px, 1.5px --line2, 14px radius, --card fill, 500 weight. */
+export const marketingControlClasses =
+  'w-full rounded-field border-[1.5px] border-line-2 bg-card text-fg font-medium placeholder:text-fg-3 ' +
+  'transition-[border-color,box-shadow] duration-150 focus:outline-none focus:border-pri focus:shadow-[0_0_0_4px_var(--acc-soft)]';

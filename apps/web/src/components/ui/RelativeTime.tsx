@@ -28,7 +28,7 @@ export function RelativeTime({ value, prefix, fallback = '', staleAfterSec, clas
     <time
       dateTime={date.toISOString()}
       title={formatDateTime(date)}
-      className={cn('tabular-nums', stale && 'font-medium text-warn-700', className)}
+      className={cn('tabular-nums', stale && 'font-medium text-warn', className)}
     >
       {prefix ? `${prefix} ` : ''}
       {formatRelative(date, now)}

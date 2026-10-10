@@ -32,7 +32,7 @@ export function Select({ options, placeholder, invalid, className, children, ...
         {...rest}
         {...field}
         aria-invalid={field['aria-invalid'] ?? (invalid || undefined)}
-        className={cn(controlClasses, 'h-11 appearance-none pl-3 pr-10 text-base sm:text-[0.9375rem]', className)}
+        className={cn(controlClasses, 'h-10 appearance-none bg-card pl-3 pr-10 text-base sm:text-sm', className)}
       >
         {placeholder !== undefined ? (
           <option value="" disabled={rest.required}>
@@ -46,7 +46,7 @@ export function Select({ options, placeholder, invalid, className, children, ...
         ))}
         {children}
       </select>
-      <Icon name="chevron-down" size={18} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-500" />
+      <Icon name="chevron-down" size={16} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-fg-3" />
     </div>
   );
 }

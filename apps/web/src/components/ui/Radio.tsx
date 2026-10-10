@@ -10,6 +10,23 @@ import { useId, type ReactNode } from 'react';
 import { cn } from '../../lib/cn';
 import { Icon } from './Icon';
 
+/** 18px radio glyph: --line2 ring; checked = --fg ring + 8px --fg dot. Pair with a `peer` input. */
+export function RadioGlyph({ className }: { className?: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        'grid size-[18px] shrink-0 place-items-center rounded-full border-[1.5px] border-line-2 transition-colors duration-150',
+        'peer-checked:border-fg [&>span]:scale-0 peer-checked:[&>span]:scale-100',
+        'peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-acc',
+        className,
+      )}
+    >
+      <span className="size-2 rounded-full bg-fg transition-transform duration-150" />
+    </span>
+  );
+}
+
 export interface RadioOption {
   value: string;
   label: ReactNode;
@@ -46,11 +63,11 @@ export function RadioGroup({
       aria-invalid={error ? true : undefined}
       aria-required={required || undefined}
     >
-      <legend className={cn('mb-1 text-sm font-medium text-slate-800', hideLegend && 'sr-only')}>
+      <legend className={cn('mb-1 text-sm font-medium text-fg', hideLegend && 'sr-only')}>
         {legend}
-        {required ? <span aria-hidden="true" className="ml-0.5 text-danger-700">*</span> : null}
+        {required ? <span aria-hidden="true" className="ml-0.5 text-bad">*</span> : null}
       </legend>
-      {hint ? <p id={hintId} className="-mt-1 text-sm text-slate-600">{hint}</p> : null}
+      {hint ? <p id={hintId} className="-mt-1 text-[13px] text-fg-3">{hint}</p> : null}
       <div className={cn('flex flex-col', variant === 'cards' && 'gap-2')}>
         {options.map((o) => {
           const id = `rg${auto}-${o.value}`;
@@ -63,33 +80,36 @@ export function RadioGroup({
                 'flex min-h-touch cursor-pointer items-center gap-3',
                 variant === 'plain' && 'py-2',
                 variant === 'cards' &&
-                  'rounded-control border px-3 py-2.5 transition-colors duration-150 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-brand-500',
-                variant === 'cards' && (checked ? 'border-brand-600 bg-brand-50' : 'border-slate-300 bg-surface hover:border-slate-400'),
-                o.disabled && 'cursor-not-allowed opacity-60',
+                  'min-h-[52px] rounded-control border px-3.5 py-2.5 transition-colors duration-150 has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-acc',
+                variant === 'cards' && (checked ? 'border-pri bg-acc-soft' : 'border-line bg-card hover:border-line-2'),
+                o.disabled && 'cursor-not-allowed opacity-45',
               )}
             >
-              <input
-                id={id}
-                type="radio"
-                name={name}
-                value={o.value}
-                checked={checked}
-                disabled={o.disabled}
-                onChange={() => onChange(o.value)}
-                className={cn('size-5 shrink-0 accent-brand-600', variant === 'cards' && 'focus-visible:outline-none')}
-              />
-              <span className="flex min-w-0 flex-1 flex-col">
-                <span className="text-[0.9375rem] font-medium text-slate-900">{o.label}</span>
-                {o.description ? <span className="text-sm text-slate-600">{o.description}</span> : null}
+              <span className="relative flex">
+                <input
+                  id={id}
+                  type="radio"
+                  name={name}
+                  value={o.value}
+                  checked={checked}
+                  disabled={o.disabled}
+                  onChange={() => onChange(o.value)}
+                  className="peer absolute inset-0 size-[18px] cursor-[inherit] appearance-none opacity-0"
+                />
+                <RadioGlyph />
               </span>
-              {o.aside ? <span className="shrink-0 text-sm text-slate-700">{o.aside}</span> : null}
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="text-[14.5px] text-fg">{o.label}</span>
+                {o.description ? <span className="text-[13px] text-fg-3">{o.description}</span> : null}
+              </span>
+              {o.aside ? <span className="shrink-0 text-sm text-fg-3">{o.aside}</span> : null}
             </label>
           );
         })}
       </div>
       {error ? (
-        <p id={errorId} className="flex items-start gap-1.5 text-sm font-medium text-danger-700">
-          <Icon name="alert" size={16} className="mt-0.5" />
+        <p id={errorId} className="flex items-start gap-1.5 text-[13px] font-medium text-bad">
+          <Icon name="alert" size={14} className="mt-0.5" />
           <span>{error}</span>
         </p>
       ) : null}

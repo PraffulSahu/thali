@@ -73,8 +73,8 @@ export function QueryState<T>({
   return (
     <>
       {isError ? (
-        <div role="alert" className="mb-4 flex flex-wrap items-center gap-3 rounded-control border border-warn-100 bg-warn-50 px-3 py-2 text-sm text-warn-800">
-          <Icon name="alert" size={16} />
+        <div role="alert" className="mb-4 flex flex-wrap items-center gap-3 rounded-field border border-line bg-warn-bg px-3.5 py-2.5 text-[13px] text-fg-2">
+          <Icon name="alert" size={16} className="text-warn" />
           <span className="flex-1">Couldn&rsquo;t refresh: {errorMessage(error)} Showing the last loaded data.</span>
           <Button variant="link" size="sm" onClick={() => void query.refetch()}>
             Retry

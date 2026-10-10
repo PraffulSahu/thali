@@ -65,8 +65,8 @@ export function Countdown({ to, onExpire, expiredLabel = 'Expired', warnBelowSec
       aria-live="off"
       aria-label={label ? `${label}: ${expired ? expiredLabel : formatDuration(left)}` : undefined}
       className={cn(
-        'inline-flex items-center gap-1 font-semibold tabular-nums',
-        expired ? 'text-slate-500' : urgent ? 'text-danger-700' : 'text-slate-800',
+        'inline-flex items-center gap-1 font-mono font-medium tabular-nums',
+        expired ? 'text-fg-3' : urgent ? 'text-bad' : 'text-fg',
         className,
       )}
     >

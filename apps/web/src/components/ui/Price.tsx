@@ -16,13 +16,30 @@ export interface PriceProps {
   was?: number;
   /** Label to show instead of ₹0.00. */
   freeLabel?: string;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
-  tone?: 'default' | 'muted' | 'success' | 'brand';
+  /** sm 13px · md 14.5px · lg 600 16px · xl 600 22px · total 600 28px (checkout "To pay"). */
+  size?: 'sm' | 'md' | 'lg' | 'xl' | 'total';
+  /** success/ok = discounts (−₹), info = pending refunds, brand/acc = accent text. */
+  tone?: 'default' | 'muted' | 'success' | 'brand' | 'ok' | 'info' | 'acc' | 'bad';
   className?: string;
 }
 
-const sizes = { sm: 'text-sm', md: 'text-[0.9375rem]', lg: 'text-lg font-semibold', xl: 'text-2xl font-bold tracking-tight' };
-const tones = { default: 'text-slate-900', muted: 'text-slate-600', success: 'text-success-700', brand: 'text-brand-700' };
+const sizes = {
+  sm: 'text-[13px]',
+  md: 'text-[14.5px]',
+  lg: 'text-base font-semibold',
+  xl: 'text-[22px] font-semibold tracking-[-0.02em]',
+  total: 'text-[28px] font-semibold tracking-[-0.03em] max-sm:text-2xl',
+};
+const tones = {
+  default: 'text-fg',
+  muted: 'text-fg-3',
+  success: 'text-ok',
+  ok: 'text-ok',
+  info: 'text-info',
+  brand: 'text-acc-fg',
+  acc: 'text-acc-fg',
+  bad: 'text-bad',
+};
 
 /** Safe formatter: never throws on non-integer data (shows a placeholder instead). */
 export function formatPaise(paise: number): string {
@@ -34,7 +51,7 @@ export function Price({ paise, was, freeLabel, size = 'md', tone = 'default', cl
   return (
     <span className={cn('inline-flex items-baseline gap-1.5 tabular-nums', sizes[size], tones[tone], className)}>
       {was !== undefined && was !== paise ? (
-        <s className="text-[0.85em] font-normal text-slate-500">
+        <s className="text-[0.85em] font-normal text-fg-3">
           <span className="sr-only">Was </span>
           {formatPaise(was)}
         </s>

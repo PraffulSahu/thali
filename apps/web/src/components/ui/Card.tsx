@@ -1,5 +1,6 @@
 /**
- * Surface container. Use for genuinely separate objects (an order, a restaurant, a form section), not to
+ * Surface container (design-spec: `.card` = 1px --line border, 16px radius, solid --card; hover lift when
+ * `interactive`). Use for genuinely separate objects (an order, a restaurant, a form section), not to
  * wrap every block. Never nest Cards; use <CardSection> dividers inside one Card instead.
  *
  *   <Card>
@@ -22,23 +23,23 @@ export interface CardProps {
   id?: string;
 }
 
-const pad = { none: '', sm: 'p-3', md: 'p-4 sm:p-5', lg: 'p-5 sm:p-7' };
+const pad = { none: '', sm: 'p-3.5', md: 'p-4 sm:px-5 sm:py-[18px]', lg: 'p-5 sm:p-7' };
 const tones = {
-  default: 'bg-surface border-slate-200',
-  muted: 'bg-surface-muted border-slate-200',
-  brand: 'bg-brand-50 border-brand-200',
-  warn: 'bg-warn-50 border-warn-100',
-  danger: 'bg-danger-50 border-danger-100',
+  default: 'bg-card border-line',
+  muted: 'bg-bg-2 border-line',
+  brand: 'bg-acc-soft border-line',
+  warn: 'bg-warn-bg border-line',
+  danger: 'bg-bad-bg border-line',
 };
 
 export function Card({ children, as: As = 'div', padding = 'md', interactive, tone = 'default', className, ...rest }: CardProps) {
   return (
     <As
       className={cn(
-        'rounded-card border shadow-raised',
+        'rounded-card border',
         tones[tone],
         pad[padding],
-        interactive && 'transition-[border-color,box-shadow] duration-150 hover:border-slate-300 hover:shadow-overlay',
+        interactive && 'transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-line-2 hover:shadow-card',
         className,
       )}
       {...rest}
@@ -61,8 +62,8 @@ export function CardHeader({ title, description, actions, as: H = 'h2', classNam
   return (
     <div className={cn('flex flex-wrap items-start justify-between gap-x-4 gap-y-2', className)}>
       <div className="min-w-0">
-        <H className="text-base font-semibold text-slate-900">{title}</H>
-        {description ? <p className="mt-0.5 text-sm text-slate-600">{description}</p> : null}
+        <H className="text-[15px] leading-tight text-fg">{title}</H>
+        {description ? <p className="mt-1 text-[13px] text-fg-3">{description}</p> : null}
       </div>
       {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
     </div>
@@ -71,5 +72,5 @@ export function CardHeader({ title, description, actions, as: H = 'h2', classNam
 
 /** A divided region inside a Card. */
 export function CardSection({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn('mt-4 border-t border-slate-200 pt-4', className)}>{children}</div>;
+  return <div className={cn('mt-4 border-t border-line pt-4', className)}>{children}</div>;
 }

@@ -48,7 +48,7 @@ export function Pagination({ hasPrev, hasNext, onPrev, onNext, page, loading, cl
         Previous
       </Button>
       {page ? (
-        <span className="text-sm text-slate-600" aria-live="polite">
+        <span className="text-[13px] text-fg-3" aria-live="polite">
           Page {page}
         </span>
       ) : null}

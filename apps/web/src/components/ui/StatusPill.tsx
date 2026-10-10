@@ -6,6 +6,7 @@
  *   <StatusPill kind="refund" status="REQUESTED" />            -> "Refund initiated"
  *   statusLabel('delivery', 'OUT_FOR_DELIVERY')                 -> "On the way"
  *
+ * Tones per design-spec §3.9 (delivery Picked up / On the way → info, Awaiting approval → info, health "Up").
  * Unknown values (a newer server) render humanized ("SOMETHING_NEW" -> "Something new") in neutral tone.
  * Wrap a pill whose value changes live in an aria-live region if the change matters (e.g. order tracking).
  */
@@ -23,7 +24,7 @@ import type {
   RestaurantStatus,
   TicketStatus,
 } from '@thali/contracts';
-import { Badge, type Tone } from './Badge';
+import { Badge, type Density, type Tone } from './Badge';
 
 type Entry = readonly [label: string, tone: Tone];
 
@@ -77,8 +78,8 @@ const delivery: Record<DeliveryStatus, Entry> = {
   OFFERED: ['Offered to partner', 'warn'],
   ASSIGNED: ['Partner assigned', 'info'],
   AT_PICKUP: ['At restaurant', 'info'],
-  PICKED_UP: ['Picked up', 'brand'],
-  OUT_FOR_DELIVERY: ['On the way', 'brand'],
+  PICKED_UP: ['Picked up', 'info'],
+  OUT_FOR_DELIVERY: ['On the way', 'info'],
   DELIVERED: ['Delivered', 'success'],
   FAILED: ['Delivery failed', 'danger'],
   CANCELLED: ['Cancelled', 'neutral'],
@@ -87,7 +88,7 @@ const delivery: Record<DeliveryStatus, Entry> = {
 const restaurant: Record<RestaurantStatus, Entry> = {
   DRAFT: ['Draft', 'neutral'],
   VERIFICATION_PENDING: ['Email verification pending', 'warn'],
-  APPROVAL_PENDING: ['Awaiting approval', 'warn'],
+  APPROVAL_PENDING: ['Awaiting approval', 'info'],
   APPROVED: ['Approved', 'success'],
   REJECTED: ['Rejected', 'danger'],
   SUSPENDED: ['Suspended', 'danger'],
@@ -95,7 +96,7 @@ const restaurant: Record<RestaurantStatus, Entry> = {
 
 const partner: Record<PartnerStatus, Entry> = {
   DRAFT: ['Draft', 'neutral'],
-  APPROVAL_PENDING: ['Awaiting approval', 'warn'],
+  APPROVAL_PENDING: ['Awaiting approval', 'info'],
   APPROVED: ['Approved', 'success'],
   REJECTED: ['Rejected', 'danger'],
   SUSPENDED: ['Suspended', 'danger'],
@@ -150,8 +151,8 @@ const user: Record<string, Entry> = {
 
 /** Admin health (gateway /admin/health per-service status). */
 const health: Record<string, Entry> = {
-  up: ['Healthy', 'success'],
-  ok: ['Healthy', 'success'],
+  up: ['Up', 'success'],
+  ok: ['Up', 'success'],
   degraded: ['Degraded', 'warn'],
   down: ['Down', 'danger'],
 };
@@ -186,13 +187,15 @@ export interface StatusPillProps {
   status: string;
   /** Override the label (e.g. add a time: "Ready · 12:40"). */
   label?: string;
+  /** marketing 28px · app 24px (default) · dense 22px (admin tables). */
+  density?: Density;
   className?: string;
 }
 
-export function StatusPill({ kind, status, label, className }: StatusPillProps) {
+export function StatusPill({ kind, status, label, density, className }: StatusPillProps) {
   const [text, tone] = entry(kind, status);
   return (
-    <Badge tone={tone} dot className={className}>
+    <Badge tone={tone} dot density={density} className={className}>
       {label ?? text}
     </Badge>
   );

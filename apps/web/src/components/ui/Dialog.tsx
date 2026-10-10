@@ -135,7 +135,7 @@ function ModalBase({
     <div className={cn('fixed inset-0 z-50 flex', overlayClassName)}>
       <div
         aria-hidden="true"
-        className="absolute inset-0 animate-fade-in bg-slate-950/45"
+        className="absolute inset-0 animate-fade bg-overlay backdrop-blur-[2px]"
         onClick={() => (dismissibleRef.current ? onCloseRef.current() : panelRef.current?.focus())}
       />
       <div
@@ -146,7 +146,7 @@ function ModalBase({
         aria-describedby={describedBy}
         aria-label={ariaLabel}
         tabIndex={-1}
-        className={cn('relative flex max-h-full flex-col bg-surface shadow-overlay focus:outline-none', panelClassName)}
+        className={cn('relative flex max-h-full flex-col bg-card text-fg shadow-modal focus:outline-none', panelClassName)}
       >
         {children}
       </div>
@@ -169,7 +169,12 @@ export interface DialogProps {
   role?: 'dialog' | 'alertdialog';
 }
 
-const widths = { sm: 'sm:max-w-sm', md: 'sm:max-w-lg', lg: 'sm:max-w-2xl' };
+const widths = { sm: 'sm:max-w-sm', md: 'sm:max-w-[520px]', lg: 'sm:max-w-2xl' };
+
+/** 36×4 drag handle shown on bottom sheets (phones). */
+function DragHandle({ className }: { className?: string }) {
+  return <span aria-hidden="true" className={cn('mx-auto mt-2 block h-1 w-9 shrink-0 rounded-full bg-line-2', className)} />;
+}
 
 export function Dialog({
   open, onClose, title, description, children, footer, size = 'md', initialFocusRef, dismissible = true, hideClose, role,
@@ -186,28 +191,29 @@ export function Dialog({
       role={role}
       overlayClassName="items-end justify-center sm:items-center sm:p-6"
       panelClassName={cn(
-        'w-full animate-sheet-up rounded-t-[1.25rem] sm:animate-pop-in sm:rounded-card max-h-[92dvh] sm:max-h-[85dvh]',
+        'w-full animate-sheet-up overflow-hidden rounded-t-2xl border border-line sm:animate-pop sm:rounded-card-lg max-h-[92dvh] sm:max-h-[85dvh]',
         widths[size],
       )}
     >
-      <div className="flex items-start gap-3 px-5 pt-5 sm:px-6">
+      <DragHandle className="sm:hidden" />
+      <div className="flex items-start gap-3 px-5 pt-4 sm:px-6 sm:pt-5">
         <div className="min-w-0 flex-1">
-          <h2 id={`dlg${id}-title`} className="text-lg font-semibold text-slate-900">
+          <h2 id={`dlg${id}-title`} className="text-[22px] leading-[1.15] text-fg">
             {title}
           </h2>
           {description ? (
-            <p id={`dlg${id}-desc`} className="mt-1 text-[0.9375rem] text-slate-600">
+            <p id={`dlg${id}-desc`} className="mt-1.5 text-sm text-fg-3">
               {description}
             </p>
           ) : null}
         </div>
-        {!hideClose && dismissible ? <IconButton icon="x" label="Close" onClick={onClose} className="-mr-2 -mt-2" /> : null}
+        {!hideClose && dismissible ? <IconButton icon="x" label="Close" size="sm" onClick={onClose} className="-mr-1.5 -mt-1" /> : null}
       </div>
       <div data-dialog-body className="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6">
         {children}
       </div>
       {footer ? (
-        <div className="border-t border-slate-200 px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6">{footer}</div>
+        <div className="border-t border-line bg-bg-2 px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:px-6">{footer}</div>
       ) : null}
     </ModalBase>
   );
@@ -227,9 +233,9 @@ export interface SheetProps {
 }
 
 const sheetSide = {
-  bottom: { overlay: 'items-end', panel: 'w-full max-h-[90dvh] animate-sheet-up rounded-t-[1.25rem]' },
-  right: { overlay: 'justify-end', panel: 'h-full w-[min(26rem,100%)] animate-sheet-right' },
-  left: { overlay: 'justify-start', panel: 'h-full w-[min(20rem,88%)] animate-sheet-left' },
+  bottom: { overlay: 'items-end', panel: 'w-full max-h-[92dvh] animate-sheet-up rounded-t-2xl border-t border-line' },
+  right: { overlay: 'justify-end', panel: 'h-full w-[min(440px,100%)] animate-sheet-right border-l border-line' },
+  left: { overlay: 'justify-start', panel: 'h-full w-[min(20rem,88%)] animate-sheet-left border-r border-line' },
 };
 
 /** Drawer (cart drawer, mobile nav, filters). */
@@ -246,16 +252,21 @@ export function Sheet({ open, onClose, title, side = 'right', children, footer, 
       overlayClassName={s.overlay}
       panelClassName={s.panel}
     >
+      {side === 'bottom' ? <DragHandle /> : null}
       <div className={cn('flex items-center gap-3 px-5 pt-4', hideTitle ? 'justify-end' : 'justify-between pb-2')}>
-        <h2 id={`sh${id}-title`} className={cn('text-lg font-semibold text-slate-900', hideTitle && 'sr-only')}>
+        <h2 id={`sh${id}-title`} className={cn('text-xl leading-tight text-fg', hideTitle && 'sr-only')}>
           {title}
         </h2>
-        {dismissible ? <IconButton icon="x" label="Close" onClick={onClose} className="-mr-2" /> : null}
+        {dismissible ? <IconButton icon="x" label="Close" size="sm" onClick={onClose} className="-mr-1.5" /> : null}
       </div>
       <div data-dialog-body className="min-h-0 flex-1 overflow-y-auto px-5 pb-4">
         {children}
       </div>
-      {footer ? <div className="border-t border-slate-200 px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">{footer}</div> : null}
+      {footer ? <div className="border-t border-line bg-bg-2 px-5 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">{footer}</div> : null}
     </ModalBase>
   );
 }
+
+/** Alias: the design system calls the centred dialog a "Modal" (bottom sheet on phones). */
+export const Modal = Dialog;
+export type ModalProps = DialogProps;

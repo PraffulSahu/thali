@@ -13,6 +13,11 @@ import { errorMessage, isApiError } from '../../lib/errors';
 import { Button, ButtonLink } from './Button';
 import { Icon } from './Icon';
 
+/** Same footprint as EmptyState (design-spec §3.32): solid --line card; compact = no frame. */
+const frame = (compact?: boolean) =>
+  cn('flex flex-col items-center text-center', compact ? 'gap-2 px-4 py-8' : 'gap-3 rounded-card border border-line bg-card px-6 py-10');
+const titleClass = 'font-sans text-[17px] font-semibold tracking-normal text-fg';
+
 export interface ErrorStateProps {
   error?: unknown;
   title?: ReactNode;
@@ -27,18 +32,15 @@ export interface ErrorStateProps {
 export function ErrorState({ error, title = "Couldn't load this", message, onRetry, retrying, compact, className }: ErrorStateProps) {
   const requestId = isApiError(error) ? error.requestId : undefined;
   return (
-    <div
-      role="alert"
-      className={cn('flex flex-col items-center text-center', compact ? 'gap-2 px-4 py-8' : 'gap-3 px-6 py-14', className)}
-    >
-      <span className={cn('grid place-items-center rounded-full bg-danger-50 text-danger-700', compact ? 'size-11' : 'size-14')}>
-        <Icon name="alert" size={compact ? 22 : 26} />
+    <div role="alert" className={cn(frame(compact), className)}>
+      <span className="grid size-9 place-items-center rounded-item bg-bad-bg text-bad">
+        <Icon name="alert" size={18} />
       </span>
-      <h2 className={cn('font-semibold text-slate-900', compact ? 'text-base' : 'text-lg')}>{title}</h2>
-      <p className="max-w-prose text-[0.9375rem] text-slate-600">{message ?? errorMessage(error)}</p>
-      {requestId ? <p className="font-mono text-xs text-slate-500">Reference: {requestId}</p> : null}
+      <h2 className={titleClass}>{title}</h2>
+      <p className="max-w-prose text-sm text-fg-3">{message ?? errorMessage(error)}</p>
+      {requestId ? <p className="font-mono text-xs text-fg-3">Reference: {requestId}</p> : null}
       {onRetry ? (
-        <Button variant="secondary" icon="refresh" onClick={() => void onRetry()} loading={retrying} className="mt-2">
+        <Button variant="outline" icon="refresh" onClick={() => void onRetry()} loading={retrying} className="mt-1">
           Try again
         </Button>
       ) : null}
@@ -63,15 +65,15 @@ export function ForbiddenState({
   className,
 }: ForbiddenStateProps) {
   return (
-    <div className={cn('flex flex-col items-center gap-3 px-6 py-14 text-center', className)}>
-      <span className="grid size-14 place-items-center rounded-full bg-warn-50 text-warn-700">
-        <Icon name="shield" size={26} />
+    <div className={cn(frame(false), className)}>
+      <span className="grid size-9 place-items-center rounded-item bg-warn-bg text-warn">
+        <Icon name="shield" size={18} />
       </span>
-      <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-      <p className="max-w-prose text-[0.9375rem] text-slate-600">{message}</p>
-      <div className="mt-2 flex flex-wrap justify-center gap-2">
+      <h2 className={titleClass}>{title}</h2>
+      <p className="max-w-prose text-sm text-fg-3">{message}</p>
+      <div className="mt-1 flex flex-wrap justify-center gap-2">
         {action ? <ButtonLink to={action.to}>{action.label}</ButtonLink> : null}
-        <ButtonLink to={homeTo} variant={action ? 'secondary' : 'primary'}>
+        <ButtonLink to={homeTo} variant={action ? 'ghost' : 'primary'}>
           Go to home
         </ButtonLink>
       </div>
@@ -88,13 +90,13 @@ export function useSignInHref(signInPath = '/signin'): string {
 export function SessionExpiredState({ signInPath = '/signin', className }: { signInPath?: string; className?: string }) {
   const href = useSignInHref(signInPath);
   return (
-    <div className={cn('flex flex-col items-center gap-3 px-6 py-14 text-center', className)}>
-      <span className="grid size-14 place-items-center rounded-full bg-info-50 text-info-700">
-        <Icon name="clock" size={26} />
+    <div className={cn(frame(false), className)}>
+      <span className="grid size-9 place-items-center rounded-item bg-info-bg text-info">
+        <Icon name="clock" size={18} />
       </span>
-      <h2 className="text-lg font-semibold text-slate-900">Session expired</h2>
-      <p className="max-w-prose text-[0.9375rem] text-slate-600">Sign in again to continue where you left off.</p>
-      <ButtonLink to={href} className="mt-2">
+      <h2 className={titleClass}>Session expired</h2>
+      <p className="max-w-prose text-sm text-fg-3">Sign in again to continue where you left off.</p>
+      <ButtonLink to={href} className="mt-1">
         Sign in again
       </ButtonLink>
     </div>
@@ -105,8 +107,8 @@ export function SessionExpiredState({ signInPath = '/signin', className }: { sig
 export function InlineError({ error, className }: { error: unknown; className?: string }) {
   if (!error) return null;
   return (
-    <p role="alert" className={cn('flex items-start gap-1.5 text-sm font-medium text-danger-700', className)}>
-      <Icon name="alert" size={16} className="mt-0.5" />
+    <p role="alert" className={cn('flex items-start gap-1.5 text-[13px] font-medium text-bad', className)}>
+      <Icon name="alert" size={14} className="mt-0.5" />
       <span>{errorMessage(error)}</span>
     </p>
   );

@@ -29,7 +29,7 @@ export function FormActions({ children, start, align = 'end', sticky, className 
         align === 'start' && 'sm:justify-start',
         (align === 'between' || start) && 'sm:justify-between',
         sticky &&
-          'sticky bottom-0 z-10 -mx-4 border-t border-slate-200 bg-surface/95 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] backdrop-blur-sm sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0 sm:backdrop-blur-none',
+          'sticky bottom-0 z-10 -mx-4 border-t border-line bg-card px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:static sm:mx-0 sm:border-0 sm:bg-transparent sm:p-0',
         '[&>button]:w-full sm:[&>button]:w-auto [&>a]:w-full sm:[&>a]:w-auto',
         className,
       )}

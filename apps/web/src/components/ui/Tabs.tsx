@@ -27,10 +27,12 @@ export interface TabsProps {
   value?: string;
   defaultValue?: string;
   onChange?: (id: string) => void;
+  /** 'underline' (default) or 'segmented' (pill track, design-spec §3.4). */
+  variant?: 'underline' | 'segmented';
   className?: string;
 }
 
-export function Tabs({ tabs, label, value, defaultValue, onChange, className }: TabsProps) {
+export function Tabs({ tabs, label, value, defaultValue, onChange, variant = 'underline', className }: TabsProps) {
   const [internal, setInternal] = useState(defaultValue ?? tabs[0]?.id ?? '');
   const active = value ?? internal;
   const id = useId().replace(/:/g, '');
@@ -61,7 +63,11 @@ export function Tabs({ tabs, label, value, defaultValue, onChange, className }: 
         role="tablist"
         aria-label={label}
         onKeyDown={onKeyDown}
-        className="-mx-1 flex gap-1 overflow-x-auto border-b border-slate-200 px-1 [scrollbar-width:none]"
+        className={
+          variant === 'segmented'
+            ? 'inline-flex max-w-full gap-1 overflow-x-auto rounded-pill bg-fill p-[3px] no-scrollbar'
+            : '-mx-1 flex gap-1 overflow-x-auto border-b border-line px-1 no-scrollbar'
+        }
       >
         {tabs.map((t) => {
           const selected = t.id === active;
@@ -80,21 +86,32 @@ export function Tabs({ tabs, label, value, defaultValue, onChange, className }: 
               disabled={t.disabled}
               onClick={() => select(t.id)}
               className={cn(
-                'relative -mb-px inline-flex min-h-touch items-center gap-2 whitespace-nowrap border-b-2 px-3 text-[0.9375rem] font-medium transition-colors duration-150',
-                selected ? 'border-brand-600 text-slate-900' : 'border-transparent text-slate-600 hover:text-slate-900 hover:border-slate-300',
-                'disabled:cursor-not-allowed disabled:opacity-50',
+                variant === 'segmented'
+                  ? cn(
+                      'inline-flex h-[30px] items-center gap-1.5 whitespace-nowrap rounded-pill px-3 text-[13px] font-medium transition-[background-color,color,box-shadow] duration-200 [@media(pointer:coarse)]:min-h-touch',
+                      selected ? 'bg-card text-fg shadow-seg' : 'text-fg-3 hover:text-fg',
+                    )
+                  : cn(
+                      'relative -mb-px inline-flex min-h-touch items-center gap-2 whitespace-nowrap border-b-2 px-3 text-[14.5px] font-medium transition-colors duration-150',
+                      selected ? 'border-acc text-fg' : 'border-transparent text-fg-3 hover:border-line-2 hover:text-fg',
+                    ),
+                'disabled:cursor-not-allowed disabled:opacity-45',
               )}
             >
               {t.label}
               {t.count !== undefined ? (
-                <span
-                  className={cn(
-                    'min-w-6 rounded-pill px-1.5 text-center text-xs font-semibold tabular-nums',
-                    selected ? 'bg-brand-600 text-white' : 'bg-slate-100 text-slate-700',
-                  )}
-                >
-                  {t.count}
-                </span>
+                variant === 'segmented' ? (
+                  <span className="font-mono text-[11px] tabular-nums opacity-70">{t.count}</span>
+                ) : (
+                  <span
+                    className={cn(
+                      'min-w-6 rounded-pill px-1.5 text-center font-mono text-[11px] font-medium leading-5 tabular-nums',
+                      selected ? 'bg-acc text-pri-fg' : 'bg-fill text-fg-3',
+                    )}
+                  >
+                    {t.count}
+                  </span>
+                )
               ) : null}
             </button>
           );
