@@ -213,11 +213,13 @@ function openapi(o: import('@thali/service-kit').OpenApi): void {
     path: `${BASE}/preview`,
     tags,
     summary: 'Server quote + pricing for the cart (no reservation)',
-    description: 'Problems (closed restaurant, unavailable item, …) and invalid coupons are reported in the body, not as errors.',
+    description:
+      'Problems (closed restaurant, unavailable item, …) and invalid coupons are reported in the body, not as errors. ' +
+      '`restaurantIds` previews only those restaurants of the cart (ORD-3); a restaurant with no line in the cart → 422 VALIDATION_FAILED.',
     security: 'bearer',
     request: { body: { content: json(PreviewBody) } },
     responses: { 200: { description: 'Preview', content: json(PreviewResponse) } },
-    errors: ['CART_EMPTY', 'UPSTREAM_UNAVAILABLE'],
+    errors: ['CART_EMPTY', 'VALIDATION_FAILED', 'UPSTREAM_UNAVAILABLE'],
   });
 }
 

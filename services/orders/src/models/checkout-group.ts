@@ -1,7 +1,9 @@
 /**
  * `checkout_groups` (OCC) — LLD §3.3. Parent of one child order per restaurant; status derived
- * from children (LLD §4.2). Duplicate-submit guard: unique partial index `{userId, cartVersion}`
- * where `status = AWAITING_PAYMENT`.
+ * from children (LLD §4.2). Duplicate-submit guard: unique partial index
+ * `{userId, cartVersion, restaurantSetKey}` where `status = AWAITING_PAYMENT` (ORD-3: one active
+ * checkout per cart version AND restaurant subset; `'*'` = whole cart). The pre-redesign index
+ * `{userId, cartVersion}` is dropped by `initOrdersDb` (`migrateCheckoutIndexes`).
  */
 import { Schema, type Connection, type HydratedDocument, type Model, type Types } from 'mongoose';
 import { enumValues, CheckoutStatus, type Breakdown } from '@thali/contracts';
@@ -23,6 +25,11 @@ export interface CheckoutGroup {
   userId: string;
   cartId?: Types.ObjectId | null;
   cartVersion: number;
+  /**
+   * ORD-3: `restaurantSetKey(restaurantIds)` of a subset checkout, `'*'` for the whole cart. Groups
+   * written before the redesign lack it and are treated as `'*'`.
+   */
+  restaurantSetKey?: string;
   status: CheckoutStatus;
   deliveryAddress: AddressSnapshot;
   childOrderIds: Types.ObjectId[];
@@ -68,6 +75,7 @@ export const CheckoutGroupSchema = new Schema<CheckoutGroup>(
     userId: { type: String, required: true },
     cartId: { type: Schema.Types.ObjectId, default: null },
     cartVersion: { type: Number, required: true },
+    restaurantSetKey: { type: String, default: '*' },
     status: { type: String, enum: enumValues(CheckoutStatus), required: true },
     deliveryAddress: { type: AddressSnapshotSchema, required: true },
     childOrderIds: { type: [Schema.Types.ObjectId], default: [] },
@@ -95,9 +103,12 @@ export const CheckoutGroupSchema = new Schema<CheckoutGroup>(
 CheckoutGroupSchema.index({ code: 1 }, { unique: true });
 CheckoutGroupSchema.index({ userId: 1, createdAt: -1 });
 CheckoutGroupSchema.index({ status: 1, expiresAt: 1 });
+/** Pre-redesign duplicate-submit index (`{userId, cartVersion}`), dropped at boot by `migrateCheckoutIndexes`. */
+export const LEGACY_ACTIVE_CHECKOUT_INDEX = 'uniq_active_checkout_per_cart_version';
+export const ACTIVE_CHECKOUT_INDEX = 'uniq_active_checkout_per_cart_version_set';
 CheckoutGroupSchema.index(
-  { userId: 1, cartVersion: 1 },
-  { unique: true, partialFilterExpression: { status: 'AWAITING_PAYMENT' }, name: 'uniq_active_checkout_per_cart_version' },
+  { userId: 1, cartVersion: 1, restaurantSetKey: 1 },
+  { unique: true, partialFilterExpression: { status: 'AWAITING_PAYMENT' }, name: ACTIVE_CHECKOUT_INDEX },
 );
 
 export const checkoutGroupModel = (conn: Connection): Model<CheckoutGroup> =>

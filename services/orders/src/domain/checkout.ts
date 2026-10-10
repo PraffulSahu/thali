@@ -2,7 +2,10 @@
  * Checkout saga (LLD §8 steps 1–9, HLD §4.1 incl. failure branches) and cart preview.
  *
  *  1 load cart (422 CART_EMPTY)          → duplicate-submit: existing AWAITING_PAYMENT checkout for
- *                                          {userId, cartVersion} is returned (200)
+ *                                          {userId, cartVersion, restaurantSetKey} is returned (200)
+ *    ORD-3: optional `restaurantIds` selects a subset of the cart's restaurants (422 VALIDATION_FAILED
+ *    for a restaurant not in the cart); only those groups are quoted, reserved and placed, the other
+ *    lines stay in the cart. A subset covering every cart restaurant is the whole cart (`'*'`).
  *  2 marketplace quote (422 + problems)  3 refresh cart snapshot; 422 PRICE_CHANGED on expectedTotal
  *  4 coupon + membership                 5 priceCheckout
  *  6 checkoutId → marketplace reserve (409 OUT_OF_STOCK / 422 COUPON_LIMIT_REACHED)
@@ -10,13 +13,13 @@
  *  8 payments intent; failure → PAYMENT_FAILED + checkout.released + 502
  *  9 201 { checkout, payment }
  *
- * Concurrency: a short Redis lock per {userId, cartVersion} serialises concurrent submits so the
+ * Concurrency: a short Redis lock per {userId, cartVersion, restaurantSetKey} serialises concurrent submits so the
  * losers simply return the winner's checkout; the unique partial index is the backstop (a loser
  * that still reaches step 7 releases its own reservation and returns the winner).
  */
 import { randomUUID } from 'node:crypto';
 import mongoose, { Types } from 'mongoose';
-import { DomainError, type CreateCheckoutBody } from '@thali/contracts';
+import { DomainError, restaurantSetKey, type CreateCheckoutBody } from '@thali/contracts';
 import { lineTotal, priceCheckout, type PricedCheckout, type RestaurantInput } from '@thali/pricing';
 import { redisKey, withTransaction } from '@thali/service-kit';
 import type { OrdersContext } from '../context.js';
@@ -74,9 +77,35 @@ export interface QuoteAndPrice {
   priced: PricedCheckout;
 }
 
-/** Quote every cart line, collect problems, map quote lines back to cart lines (by echoed lineRef). */
-async function quoteCart(ctx: OrdersContext, cart: CartDoc, drop: LatLng) {
-  const items = cart.items.map((l) => ({
+/** The cart lines a checkout covers plus its idempotency set key (ORD-3). */
+export interface CartSelection {
+  lines: CartLine[];
+  /** `restaurantSetKey(restaurantIds)`; `'*'` for the whole cart (also when the subset covers every restaurant). */
+  setKey: string;
+}
+
+/**
+ * Restrict the cart to `restaurantIds` (ORD-3). Absent → every line, key `'*'`. A requested restaurant
+ * with no line in the cart → 422 VALIDATION_FAILED (`details.restaurantIds` lists them).
+ */
+export function selectCartLines(cart: Pick<CartDoc, 'items'>, restaurantIds?: readonly string[] | null): CartSelection {
+  if (!restaurantIds || restaurantIds.length === 0) return { lines: [...cart.items], setKey: '*' };
+  const wanted = new Set(restaurantIds.map((i) => i.toLowerCase()));
+  const inCart = new Set(cart.items.map((l) => l.restaurantId.toLowerCase()));
+  const missing = [...wanted].filter((id) => !inCart.has(id));
+  if (missing.length) {
+    throw new DomainError('VALIDATION_FAILED', 'Some selected restaurants have nothing in your cart', 422, {
+      restaurantIds: missing,
+      issues: missing.map((id) => ({ path: 'body.restaurantIds', code: 'custom', message: `Restaurant ${id} is not in the cart` })),
+    });
+  }
+  const lines = cart.items.filter((l) => wanted.has(l.restaurantId.toLowerCase()));
+  return { lines, setKey: wanted.size === inCart.size ? '*' : restaurantSetKey([...wanted]) };
+}
+
+/** Quote the selected cart lines, collect problems, map quote lines back to cart lines (by echoed lineRef). */
+async function quoteCart(ctx: OrdersContext, cartLines: CartLine[], drop: LatLng) {
+  const items = cartLines.map((l) => ({
     lineRef: String(l._id),
     restaurantId: l.restaurantId,
     itemId: l.itemId,
@@ -89,13 +118,13 @@ async function quoteCart(ctx: OrdersContext, cart: CartDoc, drop: LatLng) {
     problems.some((p) => p.code === code && p.restaurantId === restaurantId && (itemId === undefined || p.itemId === itemId));
 
   const byRestaurant = new Map<string, CartLine[]>();
-  for (const l of cart.items) byRestaurant.set(l.restaurantId, [...(byRestaurant.get(l.restaurantId) ?? []), l]);
+  for (const l of cartLines) byRestaurant.set(l.restaurantId, [...(byRestaurant.get(l.restaurantId) ?? []), l]);
 
   const restaurants: QuotedRestaurant[] = [];
-  for (const [restaurantId, cartLines] of byRestaurant) {
+  for (const [restaurantId, groupLines] of byRestaurant) {
     const q = quote.restaurants.find((r) => r.restaurantId === restaurantId);
     if (!q) {
-      for (const l of cartLines)
+      for (const l of groupLines)
         if (!has('ITEM_UNAVAILABLE', restaurantId, l.itemId))
           problems.push({ code: 'ITEM_UNAVAILABLE', restaurantId, itemId: l.itemId, message: `${l.name} is no longer available` });
       continue;
@@ -103,9 +132,9 @@ async function quoteCart(ctx: OrdersContext, cart: CartDoc, drop: LatLng) {
     if (!q.open && !has('RESTAURANT_CLOSED', restaurantId)) problems.push({ code: 'RESTAURANT_CLOSED', restaurantId, message: `${q.name} is closed` });
     if (!q.serviceable && !has('NOT_SERVICEABLE', restaurantId))
       problems.push({ code: 'NOT_SERVICEABLE', restaurantId, message: `${q.name} does not deliver to this address` });
-    const matched = matchQuoteLines(cartLines.map((cl) => ({ lineRef: String(cl._id), itemId: cl.itemId })), q.lines);
+    const matched = matchQuoteLines(groupLines.map((cl) => ({ lineRef: String(cl._id), itemId: cl.itemId })), q.lines);
     const lines: MappedLine[] = [];
-    cartLines.forEach((cl, idx) => {
+    groupLines.forEach((cl, idx) => {
       const ql = matched[idx];
       if (!ql) {
         if (!has('ITEM_UNAVAILABLE', restaurantId, cl.itemId))
@@ -139,17 +168,17 @@ function pricingInputs(restaurants: QuotedRestaurant[]): RestaurantInput[] {
 }
 
 /**
- * Server quote + coupon + membership + `priceCheckout` (LLD §8 steps 2–5).
+ * Server quote + coupon + membership + `priceCheckout` (LLD §8 steps 2–5) over the selected lines.
  * `strictCoupon`: an invalid coupon throws (checkout); otherwise it is reported (preview).
  */
 export async function quoteAndPrice(
   ctx: OrdersContext,
   userId: string,
-  cart: CartDoc,
+  cartLines: CartLine[],
   drop: LatLng,
   opts: { couponCode?: string | null; useMembership: boolean; strictCoupon: boolean },
 ): Promise<QuoteAndPrice> {
-  const { quote, problems, restaurants } = await quoteCart(ctx, cart, drop);
+  const { quote, problems, restaurants } = await quoteCart(ctx, cartLines, drop);
   const inputs = pricingInputs(restaurants);
   const itemsSubtotalPaise = inputs.reduce((s, r) => s + r.lines.reduce((t, l) => t + lineTotal(l), 0), 0);
 
@@ -273,12 +302,19 @@ const dropOf = (a: AddressSnapshot): LatLng => ({ lat: a.location.coordinates[1]
 export async function previewCart(
   ctx: OrdersContext,
   userId: string,
-  body: { address?: CreateCheckoutBody['address']; addressId?: string; couponCode?: string | null; useMembership?: boolean },
+  body: {
+    address?: CreateCheckoutBody['address'];
+    addressId?: string;
+    couponCode?: string | null;
+    useMembership?: boolean;
+    restaurantIds?: string[];
+  },
 ) {
   const cart = await findCart(ctx, { kind: 'USER', userId });
   if (!cart || !cart.items.length) throw new DomainError('CART_EMPTY', 'Your cart is empty');
+  const selection = selectCartLines(cart, body.restaurantIds);
   const drop = resolveDropAddress(cart, body);
-  const qp = await quoteAndPrice(ctx, userId, cart, dropOf(drop), {
+  const qp = await quoteAndPrice(ctx, userId, selection.lines, dropOf(drop), {
     couponCode: body.couponCode === undefined ? cart.couponCode : body.couponCode,
     useMembership: body.useMembership ?? false,
     strictCoupon: false,
@@ -316,8 +352,11 @@ export async function getCheckoutView(ctx: OrdersContext, userId: string, checko
   return { checkout: await loadView(ctx, group), payment: group.payment ? paymentView(group.payment) : null };
 }
 
-const findActive = (ctx: OrdersContext, userId: string, cartVersion: number) =>
-  ctx.models.CheckoutGroup.findOne({ userId, cartVersion, status: 'AWAITING_PAYMENT' });
+/** Groups written before ORD-3 have no `restaurantSetKey` and count as the whole cart. */
+const setKeyFilter = (setKey: string) => (setKey === '*' ? { restaurantSetKey: { $in: ['*', null] } } : { restaurantSetKey: setKey });
+
+const findActive = (ctx: OrdersContext, userId: string, cartVersion: number, setKey: string) =>
+  ctx.models.CheckoutGroup.findOne({ userId, cartVersion, status: 'AWAITING_PAYMENT', ...setKeyFilter(setKey) });
 
 const snapshotOf = (i: { paymentIntentId: string; provider: 'razorpay' | 'mock'; providerOrderId: string; keyId: string | null; amountPaise: number; currency: 'INR'; demoPayUrl: string | null }): PaymentSnapshot => ({
   paymentIntentId: i.paymentIntentId,
@@ -403,26 +442,28 @@ export async function createCheckout(
   const { userId, body } = input;
   const cart = await findCart(ctx, { kind: 'USER', userId });
   if (!cart || !cart.items.length) throw new DomainError('CART_EMPTY', 'Your cart is empty');
+  const selection = selectCartLines(cart, body.restaurantIds);
+  const { setKey } = selection;
   const dropAddress = resolveDropAddress(cart, body);
 
-  const existing = await findActive(ctx, userId, cart.cartVersion);
+  const existing = await findActive(ctx, userId, cart.cartVersion, setKey);
   if (existing) return respondExisting(ctx, existing);
 
-  const lockKey = `checkout-lock:${userId}:${cart.cartVersion}`;
+  const lockKey = `checkout-lock:${userId}:${cart.cartVersion}:${setKey}`;
   const token = randomUUID();
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
     const got = await tryLock(ctx, lockKey, token);
     if (got !== false) break; // acquired, or Redis unavailable (unique index still protects)
-    const active = await findActive(ctx, userId, cart.cartVersion);
+    const active = await findActive(ctx, userId, cart.cartVersion, setKey);
     if (active) return respondExisting(ctx, active);
     if (Date.now() > deadline) throw new DomainError('IDEMPOTENCY_IN_PROGRESS', 'A checkout for this cart is already in progress');
     await sleep(100);
   }
   try {
-    const active = await findActive(ctx, userId, cart.cartVersion);
+    const active = await findActive(ctx, userId, cart.cartVersion, setKey);
     if (active) return respondExisting(ctx, active);
-    return await runSaga(ctx, { userId, body, idempotencyKey: input.idempotencyKey, cart, dropAddress });
+    return await runSaga(ctx, { userId, body, idempotencyKey: input.idempotencyKey, cart, selection, dropAddress });
   } finally {
     await unlock(ctx, lockKey, token);
   }
@@ -433,16 +474,17 @@ interface SagaInput {
   body: CreateCheckoutBody;
   idempotencyKey: string | null;
   cart: CartDoc;
+  selection: CartSelection;
   dropAddress: AddressSnapshot;
 }
 
 async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult> {
-  const { userId, body, cart, dropAddress } = s;
+  const { userId, body, cart, selection, dropAddress } = s;
   const couponCode = body.couponCode ?? cart.couponCode ?? null;
 
   // 2–5: quote, coupon, membership, pricing (+ customer contact in parallel)
   const [qpRes, userRes] = await Promise.allSettled([
-    quoteAndPrice(ctx, userId, cart, dropOf(dropAddress), { couponCode, useMembership: body.useMembership, strictCoupon: true }),
+    quoteAndPrice(ctx, userId, selection.lines, dropOf(dropAddress), { couponCode, useMembership: body.useMembership, strictCoupon: true }),
     ctx.clients.identity.getUser(userId),
   ]);
   if (qpRes.status === 'rejected') throw qpRes.reason;
@@ -586,6 +628,7 @@ async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult
                 userId,
                 cartId: cart._id,
                 cartVersion: cart.cartVersion,
+                restaurantSetKey: selection.setKey,
                 status: 'AWAITING_PAYMENT',
                 deliveryAddress: dropAddress,
                 childOrderIds: childDocs.map((c) => c._id),
@@ -631,7 +674,7 @@ async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult
         if ('cartVersion' in key || /uniq_active_checkout_per_cart_version/.test(dup.message ?? '')) {
           // lost a double-submit race past the lock: release our hold and return the winner
           await releaseHold();
-          const winner = await findActive(ctx, userId, cart.cartVersion);
+          const winner = await findActive(ctx, userId, cart.cartVersion, selection.setKey);
           if (winner) return respondExisting(ctx, winner);
           throw new DomainError('CONFLICT', 'Checkout conflict, please retry');
         }

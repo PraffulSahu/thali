@@ -54,7 +54,10 @@ function openapi(o: OpenApi): void {
     description:
       'LLD §8 saga. One child order per restaurant, each delivered separately. Returns 201 for a new checkout; ' +
       '200 with the existing AWAITING_PAYMENT checkout when the same cart version was already submitted (different key). ' +
-      'The cart is cleared only after payment is captured.',
+      'The cart is cleared only after payment is captured. ' +
+      '`restaurantIds` (ORD-3) checks out only those restaurants of the cart; the other lines stay in the cart. ' +
+      'Duplicate-submit protection keys on {cart version, restaurant set}, so different subsets of one cart version are separate checkouts. ' +
+      'A restaurant with no line in the cart → 422 VALIDATION_FAILED.',
     security: 'bearer',
     idempotent: true,
     rateLimited: true,
@@ -65,6 +68,7 @@ function openapi(o: OpenApi): void {
     },
     errors: [
       'CART_EMPTY',
+      'VALIDATION_FAILED',
       'RESTAURANT_CLOSED',
       'NOT_SERVICEABLE',
       'ITEM_UNAVAILABLE',

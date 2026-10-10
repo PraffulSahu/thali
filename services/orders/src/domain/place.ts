@@ -143,12 +143,14 @@ async function recordLatePayment(ctx: OrdersContext, session: ClientSession, gro
 
 /**
  * LLD §8: on PLACED clear the purchased cart items — all of them if the cart is still at the
- * checked-out version, otherwise only lines matching purchased lines (by line identity).
+ * checked-out version and the checkout covered the whole cart, otherwise only lines matching
+ * purchased lines (by line identity). A subset checkout (ORD-3) never clears the other restaurants.
  */
 export async function clearPurchasedCartLines(ctx: OrdersContext, session: ClientSession, group: CheckoutGroupDoc, children: ChildOrderDoc[]): Promise<void> {
   const cart = await ctx.models.Cart.findOne({ userId: group.userId, ownerType: 'USER' }).session(session);
   if (!cart) return;
-  if (cart.cartVersion === group.cartVersion) {
+  const wholeCart = (group.restaurantSetKey ?? '*') === '*';
+  if (wholeCart && cart.cartVersion === group.cartVersion) {
     cart.items = [];
     cart.couponCode = null;
   } else {

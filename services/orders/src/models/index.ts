@@ -5,7 +5,7 @@
 import type { Connection, Model } from 'mongoose';
 import { initEventCollections, idempotencyModel } from '@thali/service-kit';
 import { cartModel, type Cart } from './cart.js';
-import { checkoutGroupModel, type CheckoutGroup } from './checkout-group.js';
+import { checkoutGroupModel, LEGACY_ACTIVE_CHECKOUT_INDEX, type CheckoutGroup } from './checkout-group.js';
 import { childOrderModel, type ChildOrder } from './child-order.js';
 import { orderEventModel, type OrderEvent } from './order-event.js';
 import { restaurantProjectionModel, type RestaurantProjection } from './restaurant-projection.js';
@@ -44,6 +44,31 @@ export async function initOrdersDb(conn: Connection): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const models: Model<any>[] = [...Object.values(getModels(conn)), idempotencyModel(conn), ...extraModelInits.map((f) => f(conn))];
   await Promise.all(models.map((m) => m.init()));
+  await migrateCheckoutIndexes(conn);
+}
+
+/**
+ * ORD-3 index migration, tolerant of every starting state: the new unique partial index
+ * `{userId, cartVersion, restaurantSetKey}` (AWAITING_PAYMENT) is created by `init()` above (from
+ * the schema) BEFORE the pre-redesign `{userId, cartVersion}` one is dropped, so there is never a
+ * moment without a duplicate-submit backstop. Missing index / collection → no-op. Idempotent.
+ */
+export async function migrateCheckoutIndexes(conn: Connection): Promise<void> {
+  const coll = checkoutGroupModel(conn).collection;
+  let names: string[];
+  try {
+    names = (await coll.indexes()).map((i) => String(i.name));
+  } catch (e) {
+    if ((e as { code?: number }).code === 26) return; // NamespaceNotFound: nothing to migrate
+    throw e;
+  }
+  if (!names.includes(LEGACY_ACTIVE_CHECKOUT_INDEX)) return;
+  try {
+    await coll.dropIndex(LEGACY_ACTIVE_CHECKOUT_INDEX);
+  } catch (e) {
+    const code = (e as { code?: number }).code;
+    if (code !== 27 && code !== 26) throw e; // IndexNotFound / NamespaceNotFound: another instance won
+  }
 }
 
 export * from './cart.js';

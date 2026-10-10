@@ -13,6 +13,7 @@ import {
   CreateCheckoutBodySchema,
   GeoPointSchema,
   ObjectIdSchema,
+  RestaurantIdsSubsetSchema,
   SelectionSchema,
 } from '@thali/contracts';
 import { QUOTE_PROBLEM_CODES } from './clients/marketplace.js';
@@ -97,6 +98,9 @@ export const PreviewBody = z
     address: AddressSchema.optional(),
     couponCode: z.string().trim().min(1).max(40).nullable().optional(),
     useMembership: z.boolean().optional(),
+    restaurantIds: RestaurantIdsSubsetSchema.optional().meta({
+      description: 'Preview only these restaurants of the cart (1–10, e.g. "Checkout only Spice Route"); absent = the whole cart',
+    }),
   })
   .meta({ id: 'CartPreviewBody' });
 

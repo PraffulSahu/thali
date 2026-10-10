@@ -108,9 +108,9 @@ describe('checkout duplicate-submit protection', () => {
     expect(released).not.toContain(winnerId);
   });
 
-  it('the unique partial index rejects a second AWAITING_PAYMENT checkout for the same {userId, cartVersion}', async () => {
+  it('the unique partial index rejects a second AWAITING_PAYMENT checkout for the same {userId, cartVersion, restaurantSetKey}', async () => {
     const indexes = await h.db.conn.collection('checkout_groups').indexes();
-    const idx = indexes.find((i) => i.key.userId === 1 && i.key.cartVersion === 1);
+    const idx = indexes.find((i) => i.key.userId === 1 && i.key.cartVersion === 1 && i.key.restaurantSetKey === 1);
     expect(idx).toBeDefined();
     expect(idx!.unique).toBe(true);
     expect(idx!.partialFilterExpression).toEqual({ status: 'AWAITING_PAYMENT' });
