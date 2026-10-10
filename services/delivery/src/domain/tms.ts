@@ -100,11 +100,49 @@ export async function listJobs(ctx: DeliveryContext, q: { status?: string; excep
   return buildPage(docs, q.limit);
 }
 
-export async function listPartners(ctx: DeliveryContext, q: { status?: string; limit: number; cursor?: string }) {
-  const filter: Record<string, unknown> = { ...cursorFilter(q.cursor) };
-  if (q.status) filter.status = q.status;
+export interface PartnerListQuery {
+  status?: string;
+  online?: boolean;
+  hasCapacity?: boolean;
+  nearJobId?: string;
+  limit: number;
+  cursor?: string;
+}
+
+export interface PartnerListRow {
+  partner: PartnerLean;
+  distanceToPickupKm: number | null;
+}
+
+/**
+ * Admin partner list + DLV-7 assign picker. `nearJobId` switches to a `$geoNear` on `lastLocation`
+ * (2dsphere index) from the job's pickup: nearest first, first `limit` rows, no cursor (partners without
+ * a known location are not listed in that mode).
+ */
+export async function listPartners(ctx: DeliveryContext, q: PartnerListQuery): Promise<{ items: PartnerListRow[]; nextCursor: string | null }> {
+  const match: Record<string, unknown> = {};
+  if (q.status) match.status = q.status;
+  if (q.online !== undefined) match.online = q.online;
+  const max = ctx.config.MAX_ACTIVE_DELIVERIES;
+  const below = { $lt: [{ $size: { $ifNull: ['$activeJobIds', []] } }, { $min: [{ $ifNull: ['$maxActive', max] }, max] }] };
+  const capacity = q.hasCapacity === undefined ? null : q.hasCapacity ? below : { $not: [below] };
+
+  if (q.nearJobId) {
+    const job = await ctx.models.Job.findById(q.nearJobId, { pickup: 1 }).lean<JobLean>();
+    if (!job) throw new DomainError('NOT_FOUND', 'Delivery not found');
+    const docs = await ctx.models.Partner.aggregate<PartnerLean & { distanceM: number }>([
+      { $geoNear: { near: { type: 'Point', coordinates: job.pickup.location.coordinates as [number, number] }, key: 'lastLocation', distanceField: 'distanceM', spherical: true, query: match } },
+      ...(capacity ? [{ $match: { $expr: capacity } }] : []),
+      { $limit: q.limit },
+    ]);
+    return { items: docs.map(({ distanceM, ...p }) => ({ partner: p as PartnerLean, distanceToPickupKm: Math.round((distanceM / 1000) * 100) / 100 })), nextCursor: null };
+  }
+
+  const filter: Record<string, unknown> = { ...match, ...cursorFilter(q.cursor) };
+  if (capacity) filter.$expr = capacity;
   const docs = await ctx.models.Partner.find(filter).sort(PAGE_SORT).limit(q.limit + 1).lean<PartnerLean[]>();
-  return buildPage(docs, q.limit);
+  const page = buildPage(docs, q.limit);
+  return { items: page.items.map((partner) => ({ partner, distanceToPickupKm: null })), nextCursor: page.nextCursor };
 }
 
 export async function overview(ctx: DeliveryContext) {

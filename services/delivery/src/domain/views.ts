@@ -32,6 +32,11 @@ export function partnerView(p: PartnerLean) {
   };
 }
 
+/** DLV-7 admin list row: partner + picker extras. */
+export function adminPartnerRow(p: PartnerLean, distanceToPickupKm: number | null = null) {
+  return { ...partnerView(p), distanceToPickupKm, activeJobCount: (p.activeJobIds ?? []).length };
+}
+
 function place(p: { name: string; address: string; location: { coordinates: number[] } }) {
   return { name: p.name, address: p.address, location: toLatLng(p.location) };
 }

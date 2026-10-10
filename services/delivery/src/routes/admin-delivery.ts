@@ -8,7 +8,7 @@ import { requireAuth, validate } from '@thali/service-kit';
 import type { DeliveryContext } from '../context.js';
 import { adminDocumentUrl, adminPartnerAction, type AdminPartnerAction } from '../domain/onboarding.js';
 import { adminAssign, adminFail, adminSimulate, adminUnassign, listJobs, listPartners, overview } from '../domain/tms.js';
-import { adminJobView, partnerView } from '../domain/views.js';
+import { adminJobView, adminPartnerRow, partnerView } from '../domain/views.js';
 import { AssignBody, DocParams, IdParams, JobIdParams, JobsQuery, OptionalReasonBody, PartnersQuery, ReasonBody } from '../schemas.js';
 
 export function adminDeliveryRouter(ctx: DeliveryContext): Router {
@@ -20,7 +20,7 @@ export function adminDeliveryRouter(ctx: DeliveryContext): Router {
   const vPartners = validate({ query: PartnersQuery });
   r.get('/partners', read, vPartners, async (req, res) => {
     const page = await listPartners(ctx, vPartners.get(req).query);
-    res.json({ items: page.items.map(partnerView), nextCursor: page.nextCursor });
+    res.json({ items: page.items.map((r) => adminPartnerRow(r.partner, r.distanceToPickupKm)), nextCursor: page.nextCursor });
   });
 
   const vId = validate({ params: IdParams });

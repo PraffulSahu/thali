@@ -49,7 +49,17 @@ export const FailBody = z.object({ reason: z.string().trim().min(3).max(500) }).
 export const ReasonBody = z.object({ reason: z.string().trim().min(3).max(500) }).meta({ id: 'AdminReason' });
 export const OptionalReasonBody = z.object({ reason: z.string().trim().min(3).max(500).optional() }).meta({ id: 'OptionalReason' });
 export const AssignBody = z.object({ partnerId: ObjectIdSchema }).meta({ id: 'AssignPartner' });
-export const PartnersQuery = PaginationQuerySchema.extend({ status: z.enum(enumValues(PartnerStatus)).optional() });
+const flag = () =>
+  z
+    .enum(['true', 'false'])
+    .transform((v) => v === 'true')
+    .optional();
+export const PartnersQuery = PaginationQuerySchema.extend({
+  status: z.enum(enumValues(PartnerStatus)).optional(),
+  online: flag().describe('Only online (true) / offline (false) partners'),
+  hasCapacity: flag().describe('Only partners below (true) / at (false) their active-delivery limit'),
+  nearJobId: ObjectIdSchema.optional().describe('Sort by distance to this job\'s pickup (partners with a known location only; first `limit` rows, no cursor)'),
+});
 export const JobsQuery = PaginationQuerySchema.extend({
   q: z
     .string()
@@ -112,6 +122,12 @@ export const PartnerView = z
     createdAt: iso,
   })
   .meta({ id: 'Partner' });
+
+/** DLV-7 admin partner list row (assign picker). */
+export const AdminPartnerRow = PartnerView.extend({
+  distanceToPickupKm: z.number().nullable().describe('Straight-line km from the nearJobId pickup; null without nearJobId'),
+  activeJobCount: z.number().int(),
+}).meta({ id: 'AdminPartnerRow' });
 
 export const PresignResponse = z
   .object({

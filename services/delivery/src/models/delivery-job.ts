@@ -102,6 +102,8 @@ deliveryJobSchema.index({ status: 1, exception: 1, nextDispatchAt: 1 });
 // DLV-4: admin search by code (prefix) + the backfill's "still missing" scan
 deliveryJobSchema.index({ childOrderCode: 1, codesCheckedAt: 1 });
 deliveryJobSchema.index({ checkoutCode: 1 });
+// partner history pagination (partnerUserId + PAGE_SORT)
+deliveryJobSchema.index({ partnerUserId: 1, createdAt: -1, _id: -1 });
 
 export type JobFields = InferSchemaType<typeof deliveryJobSchema>;
 export type JobDoc = HydratedDocument<JobFields>;

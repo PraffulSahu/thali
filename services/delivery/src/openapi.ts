@@ -5,6 +5,7 @@ import { createOpenApi, registerOpsRoutes } from '@thali/service-kit';
 import {
   AcceptResponse,
   AdminJobView,
+  AdminPartnerRow,
   AssignBody,
   AttachDocumentBody,
   ChildOrderParams,
@@ -138,8 +139,8 @@ openapi.route({
 
 // ---------------------------------------------------------------- admin
 openapi.route({
-  method: 'get', path: `${API}/admin/delivery/partners`, tags: ['admin-delivery'], security: 'bearer', description: READ, summary: 'List partners (ADMIN+MFA)',
-  request: { query: PartnersQuery }, responses: ok('Partners', page(PartnerView, 'PartnerPage')), errors: ['MFA_REQUIRED'],
+  method: 'get', path: `${API}/admin/delivery/partners`, tags: ['admin-delivery'], security: 'bearer', description: READ, summary: 'List partners (ADMIN+MFA); assign picker: online / hasCapacity filters, nearJobId = nearest to the job pickup first',
+  request: { query: PartnersQuery }, responses: ok('Partners', page(AdminPartnerRow, 'PartnerPage')), errors: ['MFA_REQUIRED', 'NOT_FOUND'],
 });
 for (const [action, reason] of [['approve', false], ['reject', true], ['suspend', true], ['reinstate', false]] as const) {
   openapi.route({
