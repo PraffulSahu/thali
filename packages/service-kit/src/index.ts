@@ -158,8 +158,12 @@ export {
   healthDetails,
   recordProviderError,
   providerErrorStats,
+  providerLastErrors,
+  scrubProviderMessage,
+  PROVIDER_MESSAGE_MAX,
   type HealthDetails,
   type HealthDetailsOptions,
+  type ProviderLastError,
 } from './health-details.js';
 export {
   createOpsRouter,
@@ -183,6 +187,12 @@ export {
   type VerifyUploadInput,
   type VerifyUploadResult,
 } from './providers/storage.js';
+export {
+  resolveImageUrl,
+  parseExternalImageHosts,
+  isAllowedImageHost,
+  DEFAULT_EXTERNAL_IMAGE_HOSTS,
+} from './providers/image-url.js';
 export { createS3Storage, createStorageProvider, type S3StorageOptions, type StorageConfig } from './providers/s3-storage.js';
 export {
   haversineKm,
@@ -194,6 +204,10 @@ export {
   type DistanceEta,
   type GeocodeResult,
   type GeoProvider,
+  type AutocompleteBias,
+  type PlaceSuggestion,
+  type PlaceDetails,
+  type ReverseGeocodeResult,
   type GeoProviderConfig,
   type RoadEstimateOptions,
 } from './providers/geo.js';
@@ -203,6 +217,9 @@ export {
   GOOGLE_ROUTES_URL,
   GOOGLE_ROUTES_FIELD_MASK,
   GOOGLE_GEOCODE_URL,
+  GOOGLE_PLACES_AUTOCOMPLETE_URL,
+  GOOGLE_PLACE_DETAILS_URL,
+  GOOGLE_PLACE_DETAILS_FIELD_MASK,
   type GoogleGeoOptions,
   type GoogleTravelMode,
 } from './providers/google-geo.js';

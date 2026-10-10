@@ -67,6 +67,101 @@ export async function ensureDocs(
   }
 }
 
+export interface EnsureDocsBulkOptions {
+  /** Documents per `find` + `insertMany` round trip. Default 1000. */
+  chunk?: number;
+  /** Report key. Default: the collection name. */
+  label?: string;
+}
+
+type SeedDoc = Record<string, unknown>;
+
+/**
+ * Bulk variant of `ensureDocs` for large generated seeds (gap analysis §5.2): per chunk,
+ * `find({_id:{$in}}, {_id:1})` then `insertMany(missing, {ordered:false, timestamps:false})`.
+ * Same rules: never overwrites; every doc needs a deterministic `_id`; the whole chunk is validated
+ * through the model before anything is written (a validation error throws and the chunk is not written);
+ * explicit `createdAt`/`updatedAt` are kept, else both default to now; a duplicate `_id` (repeated in
+ * the input, or inserted concurrently) counts as existing; a unique clash with a non-seed document
+ * throws `SeedConflictError` naming the key (after the rest of the chunk has been inserted).
+ * `docs` may be an array, any iterable, or an async iterable (stream the generation to keep memory flat).
+ */
+export async function ensureDocsBulk(
+  model: Model<any>, // any service model
+  docs: Iterable<SeedDoc> | AsyncIterable<SeedDoc>,
+  report: SeedReport,
+  opts: EnsureDocsBulkOptions = {},
+): Promise<void> {
+  const label = opts.label ?? model.collection.collectionName;
+  const chunkSize = opts.chunk ?? 1000;
+  if (!Number.isSafeInteger(chunkSize) || chunkSize < 1) throw new Error(`seed ${label}: chunk must be a positive integer`);
+  const tally = (report[label] ??= { inserted: 0, existing: 0 });
+
+  async function flush(chunk: SeedDoc[]): Promise<void> {
+    const found = await model.find({ _id: { $in: chunk.map((d) => d._id) } }, { _id: 1 }).lean<{ _id: unknown }[]>();
+    const known = new Set(found.map((f) => String(f._id)));
+    const now = new Date();
+    const pending: { id: unknown; doc: InstanceType<Model<any>> }[] = [];
+    for (const d of chunk) {
+      const doc = new model({ createdAt: now, updatedAt: now, ...d });
+      const key = String(doc._id);
+      if (known.has(key)) {
+        tally.existing++;
+        continue;
+      }
+      known.add(key); // a repeat of this _id later in the input counts as existing
+      pending.push({ id: d._id, doc });
+    }
+    if (pending.length === 0) return;
+    await Promise.all(pending.map((p) => p.doc.validate()));
+    try {
+      // `timestamps: false` (honoured by mongoose insertMany, not in its typings): keep explicit createdAt/updatedAt
+      const insertOpts = { ordered: false, timestamps: false };
+      await model.insertMany(
+        pending.map((p) => p.doc),
+        insertOpts,
+      );
+      tally.inserted += pending.length;
+    } catch (e) {
+      const writeErrors = (e as { writeErrors?: unknown[] }).writeErrors;
+      if (!Array.isArray(writeErrors) || writeErrors.length === 0) throw e;
+      tally.inserted += pending.length - writeErrors.length;
+      let conflict: SeedConflictError | undefined;
+      for (const raw of writeErrors) {
+        const we = raw as { index?: number; code?: number; err?: { code?: number; keyPattern?: Record<string, unknown>; keyValue?: Record<string, unknown>; errmsg?: string } };
+        const code = we.err?.code ?? we.code;
+        if (code !== 11000) throw e;
+        // bulk write errors carry no keyPattern/keyValue: parse `index: <name> dup key: { ... }` from errmsg
+        const msg = we.err?.errmsg ?? '';
+        const index = /index: (\S+)/.exec(msg)?.[1];
+        const dupKey = we.err?.keyValue ? JSON.stringify(we.err.keyValue) : (/dup key: (\{.*\})/.exec(msg)?.[1] ?? '{}');
+        const p = pending[we.index ?? -1];
+        const idClash = index === '_id_' || Object.keys(we.err?.keyPattern ?? {}).join() === '_id';
+        if (idClash || (p && (await model.exists({ _id: p.id })))) {
+          tally.existing++; // concurrent seed run (or repeated _id) inserted it
+          continue;
+        }
+        conflict ??= new SeedConflictError(
+          `seed ${label} ${String(p?.id)}: conflicts with an existing non-seed document ${dupKey}${index ? ` (index ${index})` : ''}. ` +
+            'Reset the demo data (npm run stack:down -- -v) or remove that document, then re-run the seed.',
+        );
+      }
+      if (conflict) throw conflict;
+    }
+  }
+
+  let buf: SeedDoc[] = [];
+  for await (const d of docs) {
+    if (d._id === undefined || d._id === null) throw new Error(`seed ${label}: every document needs a deterministic _id`);
+    buf.push(d);
+    if (buf.length >= chunkSize) {
+      await flush(buf);
+      buf = [];
+    }
+  }
+  if (buf.length) await flush(buf);
+}
+
 export const totalInserted = (report: SeedReport) => Object.values(report).reduce((n, t) => n + t.inserted, 0);
 
 /** Human summary + one machine-readable line (`SEED_RESULT {...}`) for `scripts/seed.ts`. */

@@ -10,6 +10,10 @@ export const AddressSchema = z.object({
   line1: z.string().trim().min(1).max(200),
   line2: z.string().trim().max(200).optional(),
   landmark: z.string().trim().max(120).optional(),
+  /** Neighbourhood, e.g. "Indiranagar" (IDN-2): header chip + delivery drop area. */
+  locality: z.string().trim().max(60).optional(),
+  /** Full provider-formatted address (from place lookup / reverse geocode), display only. */
+  formattedAddress: z.string().trim().max(300).optional(),
   city: z.string().trim().min(1).max(80),
   pincode: PincodeSchema,
   location: GeoPointSchema,

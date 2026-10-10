@@ -27,11 +27,67 @@ export interface GeocodeResult extends LatLng {
   formattedAddress: string;
 }
 
+/** Autocomplete bias (MKT-1). */
+export interface AutocompleteBias {
+  /** Bias results around this point. */
+  location?: LatLng;
+  /** Bias circle radius in metres (Google max 50000). Default 30000 when `location` is set. */
+  radiusM?: number;
+  /** Places session token (groups autocomplete + one details call into one billed session). */
+  sessionToken?: string;
+}
+
+/** One autocomplete suggestion. Google fills `id/primary/secondary`; the rest may be null until `placeDetails`. */
+export interface PlaceSuggestion {
+  /** Provider place id (Google `placeId`). */
+  id: string;
+  /** e.g. "12th Main Rd". */
+  primary: string;
+  /** e.g. "Indiranagar, Bengaluru, Karnataka, India" ('' when the provider gives none). */
+  secondary: string;
+  locality: string | null;
+  city: string | null;
+  pincode: string | null;
+  location: LatLng | null;
+}
+
+/** A resolved place (MKT-1 `GET /discovery/places/:placeId`). */
+export interface PlaceDetails {
+  id: string;
+  formattedAddress: string;
+  /** Neighbourhood (sublocality_level_1 → sublocality → neighborhood). */
+  locality: string | null;
+  /** City (locality → administrative_area_level_2). */
+  city: string | null;
+  pincode: string | null;
+  location: LatLng;
+}
+
+/** Reverse-geocode result (MKT-1 `GET /discovery/reverse`). */
+export interface ReverseGeocodeResult {
+  /** Short label, e.g. "12th Main Rd, Indiranagar" (route + locality, else locality + city, else the formatted address). */
+  label: string;
+  formattedAddress: string;
+  locality: string | null;
+  city: string | null;
+  pincode: string | null;
+  location: LatLng;
+}
+
 export interface GeoProvider {
   readonly name: 'google' | 'demo';
   distanceAndEta(from: LatLng, to: LatLng): Promise<DistanceEta>;
   /** Google only; `null` when nothing matched. */
   geocode?(query: string): Promise<GeocodeResult | null>;
+  /**
+   * Google only (demo leaves it undefined → marketplace uses its gazetteer). `[]` when nothing matched.
+   * Provider failure: records `google-places` and throws `DomainError('UPSTREAM_UNAVAILABLE')`.
+   */
+  autocomplete?(query: string, bias?: AutocompleteBias): Promise<PlaceSuggestion[]>;
+  /** Google only. `null` for an unknown place id (404). Failure: records `google-places`, throws `UPSTREAM_UNAVAILABLE`. */
+  placeDetails?(placeId: string, opts?: { sessionToken?: string }): Promise<PlaceDetails | null>;
+  /** Google only. `null` for ZERO_RESULTS. Failure: records `google-geocode`, throws `UPSTREAM_UNAVAILABLE`. */
+  reverse?(point: LatLng): Promise<ReverseGeocodeResult | null>;
 }
 
 /** LLD 7 defaults. */

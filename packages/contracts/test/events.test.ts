@@ -11,7 +11,7 @@ describe('event catalog', () => {
       'order.preparing', 'order.ready', 'order.picked_up', 'order.out_for_delivery', 'order.delivered',
       'order.delivery_failed', 'payment.captured', 'payment.failed', 'refund.requested',
       'refund.processing', 'refund.succeeded', 'refund.failed', 'delivery.job_created',
-      'delivery.assigned', 'delivery.unassigned', 'delivery.picked_up', 'delivery.started',
+      'delivery.assigned', 'delivery.unassigned', 'delivery.arrived', 'delivery.picked_up', 'delivery.started',
       'delivery.delivered', 'delivery.failed', 'delivery.exception', 'partner.status_changed',
     ];
     expect([...EventTypes].sort()).toEqual([...expected].sort());

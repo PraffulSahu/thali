@@ -15,13 +15,28 @@ import type { Breakdown } from './schemas/order.js';
 import type { GeoJsonPoint } from './schemas/common.js';
 
 /** Pickup/drop snapshots carried on `order.accepted`. */
-export interface EventPickup {
+export interface EventPlace {
   name: string;
   address: string;
   location: GeoJsonPoint;
 }
-export interface EventDrop extends EventPickup {
+export interface EventPickup extends EventPlace {
+  /**
+   * Restaurant contact phone (E.164) for the assigned partner's "Call" (DLV-1). Optional: lets delivery
+   * skip a marketplace lookup; absent on events published before the redesign.
+   */
+  phone?: string;
+}
+export interface EventDrop extends EventPlace {
   phoneMasked: string;
+  /**
+   * Drop area shown on offers instead of the full address (DLV-2): address `locality` → else the
+   * service-area name → else the pincode. Orders always sets it; optional only for events published
+   * before the redesign (consumers fall back to the pincode parsed from `address`).
+   */
+  area?: string;
+  /** Saved-address label ("Home"/"Work"), null when none. Optional for pre-redesign events. */
+  label?: string | null;
 }
 
 export interface RefundEventPayload {
@@ -101,6 +116,10 @@ export interface EventPayloads {
     userId: string;
     restaurantId: string;
     prepMinutes: number;
+    /** Child order code, e.g. `TH-K7Z2MP4Q-1` (DLV-4). Orders always sets it; optional for pre-redesign events. */
+    childOrderCode?: string;
+    /** Checkout code, e.g. `TH-K7Z2MP4Q` (DLV-4). Orders always sets it; optional for pre-redesign events. */
+    checkoutCode?: string;
     pickup: EventPickup;
     drop: EventDrop;
     pickupCode: string;
@@ -177,6 +196,8 @@ export interface EventPayloads {
     vehicle: { type: VehicleType; registrationNumber: string };
   };
   'delivery.unassigned': { jobId: string; childOrderId: string; reason: string };
+  /** Partner reached the restaurant (job AT_PICKUP, DLV-6); orders mirrors it as `deliveryStatus='AT_PICKUP'` (ORD-5). */
+  'delivery.arrived': DeliveryAtPayload;
   'delivery.picked_up': DeliveryAtPayload;
   'delivery.started': DeliveryAtPayload;
   'delivery.delivered': DeliveryAtPayload & { distanceKm: number };
@@ -226,6 +247,7 @@ const eventTypeMap: Record<EventType, true> = {
   'delivery.job_created': true,
   'delivery.assigned': true,
   'delivery.unassigned': true,
+  'delivery.arrived': true,
   'delivery.picked_up': true,
   'delivery.started': true,
   'delivery.delivered': true,

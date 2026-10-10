@@ -13,12 +13,52 @@ import { deadLetterModel, outboxModel } from './events/models.js';
 const HOUR_MS = 3600_000;
 
 const providerErrorKey = (redis: Redis, service: string) => redisKey(redis, `provider_errors:${service}`);
+/** Hash `<prefix>provider_last_error:<service>`: field = provider, value = JSON `{message, at}` (at = epoch ms). */
+const providerLastErrorKey = (redis: Redis, service: string) => redisKey(redis, `provider_last_error:${service}`);
+
+/** Max stored length of a provider error message. */
+export const PROVIDER_MESSAGE_MAX = 300;
+
+/**
+ * Make a provider error message safe to show on the admin health page: removes e-mail addresses,
+ * phone numbers (10+ digits, optional +), bearer tokens and secret-looking query/header values
+ * (`key=`, `token=`, `secret=`, `password=`, `signature=`, `api_key=`, ...). Keeps infra detail
+ * such as hosts/IPs/ports. Caps the result at `PROVIDER_MESSAGE_MAX` chars.
+ */
+export function scrubProviderMessage(message: string): string {
+  return message
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[email]')
+    .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/g, '$1 [redacted]')
+    .replace(/\b((?:api[_-]?)?key|token|access_token|secret|password|passwd|pwd|signature|sig|auth)=([^&\s"']+)/gi, '$1=[redacted]')
+    .replace(/(?<![\w.:])\+?\d[\d -]{8,}\d(?![\w.:])/g, (m) => (m.replace(/\D/g, '').length >= 10 ? '[phone]' : m))
+    .slice(0, PROVIDER_MESSAGE_MAX);
+}
+
+// Keep the newest message per provider: an older `at` never replaces a newer one.
+const SET_LAST_ERROR_LUA = `
+local cur = redis.call('HGET', KEYS[1], ARGV[1])
+if cur then
+  local ok, obj = pcall(cjson.decode, cur)
+  if ok and type(obj) == 'table' and tonumber(obj.at) and tonumber(obj.at) > tonumber(ARGV[2]) then return 0 end
+end
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+redis.call('PEXPIRE', KEYS[1], ARGV[4])
+return 1
+`;
 
 /**
  * Record one provider failure (sorted set `<prefix>provider_errors:<service>`, score = time; entries
  * older than 1 h are trimmed on every write/read). `provider` e.g. `google-routes`, `twilio`, `razorpay`.
+ * The last message per provider (scrubbed, `null` when not given) is kept in
+ * `<prefix>provider_last_error:<service>` (1 h TTL) and surfaced as `healthDetails().lastProviderErrors` (GW-1).
  */
-export async function recordProviderError(redis: Redis, service: ServiceName | string, provider: string, at: number = Date.now()): Promise<void> {
+export async function recordProviderError(
+  redis: Redis,
+  service: ServiceName | string,
+  provider: string,
+  at: number = Date.now(),
+  message?: string | null,
+): Promise<void> {
   const key = providerErrorKey(redis, service);
   await redis
     .multi()
@@ -26,6 +66,34 @@ export async function recordProviderError(redis: Redis, service: ServiceName | s
     .zremrangebyscore(key, '-inf', `(${Date.now() - HOUR_MS}`)
     .pexpire(key, 2 * HOUR_MS)
     .exec();
+  if (at < Date.now() - HOUR_MS) return; // already outside the reporting window
+  const value = JSON.stringify({ message: message ? scrubProviderMessage(String(message)) : null, at });
+  await redis.eval(SET_LAST_ERROR_LUA, 1, providerLastErrorKey(redis, service), provider, String(at), value, String(HOUR_MS));
+}
+
+export interface ProviderLastError {
+  /** Scrubbed message, or null when the failure was recorded without one. */
+  message: string | null;
+  /** ISO time of the failure. */
+  at: string;
+}
+
+/** Last error per provider within the last hour (`{}` when none). */
+export async function providerLastErrors(redis: Redis, service: ServiceName | string): Promise<Record<string, ProviderLastError>> {
+  const raw = await redis.hgetall(providerLastErrorKey(redis, service));
+  const since = Date.now() - HOUR_MS;
+  const out: Record<string, ProviderLastError> = {};
+  for (const [provider, v] of Object.entries(raw)) {
+    try {
+      const o = JSON.parse(v) as { message?: unknown; at?: unknown };
+      const at = Number(o.at);
+      if (!Number.isFinite(at) || at < since) continue;
+      out[provider] = { message: typeof o.message === 'string' ? o.message : null, at: new Date(at).toISOString() };
+    } catch {
+      // ignore a corrupt entry
+    }
+  }
+  return out;
 }
 
 /** Provider errors in the last hour: total + per provider. */
@@ -72,6 +140,8 @@ export interface HealthDetails {
   deadLetters: number | null;
   providerErrorsLastHour: number | null;
   providerErrorsByProvider: Record<string, number> | null;
+  /** Last scrubbed error per provider in the last hour (GW-1); null if Redis is down. */
+  lastProviderErrors: Record<string, ProviderLastError> | null;
   checkedAt: string;
 }
 
@@ -112,7 +182,7 @@ export async function healthDetails(opts: HealthDetailsOptions): Promise<HealthD
   const group = consumerGroup(service);
   const Outbox = outboxModel(conn);
 
-  const [mongo, redisPing, pending, oldest, dead, providers, ...lags] = await Promise.all([
+  const [mongo, redisPing, pending, oldest, dead, providers, lastErrors, ...lags] = await Promise.all([
     probe(async () => {
       if (!conn.db) throw new Error('not connected');
       await conn.db.admin().ping();
@@ -122,6 +192,7 @@ export async function healthDetails(opts: HealthDetailsOptions): Promise<HealthD
     probe(() => Outbox.findOne({ publishedAt: null }).sort({ createdAt: 1 }).select({ createdAt: 1 }).maxTimeMS(timeoutMs).lean(), timeoutMs),
     probe(() => deadLetterModel(conn).countDocuments({ replayedAt: null }).maxTimeMS(timeoutMs), timeoutMs),
     probe(() => providerErrorStats(redis, service), timeoutMs),
+    probe(() => providerLastErrors(redis, service), timeoutMs),
     ...streams.map((s) => probe(() => groupLag(redis, streamKey(opts.streamPrefix, s), group), timeoutMs)),
   ]);
 
@@ -143,6 +214,7 @@ export async function healthDetails(opts: HealthDetailsOptions): Promise<HealthD
     deadLetters: dead.ok ? (dead.value as number) : null,
     providerErrorsLastHour: providers.ok ? (providers.value as { total: number }).total : null,
     providerErrorsByProvider: providers.ok ? (providers.value as { byProvider: Record<string, number> }).byProvider : null,
+    lastProviderErrors: lastErrors.ok ? (lastErrors.value as Record<string, ProviderLastError>) : null,
     checkedAt: new Date().toISOString(),
   };
 }

@@ -103,6 +103,8 @@ export const HealthDetailsSchema = z
     deadLetters: z.number().int().nullable(),
     providerErrorsLastHour: z.number().int().nullable(),
     providerErrorsByProvider: z.record(z.string(), z.number().int()).nullable(),
+    /** GW-1: last scrubbed error per provider in the last hour (optional for services on an older kit). */
+    lastProviderErrors: z.record(z.string(), z.object({ message: z.string().nullable(), at: z.string() })).nullable().optional(),
     checkedAt: z.string(),
   })
   .meta({ id: 'HealthDetails' });

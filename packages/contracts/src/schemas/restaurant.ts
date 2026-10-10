@@ -19,6 +19,8 @@ export const HoursSchema = z.array(HoursSlotSchema).max(21);
 export const RestaurantAddressSchema = z.object({
   line1: z.string().trim().min(1).max(200),
   line2: z.string().trim().max(200).optional(),
+  /** Neighbourhood, e.g. "Indiranagar" (MKT-5). */
+  locality: z.string().trim().max(60).optional(),
   city: z.string().trim().min(1).max(80),
   pincode: PincodeSchema,
 });

@@ -30,9 +30,25 @@ export interface RestaurantInput {
 
 export interface GroupDiscountInput {
   couponCode?: string;
-  /** Computed by marketplace; must be <= sum of all itemsSubtotal. */
+  /** Computed by marketplace; must be <= Σ itemsSubtotal of the eligible children (all children when unscoped). */
   couponDiscountPaise: number;
+  /**
+   * Restaurant scope of the coupon (MKT-8). Absent/empty = every restaurant. When set, the discount is
+   * allocated pro-rata only across children whose restaurantId is listed (others get 0); if no child is
+   * eligible `priceCheckout` throws `COUPON_INVALID { reason: 'NOT_APPLICABLE' }`.
+   */
+  couponRestaurantIds?: readonly string[];
 }
+
+/** Per-restaurant items subtotal, input to `couponScope`. */
+export interface CouponScopeGroup {
+  restaurantId: string;
+  itemsSubtotalPaise: number;
+}
+
+export type CouponScopeResult =
+  | { ok: true; eligibleRestaurantIds: string[]; eligibleSubtotalPaise: number }
+  | { ok: false; reason: 'NOT_APPLICABLE' };
 
 export interface MembershipBenefitInput {
   freeDeliveryRestaurantIds: string[];

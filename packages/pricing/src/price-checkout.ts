@@ -1,4 +1,5 @@
 import { allocateProRata, assertNonNegativeInt } from './allocate.js';
+import { couponNotApplicableError } from './coupon-scope.js';
 import type {
   Breakdown,
   GroupDiscountInput,
@@ -46,7 +47,9 @@ const ZERO: Breakdown = {
  * Pure, deterministic multi-restaurant pricing (LLD §6). Children are sorted by
  * restaurantId ascending; group totals are the component-wise sum of children.
  * Throws RangeError on non-integer/negative money, duplicate restaurant ids, or a coupon
- * exceeding the sum of items subtotals (marketplace caps it; pricing asserts).
+ * exceeding the eligible items subtotal (marketplace caps it; pricing asserts).
+ * Scoped coupon (`d.couponRestaurantIds` non-empty): allocated only across eligible children;
+ * no eligible child → DomainError `COUPON_INVALID { reason: 'NOT_APPLICABLE' }`.
  */
 export function priceCheckout(
   rs: RestaurantInput[],
@@ -79,16 +82,19 @@ export function priceCheckout(
     return { r, lines, subtotal };
   });
 
-  const grandSubtotal = priced.reduce((acc, p) => acc + p.subtotal, 0);
-  if (d.couponDiscountPaise > grandSubtotal) {
-    throw new RangeError(`couponDiscountPaise (${d.couponDiscountPaise}) exceeds items subtotal (${grandSubtotal})`);
+  // Step 2: coupon pro-rata by itemsSubtotal, across the eligible children only (MKT-8).
+  const scope = d.couponRestaurantIds && d.couponRestaurantIds.length > 0 ? new Set(d.couponRestaurantIds) : null;
+  const eligible = scope ? priced.filter((p) => scope.has(p.r.restaurantId)) : priced;
+  if (scope && eligible.length === 0) throw couponNotApplicableError();
+  const eligibleSubtotal = eligible.reduce((acc, p) => acc + p.subtotal, 0);
+  if (d.couponDiscountPaise > eligibleSubtotal) {
+    throw new RangeError(`couponDiscountPaise (${d.couponDiscountPaise}) exceeds ${scope ? 'eligible ' : ''}items subtotal (${eligibleSubtotal})`);
   }
 
-  // Step 2: coupon pro-rata by itemsSubtotal.
-  const couponAlloc =
-    priced.length === 0
-      ? {}
-      : allocateProRata(d.couponDiscountPaise, priced.map((p) => ({ key: p.r.restaurantId, weight: p.subtotal })));
+  const couponAlloc: Record<string, number> = Object.fromEntries(priced.map((p) => [p.r.restaurantId, 0]));
+  if (eligible.length > 0) {
+    Object.assign(couponAlloc, allocateProRata(d.couponDiscountPaise, eligible.map((p) => ({ key: p.r.restaurantId, weight: p.subtotal }))));
+  }
 
   // Step 3: membership extra discount, pro-rata by (subtotal - couponAlloc).
   const net = priced.map((p) => ({ key: p.r.restaurantId, weight: p.subtotal - couponAlloc[p.r.restaurantId]! }));

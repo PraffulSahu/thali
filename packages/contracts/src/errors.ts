@@ -56,6 +56,7 @@ export const ERROR_STATUS = {
   COUPON_INVALID: 422,
   COUPON_LIMIT_REACHED: 422,
   FILE_INVALID: 422,
+  PURE_VEG_VIOLATION: 422, // non-veg item/option in a pureVeg restaurant (details: { itemId?, optionId? } or offending ids)
 
   // --- payments ---
   PAYMENT_PROVIDER_UNAVAILABLE: 502,
