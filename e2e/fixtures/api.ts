@@ -22,6 +22,8 @@ export interface CallOpts {
   token?: string;
   guest?: string;
   body?: unknown;
+  /** Exact request bytes (sent as-is, e.g. signed webhooks); wins over `body`. */
+  rawBody?: string;
   idempotencyKey?: string;
   cookie?: string;
   headers?: Record<string, string>;
@@ -35,7 +37,8 @@ export async function call<T = Json>(method: string, path: string, o: CallOpts =
   if (o.idempotencyKey) headers['idempotency-key'] = o.idempotencyKey;
   if (o.cookie) headers.cookie = o.cookie;
   const url = path.startsWith('http') ? path : API_BASE + path;
-  const r = await fetch(url, { method, headers, body: o.body === undefined ? undefined : JSON.stringify(o.body), redirect: 'manual' });
+  const payload = o.rawBody ?? (o.body === undefined ? undefined : JSON.stringify(o.body));
+  const r = await fetch(url, { method, headers, body: payload, redirect: 'manual' });
   const text = await r.text();
   let body: Json = text;
   try {
@@ -116,7 +119,7 @@ function remember(phone: string, token: string): Session {
 
 /** Demo OTP request + verify (clears the auth rate-limit counters first; see resetAuthRateLimits). */
 export async function otpLogin(phone: string, guestCartToken?: string): Promise<Session & { guestCartMerged: boolean | null }> {
-  resetAuthRateLimits();
+  await resetAuthRateLimits();
   ok(await call('POST', '/auth/otp/request', { body: { phone } }), `OTP request ${phone}`);
   const v = await call('POST', '/auth/otp/verify', { body: { phone, code: DEMO_OTP, ...(guestCartToken ? { guestCartToken } : {}) } });
   const body = ok(v, `OTP verify ${phone}`);
@@ -216,6 +219,8 @@ export interface PlacedOrder {
   checkoutId: string;
   code: string;
   intentId: string;
+  /** `PaymentView` from POST /checkouts (intentId, providerOrderId, amountPaise, ...). */
+  payment: Json;
   totalPaise: number;
   checkout: Json;
   /** child order by restaurant id */
@@ -251,6 +256,7 @@ export async function placeOrder(token: string, lines: OrderLine[], opts: { addr
     checkoutId,
     code: created.checkout.code,
     intentId: created.payment.intentId,
+    payment: created.payment,
     totalPaise: created.checkout.pricing.totalPaise,
     checkout: o.checkout,
     address,
