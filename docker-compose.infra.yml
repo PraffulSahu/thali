@@ -8,6 +8,10 @@ name: thali-infra
 services:
   mongo:
     restart: unless-stopped
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
     image: mongo:8.0
     command: ["--replSet", "rs0", "--bind_ip_all"]
     ports:
