@@ -58,3 +58,11 @@ export async function createRating(ctx: AppContext, input: RatingInput) {
     throw e;
   }
 }
+
+/** MKT-14: which of these child orders has this customer already rated? (unique `childOrderId` index) */
+export async function myRatings(ctx: AppContext, userId: string, childOrderIds: string[]) {
+  if (!childOrderIds.length) return [];
+  const rows = await ctx.models.Rating.find({ childOrderId: { $in: childOrderIds }, userId }, { childOrderId: 1, restaurantId: 1, stars: 1, createdAt: 1 })
+    .lean<{ childOrderId: string; restaurantId: unknown; stars: number; createdAt?: Date }[]>();
+  return rows.map((r) => ({ childOrderId: r.childOrderId, restaurantId: String(r.restaurantId), stars: r.stars, createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null }));
+}

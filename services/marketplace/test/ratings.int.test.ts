@@ -107,3 +107,29 @@ describe('POST /restaurants/:id/ratings', () => {
     expect(row.rating).toEqual({ average: 4.4, count: 5 });
   });
 });
+
+describe('GET /restaurants/ratings/mine (MKT-14)', () => {
+  it('returns only my ratings for the asked child orders; unrated ids are absent', async () => {
+    const me = oid();
+    const someone = oid();
+    const rated = child(me);
+    const unrated = child(me);
+    const theirs = child(someone);
+    expect((await rate(me, { childOrderId: rated, stars: 4 })).status).toBe(201);
+    expect((await rate(someone, { childOrderId: theirs, stars: 2 })).status).toBe(201);
+    const res = await request(h.app)
+      .get('/api/v1/restaurants/ratings/mine')
+      .query({ childOrderIds: `${rated},${unrated},${theirs}` })
+      .set(bearer(await h.consumerToken(me)));
+    expect(res.status).toBe(200);
+    expect(res.body.items).toEqual([{ childOrderId: rated, restaurantId: rid, stars: 4, createdAt: expect.any(String) }]);
+  });
+
+  it('auth required; 1–50 ids', async () => {
+    expect((await request(h.app).get('/api/v1/restaurants/ratings/mine').query({ childOrderIds: 'a' })).status).toBe(401);
+    const tok = await h.consumerToken(oid());
+    expect((await request(h.app).get('/api/v1/restaurants/ratings/mine').set(bearer(tok))).status).toBe(400);
+    const many = Array.from({ length: 51 }, () => oid()).join(',');
+    expect((await request(h.app).get('/api/v1/restaurants/ratings/mine').query({ childOrderIds: many }).set(bearer(tok))).status).toBe(400);
+  });
+});
