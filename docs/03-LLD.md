@@ -68,6 +68,7 @@ Error codes are exported from `@thali/contracts` as `ErrorCode` const object.
 ### 1.3 Pagination
 Cursor-based: `?limit=20&cursor=<opaque>` → `{ items: [...], nextCursor: string|null }`.
 Cursor = base64url of `{ createdAt, _id }` (sort `createdAt desc, _id desc`).
+Exception: discovery listings sort by per-request computed values (distance, fee, ETA), so they use an opaque offset cursor (pages may shift between requests; acceptable for pilot).
 Admin search endpoints may also accept filters as query params documented per route.
 
 ### 1.4 Idempotency
