@@ -2,7 +2,8 @@ import '../setup';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import OrderInvestigation from '../../src/features/admin/OrderInvestigation';
+import OrderInvestigation, { remainingRefundPaise } from '../../src/features/admin/OrderInvestigation';
+import { normalizeChild } from '../../src/features/admin/api';
 import { makeAuth, renderWithProviders } from '../utils';
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -29,7 +30,7 @@ const detail = {
 
 afterEach(() => vi.unstubAllGlobals());
 
-function setup() {
+function setup(body: unknown = detail) {
   const calls: { url: string; init?: RequestInit }[] = [];
   vi.stubGlobal(
     'fetch',
@@ -37,7 +38,7 @@ function setup() {
       const url = String(input);
       calls.push({ url, init });
       if (url.includes('/cancel')) return Promise.resolve(json({ ok: true }));
-      return Promise.resolve(json(detail));
+      return Promise.resolve(json(body));
     }),
   );
   renderWithProviders(<OrderInvestigation />, { route: '/admin/orders/chk1', path: '/admin/orders/:checkoutId', auth: makeAuth({ roles: ['ADMIN'], adminRoles: ['SUPPORT'] }) });
@@ -81,5 +82,46 @@ describe('OrderInvestigation', () => {
     const post = calls.find((c) => c.url.includes('/cancel'))!;
     expect(post.init?.method).toBe('POST');
     expect(JSON.parse(String(post.init?.body))).toEqual({ reason: 'Kitchen flooded', refundPaise: 40000 });
+  });
+
+  it('remaining refundable mirrors the server: total − max(refundRequestedPaise, non-FAILED refunds)', () => {
+    const base = { id: 'c', restaurantName: 'R', status: 'ACCEPTED', breakdown: { totalPaise: 50000 }, refundStatus: 'PROCESSING' };
+    // In-flight refund (PROCESSING) is committed even though nothing has succeeded yet.
+    expect(remainingRefundPaise(normalizeChild({ ...base, refundedPaise: 10000, refundRequestedPaise: 10000, refunds: [
+      { refundId: 'r1', amountPaise: 10000, status: 'SUCCEEDED' },
+      { refundId: 'r2', amountPaise: 15000, status: 'PROCESSING' },
+      { refundId: 'r3', amountPaise: 5000, status: 'FAILED' },
+    ] }))).toBe(25000);
+    // A request payments has not reported yet still counts.
+    expect(remainingRefundPaise(normalizeChild({ ...base, refundedPaise: 0, refundRequestedPaise: 30000, refunds: [] }))).toBe(20000);
+    // Never negative; legacy rows without the new fields fall back to refundedPaise.
+    expect(remainingRefundPaise(normalizeChild({ ...base, refundedPaise: 0, refundRequestedPaise: 60000 }))).toBe(0);
+    expect(remainingRefundPaise(normalizeChild({ ...base, refundedPaise: 10000 }))).toBe(40000);
+  });
+
+  it('caps the cancel dialog at the server remaining when a refund is still in progress', async () => {
+    const user = userEvent.setup();
+    const inFlight = {
+      ...detail,
+      children: [
+        { ...detail.children[0], refundedPaise: 10000, refundRequestedPaise: 30000, refundStatus: 'PROCESSING', refunds: [
+          { refundId: 'r1', amountPaise: 10000, status: 'SUCCEEDED' },
+          { refundId: 'r2', amountPaise: 20000, status: 'PROCESSING' },
+        ] },
+        detail.children[1],
+      ],
+    };
+    setup(inFlight);
+    await screen.findByText('TH-1001');
+    await user.click(screen.getByRole('button', { name: /cancel and refund/i }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/remaining.*₹200\.00/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/in progress ₹200\.00/i)).toBeInTheDocument();
+    await user.type(within(dialog).getByLabelText(/describe the reason|reason/i), 'Kitchen flooded');
+    const amount = within(dialog).getByLabelText(/refund amount/i);
+    await user.clear(amount);
+    await user.type(amount, '250');
+    expect(within(dialog).getByText(/cannot exceed ₹200\.00/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: /cancel order/i })).toBeDisabled();
   });
 });

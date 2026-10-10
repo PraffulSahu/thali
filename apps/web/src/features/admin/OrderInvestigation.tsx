@@ -35,7 +35,17 @@ const canCancel = (status: string) => canTransition(childOrderTransitions, statu
 const adminMoves = (status: string) =>
   CHILD_STATUSES.filter((to) => to !== 'CANCELLED' && canTransition(childOrderTransitions, status as ChildStatus, to, 'ADMIN'));
 
-export const remainingRefundPaise = (c: Pick<AdminChildOrder, 'totalPaise' | 'refundedPaise'>) => Math.max(0, c.totalPaise - c.refundedPaise);
+/**
+ * Mirrors orders `committedRefundPaise`: what is already promised back for this child — the larger of what orders
+ * requested and the non-FAILED refunds payments reported (in-flight refunds count, not only succeeded ones).
+ */
+export const committedRefundPaise = (c: Pick<AdminChildOrder, 'refundedPaise' | 'refundRequestedPaise' | 'refunds'>) => {
+  const seen = (c.refunds ?? []).filter((r) => r.status !== 'FAILED').reduce((s, r) => s + r.amountPaise, 0);
+  return Math.max(c.refundRequestedPaise ?? 0, seen, c.refundedPaise);
+};
+/** Mirrors orders `remainingRefundable`: total − committed refunds (never negative). */
+export const remainingRefundPaise = (c: Pick<AdminChildOrder, 'totalPaise' | 'refundedPaise' | 'refundRequestedPaise' | 'refunds'>) =>
+  Math.max(0, c.totalPaise - committedRefundPaise(c));
 
 /** Validates the refund input against what is still refundable. Returns the paise amount or an error. */
 export function checkRefundInput(input: string, remaining: number): { paise: number; error: null } | { paise: null; error: string } {
@@ -102,7 +112,10 @@ function CancelDialog({ child, open, onClose, onSubmit }: { child: AdminChildOrd
       <form className="flex flex-col gap-4" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
         <div className="rounded-control bg-surface-muted p-3 text-sm">
           <p className="font-semibold text-slate-900">{`Remaining to refund: ${formatPaise(remaining)}`}</p>
-          <p className="text-slate-600">{`Order total ${formatPaise(child.totalPaise)}, already refunded ${formatPaise(child.refundedPaise)}`}</p>
+          <p className="text-slate-600">
+            {`Order total ${formatPaise(child.totalPaise)}, already refunded ${formatPaise(child.refundedPaise)}`}
+            {committedRefundPaise(child) > child.refundedPaise ? `, in progress ${formatPaise(committedRefundPaise(child) - child.refundedPaise)}` : ''}
+          </p>
         </div>
         {child.refundStatus === 'REQUESTED' || child.refundStatus === 'PROCESSING' ? (
           <p role="status" className="rounded-control bg-warn-50 px-3 py-2 text-sm text-warn-800">

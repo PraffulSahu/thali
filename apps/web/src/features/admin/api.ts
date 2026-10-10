@@ -327,6 +327,10 @@ export interface AdminChildOrder {
   status: string;
   totalPaise: number;
   refundedPaise: number;
+  /** Paise orders has asked payments to refund for this child (server `refundRequestedPaise`). */
+  refundRequestedPaise: number;
+  /** Refunds seen from payments; non-FAILED ones count as committed (server `committedRefundPaise`). */
+  refunds: { refundId: string; amountPaise: number; status: string }[];
   refundStatus: string;
   deliveryStatus: string | null;
   lines: { name: string; quantity: number; lineTotalPaise?: number }[];
@@ -379,6 +383,13 @@ export function normalizeChild(raw: unknown): AdminChildOrder {
     status: str(c.status) ?? 'UNKNOWN',
     totalPaise: numOr(c.totalPaise, numOr(breakdown.totalPaise, 0)),
     refundedPaise: numOr(c.refundedPaise, 0),
+    refundRequestedPaise: numOr(c.refundRequestedPaise, 0),
+    refunds: Array.isArray(c.refunds)
+      ? c.refunds.map((r) => {
+          const o = rec(r);
+          return { refundId: String(o.refundId ?? ''), amountPaise: numOr(o.amountPaise, 0), status: str(o.status) ?? 'REQUESTED' };
+        })
+      : [],
     refundStatus: str(c.refundStatus) ?? 'NONE',
     deliveryStatus: str(c.deliveryStatus),
     lines: Array.isArray(c.lines)
