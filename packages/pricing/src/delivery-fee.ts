@@ -16,6 +16,8 @@ export function computeDeliveryFee(distanceKm: number, rule: DeliveryFeeRule): n
     if (!Number.isSafeInteger(v) || v < 0) throw new RangeError(`${k} must be a non-negative integer`);
   }
   if (!Number.isFinite(rule.baseKm) || rule.baseKm < 0) throw new RangeError('baseKm must be a finite non-negative number');
-  const extraKm = Math.max(0, Math.ceil(distanceKm - rule.baseKm));
+  // Round the float difference to whole metres before ceil-ing so IEEE-754 noise
+  // (2.2 - 1.2 = 1.0000000000000002) never bills an extra started km.
+  const extraKm = Math.max(0, Math.ceil(Math.round((distanceKm - rule.baseKm) * 1000) / 1000));
   return Math.min(rule.maxPaise, rule.basePaise + extraKm * rule.perKmPaise);
 }
