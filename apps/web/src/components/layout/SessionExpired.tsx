@@ -3,7 +3,7 @@
  * reports that a signed-in session could not be refreshed (lib/api `onSessionExpired`). "Sign in again"
  * goes to the area's sign-in page with `next` = the current route, so the user returns where they were.
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 import { onSessionExpired } from '../../lib/api';
 import { Button } from '../ui/Button';
@@ -18,6 +18,7 @@ export function SessionExpiredDialog() {
   const [open, setOpen] = useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+  const signInRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => onSessionExpired(() => setOpen(true)), []);
 
@@ -40,12 +41,15 @@ export function SessionExpiredDialog() {
       description="For your security you were signed out. Sign in again to pick up where you left off."
       size="sm"
       role="alertdialog"
+      initialFocusRef={signInRef}
       footer={
         <FormActions>
           <Button variant="secondary" onClick={() => setOpen(false)}>
             Not now
           </Button>
-          <Button onClick={signIn}>Sign in again</Button>
+          <Button ref={signInRef} onClick={signIn}>
+            Sign in again
+          </Button>
         </FormActions>
       }
     />

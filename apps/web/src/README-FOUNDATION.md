@@ -108,7 +108,7 @@ setErrors(fieldErrors(e));           // { phone: 'Invalid phone', 'address.pinco
 - `ApiError { code, status, message, details, requestId, retryAfterSec }`. `status` 0 with `code: 'NETWORK_ERROR'` means offline or connection lost. A non-JSON 502/503 becomes `UPSTREAM_UNAVAILABLE`, and 504 becomes `UPSTREAM_TIMEOUT`.
 - `errorMessage(e)`: user-facing copy. Friendly text for network, 5xx and auth/OTP codes; otherwise the server's specific 4xx message.
 - `fieldErrors(e)`: from `VALIDATION_FAILED` `details.issues[{path,message}]`, with the `body.`/`query.`/`params.` prefix stripped. Use `validationIssues(e)` for the raw list.
-- `otpErrorInfo(e)`: `{ retryAfterSec?, attemptsRemaining? }`. Tolerates naming variants in `details` and the `Retry-After` header.
+- `otpErrorInfo(e)`: `{ retryAfterSec?, needsNewCode }`. Cooldown from `Retry-After` or `details.retryAfterSec`; `needsNewCode` is true for OTP_EXPIRED and OTP_ATTEMPTS_EXCEEDED. The server does not report attempts remaining, so show a generic "Incorrect code" for OTP_INVALID.
 - Predicates: `isApiError`, `isUnauthenticated` (401), `isForbidden` (403), `isNotFound`, `isNetworkError`, `isRetryable`.
 - Show `requestId` in error UIs. `<ErrorState>` does this for you ("Reference: ...").
 
@@ -126,7 +126,7 @@ Roles, adminRoles and amr come from the access token claims (`roles`, `adm`, `am
 
 | Method | Calls | Notes |
 |---|---|---|
-| `requestOtp(phone)` | `POST /auth/otp/request` | returns `{ resendAfterSec (default 30), expiresInSec?, demo, raw }`; errors carry cooldown (`otpErrorInfo`) |
+| `requestOtp(phone)` | `POST /auth/otp/request` | returns `{ resendAfterSec (default 30), expiresInSec?, demo, raw }`; errors carry the cooldown (`otpErrorInfo`) |
 | `signInWithOtp(phone, code, guestCartToken?)` | `POST /auth/otp/verify` | guest token defaults to the stored one; merges the guest cart (falls back to `POST /cart/merge` if the server reports `guestCartMerged: false`), clears it, invalidates all queries |
 | `adminLogin(email, password)` | `POST /auth/admin/login` | resolves to `{kind:'mfaRequired', mfaToken}` or `{kind:'mfaSetupRequired', user}` (a password-only token is stored so the setup calls work) or `{kind:'signedIn', user}` |
 | `adminVerifyMfa(mfaToken, code)` | `POST /auth/admin/mfa` | full admin session (`amr` includes `mfa`) |
@@ -137,7 +137,7 @@ Roles, adminRoles and amr come from the access token claims (`roles`, `adm`, `am
 
 Tolerance (LLD §5.3 is loose about shapes): user objects are read from `res.user`, or `GET /me` (`{...}` or `{user:{...}}`); ids from `id | _id | userId | sub`. Tokens must be in `accessToken`.
 
-Ready-made UI: `components/auth/OtpSignInForm` (`<OtpSignInForm onSuccess={...} heading?>`): phone (normalized with `tryNormalizePhone`, region IN), resend countdown, attempts left, demo hint. The consumer `LoginDialog` should wrap it in a `<Dialog>`. The admin login is yours to build with `adminLogin` / `adminVerifyMfa` / `adminSetupMfa` / `adminEnableMfa`.
+Ready-made UI: `components/auth/OtpSignInForm` (`<OtpSignInForm onSuccess={...} heading?>`): phone (normalized with `tryNormalizePhone`, region IN), resend countdown, generic "Incorrect code", Resend enabled on expired/too-many-attempts, demo hint. The consumer `LoginDialog` should wrap it in a `<Dialog>`. The admin login is yours to build with `adminLogin` / `adminVerifyMfa` / `adminSetupMfa` / `adminEnableMfa`.
 
 ## 5. Guest cart
 

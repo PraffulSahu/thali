@@ -161,9 +161,10 @@ describe('AuthProvider', () => {
 });
 
 describe('otpErrorInfo', () => {
-  it('reads cooldown and remaining attempts from the error', () => {
-    const e = new ApiError({ code: 'OTP_INVALID', status: 400, message: 'wrong', details: { attemptsRemaining: 2 } });
-    expect(otpErrorInfo(e)).toMatchObject({ attemptsRemaining: 2 });
+  it('reads the cooldown and flags codes that need replacing', () => {
+    expect(otpErrorInfo(new ApiError({ code: 'OTP_INVALID', status: 400, message: 'wrong' }))).toEqual({ needsNewCode: false });
+    expect(otpErrorInfo(new ApiError({ code: 'OTP_ATTEMPTS_EXCEEDED', status: 429, message: 'x' }))).toMatchObject({ needsNewCode: true });
+    expect(otpErrorInfo(new ApiError({ code: 'OTP_EXPIRED', status: 400, message: 'x' }))).toMatchObject({ needsNewCode: true });
     const r = new ApiError({ code: 'RATE_LIMITED', status: 429, message: 'wait', details: { retryAfterSec: 12 }, retryAfterSec: 12 });
     expect(otpErrorInfo(r)).toMatchObject({ retryAfterSec: 12 });
   });

@@ -79,6 +79,56 @@ describe('Dialog', () => {
   });
 });
 
+describe('Dialog when focus leaves the overlay', () => {
+  it('still traps Tab and closes on Escape after focus drops to <body>', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(<DialogHarness onClose={onClose} />);
+    await user.click(screen.getByRole('button', { name: 'Open' }));
+    const dialog = screen.getByRole('dialog', { name: 'Edit item' });
+
+    act(() => (document.activeElement as HTMLElement).blur());
+    expect(document.activeElement).toBe(document.body);
+    await user.tab();
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+
+    act(() => (document.activeElement as HTMLElement).blur());
+    await user.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('pulls programmatic focus elsewhere back into the dialog', async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <button>Outside</button>
+        <DialogHarness />
+      </>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Open' }));
+    const dialog = screen.getByRole('dialog', { name: 'Edit item' });
+    act(() => screen.getByRole('button', { name: 'Outside', hidden: true }).focus());
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+  });
+
+  it('refocuses a non-dismissible dialog on backdrop click instead of closing', async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    render(
+      <Dialog open onClose={onClose} title="Saving" dismissible={false}>
+        <p>Please wait</p>
+      </Dialog>,
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Saving' });
+    const backdrop = dialog.previousElementSibling as HTMLElement;
+    await user.click(backdrop);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    await user.keyboard('{Escape}');
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
 describe('Field', () => {
   it('associates the label, hint and error with the control', () => {
     render(
@@ -119,8 +169,14 @@ describe('Toast', () => {
         <ToastButton />
       </ToastProvider>,
     );
+    // The polite live region exists before any toast is shown (so the insertion is announced).
+    const region = document.querySelector('[aria-live="polite"]');
+    expect(region).toBeInTheDocument();
+    expect(region).toBeEmptyDOMElement();
     await user.click(screen.getByRole('button', { name: 'Notify' }));
-    expect(screen.getByRole('status')).toHaveTextContent('Order accepted');
+    const toast = screen.getByRole('status');
+    expect(toast).toHaveTextContent('Order accepted');
+    expect(region).toContainElement(toast);
   });
 });
 

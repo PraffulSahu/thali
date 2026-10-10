@@ -5,7 +5,7 @@
  *
  * - Normalizes the phone like the server (`tryNormalizePhone`, default region IN) before sending.
  * - Shows the server cooldown (`resendAfterSec`, `Retry-After` on 429) as a resend countdown.
- * - Shows attempts remaining / expiry / lockout from the error code + details.
+ * - Wrong code: generic "Incorrect code"; expired / too many attempts: asks for a new code and enables Resend.
  * - In demo mode tells the user the fixed code (only when the server says `demoOtp`).
  * - Guest cart merge happens inside `signInWithOtp` (AuthProvider).
  */
@@ -13,7 +13,7 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { tryNormalizePhone } from '@thali/contracts';
 import { useCountdown } from '../ui/Countdown';
 import { useAuth, type AuthUser } from '../../lib/auth';
-import { errorMessage, fieldErrors, isApiError, otpErrorInfo } from '../../lib/errors';
+import { errorMessage, fieldErrors, otpErrorInfo } from '../../lib/errors';
 import { formatDuration, formatPhone } from '../../lib/format';
 import { Button } from '../ui/Button';
 import { Field } from '../ui/Field';
@@ -94,13 +94,9 @@ export function OtpSignInForm({ onSuccess, heading }: OtpSignInFormProps) {
       onSuccess?.(user);
     } catch (e) {
       const info = otpErrorInfo(e);
-      const code = isApiError(e) ? e.code : '';
-      let msg = errorMessage(e);
-      if (code === 'OTP_INVALID' && info.attemptsRemaining !== undefined) {
-        msg = info.attemptsRemaining > 0
-          ? `That code isn't right. ${info.attemptsRemaining} ${info.attemptsRemaining === 1 ? 'attempt' : 'attempts'} left.`
-          : 'That code isn’t right and no attempts are left. Request a new code.';
-      }
+      // Expired / too many attempts: this code is dead, so offer "Resend code" right away.
+      if (info.needsNewCode) setResendAt(null);
+      const msg = errorMessage(e);
       setCodeError(msg);
       setCode('');
       codeRef.current?.focus();

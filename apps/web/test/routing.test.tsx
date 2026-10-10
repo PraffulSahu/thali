@@ -31,11 +31,18 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')));
 });
 
+// These assert only foundation behaviour (shell + guards). Area content is owned by the area tasks and changes.
+const guardHeadings = /sign in to continue|verify to continue|you don.t have access|no restaurant on this account|not a delivery partner/i;
+async function expectAreaShell(logoName: RegExp) {
+  expect(await screen.findByRole('link', { name: logoName })).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'Skip to main content' })).toBeInTheDocument();
+}
+
 describe('route tree', () => {
   it('consumer area is public', async () => {
     renderApp('/', makeAuth());
-    expect(await screen.findByRole('heading', { level: 1, name: 'Order food' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Skip to main content' })).toBeInTheDocument();
+    await expectAreaShell(/^Thali, home$/);
+    expect(screen.queryByRole('heading', { name: guardHeadings })).not.toBeInTheDocument();
   });
 
   it('restaurant area asks guests to sign in and keeps the route', async () => {
@@ -50,36 +57,56 @@ describe('route tree', () => {
     expect(screen.getByRole('link', { name: 'Register your restaurant' })).toHaveAttribute('href', '/restaurant/onboarding');
   });
 
-  it('restaurant onboarding only needs a session', async () => {
+  it('restaurant onboarding only needs a session (no role guard)', async () => {
     renderApp('/restaurant/onboarding', makeAuth({ roles: ['CONSUMER'] }));
-    expect(await screen.findByRole('heading', { name: /couldn.t find that page/i })).toBeInTheDocument(); // placeholder has no onboarding page yet
+    await expectAreaShell(/Thali for Restaurants, home/);
+    expect(screen.queryByRole('heading', { name: guardHeadings })).not.toBeInTheDocument();
   });
 
-  it('admin area requires ADMIN with MFA and points to /admin/login', async () => {
+  it('restaurant onboarding still needs sign-in', async () => {
+    renderApp('/restaurant/onboarding', makeAuth());
+    expect(await screen.findByRole('heading', { name: /sign in to continue/i })).toBeInTheDocument();
+  });
+
+  it('partner area: forbidden for consumers, open for partners, onboarding needs only a session', async () => {
+    renderApp('/partner', makeAuth({ roles: ['CONSUMER'] }));
+    expect(await screen.findByRole('heading', { name: /not a delivery partner yet/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Become a delivery partner' })).toHaveAttribute('href', '/partner/onboarding');
+  });
+
+  it('partner area renders for partners', async () => {
+    renderApp('/partner', makeAuth({ roles: ['CONSUMER', 'DELIVERY_PARTNER'] }));
+    await expectAreaShell(/Thali Partner, home/);
+    expect(screen.queryByRole('heading', { name: guardHeadings })).not.toBeInTheDocument();
+  });
+
+  it('admin area: consumers are forbidden', async () => {
     renderApp('/admin', makeAuth({ roles: ['CONSUMER'] }));
     expect(await screen.findByRole('heading', { name: /you don.t have access/i })).toBeInTheDocument();
   });
 
-  it('admin with MFA sees the admin area and its navigation', async () => {
-    renderApp('/admin', makeAuth({ roles: ['CONSUMER', 'ADMIN'], hasMfa: true, amr: ['pwd', 'mfa'] }));
-    expect(await screen.findByRole('heading', { level: 1, name: 'Admin overview' })).toBeInTheDocument();
-    expect(screen.getAllByRole('navigation', { name: 'Admin' }).length).toBeGreaterThan(0);
+  it('admin area: ADMIN without MFA is sent to verify at /admin/login', async () => {
+    renderApp('/admin', makeAuth({ roles: ['CONSUMER', 'ADMIN'], hasMfa: false }));
+    expect(await screen.findByRole('heading', { name: /verify to continue/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /verify/i })).toHaveAttribute('href', '/admin/login?next=%2Fadmin');
   });
 
-  it('partner area shows partner home for partners', async () => {
-    renderApp('/partner', makeAuth({ roles: ['CONSUMER', 'DELIVERY_PARTNER'] }));
-    expect(await screen.findByRole('heading', { level: 1, name: 'Partner home' })).toBeInTheDocument();
+  it('admin area: ADMIN with MFA passes the guard', async () => {
+    renderApp('/admin', makeAuth({ roles: ['CONSUMER', 'ADMIN'], hasMfa: true, amr: ['pwd', 'mfa'] }));
+    await expectAreaShell(/Thali Admin, home/);
+    expect(screen.queryByRole('heading', { name: guardHeadings })).not.toBeInTheDocument();
+  });
+
+  it('/admin/login is public', async () => {
+    renderApp('/admin/login', makeAuth());
+    await expectAreaShell(/Thali Admin, home/);
+    expect(screen.queryByRole('heading', { name: guardHeadings })).not.toBeInTheDocument();
   });
 
   it('/signin renders the OTP form', async () => {
     renderApp('/signin?next=%2Forders', makeAuth());
     expect(await screen.findByRole('heading', { name: 'Sign in to Thali' })).toBeInTheDocument();
     expect(screen.getByLabelText(/mobile number/i)).toBeInTheDocument();
-  });
-
-  it('unknown consumer paths render not found', async () => {
-    renderApp('/no/such/page', makeAuth());
-    expect(await screen.findByRole('heading', { name: /couldn.t find that page/i })).toBeInTheDocument();
   });
 });
 
@@ -123,17 +150,29 @@ describe('OtpSignInForm', () => {
     expect(screen.getByLabelText(/mobile number/i)).toHaveAccessibleDescription(/valid 10-digit mobile number/i);
   });
 
-  it('shows attempts remaining on a wrong code', async () => {
+  it('shows a generic "Incorrect code" on a wrong code', async () => {
     const user = userEvent.setup();
     const requestOtp = vi.fn().mockResolvedValue({ resendAfterSec: 30, demo: false, raw: {} });
-    const signInWithOtp = vi
-      .fn()
-      .mockRejectedValue(new ApiError({ code: 'OTP_INVALID', status: 400, message: 'Invalid code', details: { attemptsRemaining: 3 } }));
+    const signInWithOtp = vi.fn().mockRejectedValue(new ApiError({ code: 'OTP_INVALID', status: 400, message: 'Invalid code' }));
     renderWithProviders(<OtpSignInForm />, { auth: makeAuth({ requestOtp, signInWithOtp }) });
     await user.type(screen.getByLabelText(/mobile number/i), '9876543210');
     await user.click(screen.getByRole('button', { name: 'Send code' }));
     await user.type(await screen.findByLabelText(/6-digit code/i), '000000');
-    expect(await screen.findByText(/3 attempts left/i)).toBeInTheDocument();
+    expect(await screen.findByText(/incorrect code/i)).toBeInTheDocument();
+    expect(screen.getByText(/resend code in/i)).toBeInTheDocument(); // cooldown still applies
+  });
+
+  it('asks for a new code and enables Resend after too many attempts', async () => {
+    const user = userEvent.setup();
+    const requestOtp = vi.fn().mockResolvedValue({ resendAfterSec: 30, demo: false, raw: {} });
+    const signInWithOtp = vi.fn().mockRejectedValue(new ApiError({ code: 'OTP_ATTEMPTS_EXCEEDED', status: 429, message: 'Too many attempts' }));
+    renderWithProviders(<OtpSignInForm />, { auth: makeAuth({ requestOtp, signInWithOtp }) });
+    await user.type(screen.getByLabelText(/mobile number/i), '9876543210');
+    await user.click(screen.getByRole('button', { name: 'Send code' }));
+    await user.type(await screen.findByLabelText(/6-digit code/i), '111111');
+    expect(await screen.findByText(/too many incorrect attempts\. request a new code/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Resend code' }));
+    expect(requestOtp).toHaveBeenCalledTimes(2);
   });
 
   it('shows the cooldown when OTP requests are rate limited', async () => {

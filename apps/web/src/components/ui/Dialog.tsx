@@ -12,7 +12,7 @@
  * `dismissible={false}` blocks Escape/overlay close (e.g. while a request is in flight).
  * <Sheet> (same file) is a side/bottom drawer with identical semantics.
  */
-import { useEffect, useId, useRef, type ReactNode, type RefObject, type KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../lib/cn';
 import { IconButton } from './Button';
@@ -47,18 +47,26 @@ interface ModalBaseProps {
   children: ReactNode;
 }
 
+/** Open modals, innermost last: only the top one handles keys and focus. */
+const modalStack: symbol[] = [];
+
 function ModalBase({
   open, onClose, labelledBy, describedBy, ariaLabel, initialFocusRef, dismissible = true, role = 'dialog',
   overlayClassName, panelClassName, children,
 }: ModalBaseProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const onCloseRef = useRef(onClose);
+  const dismissibleRef = useRef(dismissible);
   useEffect(() => {
     onCloseRef.current = onClose;
+    dismissibleRef.current = dismissible;
   });
 
   useEffect(() => {
     if (!open) return;
+    const id = Symbol('modal');
+    modalStack.push(id);
+    const isTop = () => modalStack[modalStack.length - 1] === id;
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const unlock = lockScroll();
     const panel = panelRef.current;
@@ -70,7 +78,51 @@ function ModalBase({
         panel;
       target.focus();
     }
+
+    // Document-level so Escape and the Tab trap keep working even if focus has left the overlay
+    // (e.g. a click on the backdrop, a toast, or programmatic focus elsewhere).
+    const onKeyDown = (e: KeyboardEvent) => {
+      const p = panelRef.current;
+      if (!isTop() || !p) return;
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (dismissibleRef.current) onCloseRef.current();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const items = focusables(p);
+      const active = document.activeElement;
+      if (items.length === 0) {
+        e.preventDefault();
+        p.focus();
+        return;
+      }
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const outside = !p.contains(active);
+      if (e.shiftKey && (outside || active === first || active === p)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (outside || active === last)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    // Focus that escapes the top modal is pulled back to the panel.
+    const onFocusIn = (e: FocusEvent) => {
+      const p = panelRef.current;
+      if (!isTop() || !p || p.contains(e.target as Node)) return;
+      p.focus();
+    };
+    document.addEventListener('keydown', onKeyDown, true);
+    document.addEventListener('focusin', onFocusIn);
+
     return () => {
+      document.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('focusin', onFocusIn);
+      const i = modalStack.lastIndexOf(id);
+      if (i !== -1) modalStack.splice(i, 1);
       unlock();
       if (previouslyFocused && previouslyFocused.isConnected) previouslyFocused.focus();
     };
@@ -79,37 +131,12 @@ function ModalBase({
 
   if (!open || typeof document === 'undefined') return null;
 
-  const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (e.key === 'Escape') {
-      e.stopPropagation();
-      if (dismissible) onCloseRef.current();
-      return;
-    }
-    if (e.key !== 'Tab' || !panelRef.current) return;
-    const items = focusables(panelRef.current);
-    if (items.length === 0) {
-      e.preventDefault();
-      panelRef.current.focus();
-      return;
-    }
-    const first = items[0]!;
-    const last = items[items.length - 1]!;
-    const active = document.activeElement;
-    if (e.shiftKey && (active === first || active === panelRef.current || !panelRef.current.contains(active))) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && (active === last || !panelRef.current.contains(active))) {
-      e.preventDefault();
-      first.focus();
-    }
-  };
-
   return createPortal(
-    <div className={cn('fixed inset-0 z-50 flex', overlayClassName)} onKeyDown={onKeyDown}>
+    <div className={cn('fixed inset-0 z-50 flex', overlayClassName)}>
       <div
         aria-hidden="true"
         className="absolute inset-0 animate-fade-in bg-slate-950/45"
-        onClick={() => dismissible && onCloseRef.current()}
+        onClick={() => (dismissibleRef.current ? onCloseRef.current() : panelRef.current?.focus())}
       />
       <div
         ref={panelRef}

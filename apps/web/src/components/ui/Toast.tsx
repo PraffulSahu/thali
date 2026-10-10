@@ -6,7 +6,8 @@
  *   toast({ title: 'Taken by another partner', description: 'The offer was accepted by someone else.', tone: 'warn' });
  *   toast({ title: "Couldn't save", description: errorMessage(err), tone: 'danger' });
  *
- * Each toast is a role="status" live region (danger toasts use role="alert"). Auto-dismiss after 5 s
+ * Announced through persistent live regions (polite; danger toasts assertive); each non-danger toast is also
+ * role="status". Auto-dismiss after 5 s
  * (danger 8 s, `duration: Infinity` to persist); hovering or focusing pauses the timer.
  * Use toasts for confirmations of things the user just did; persistent problems belong inline.
  */
@@ -58,13 +59,19 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       {typeof document !== 'undefined'
         ? createPortal(
-            <div
-              aria-label="Notifications"
-              className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-2 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:items-end"
-            >
-              {items.map((t) => (
-                <ToastView key={t.id} item={t} onDismiss={() => dismiss(t.id)} />
-              ))}
+            // Live regions must exist BEFORE content is inserted or screen readers may miss it, so both are
+            // always rendered (empty when there are no toasts). Danger toasts go to the assertive region.
+            <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex flex-col items-center gap-2 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:items-end">
+              <div aria-live="assertive" aria-relevant="additions text" className="flex w-full flex-col items-center gap-2 sm:items-end">
+                {items.filter((t) => t.tone === 'danger').map((t) => (
+                  <ToastView key={t.id} item={t} onDismiss={() => dismiss(t.id)} />
+                ))}
+              </div>
+              <div aria-live="polite" aria-relevant="additions text" className="flex w-full flex-col items-center gap-2 sm:items-end">
+                {items.filter((t) => t.tone !== 'danger').map((t) => (
+                  <ToastView key={t.id} item={t} onDismiss={() => dismiss(t.id)} />
+                ))}
+              </div>
             </div>,
             document.body,
           )
@@ -101,7 +108,9 @@ function ToastView({ item, onDismiss }: { item: ToastItem; onDismiss: () => void
   const s = toneStyle[tone];
   return (
     <div
-      role={tone === 'danger' ? 'alert' : 'status'}
+      // role="status" marks each toast semantically; announcement comes from the persistent live region above.
+      // Danger toasts carry no role: the assertive region announces them (role="alert" would double-announce).
+      role={tone === 'danger' ? undefined : 'status'}
       onMouseEnter={() => setPaused(true)}
       onMouseLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)}

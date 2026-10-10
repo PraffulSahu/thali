@@ -107,6 +107,59 @@ describe('api()', () => {
     off();
   });
 
+  it.each([
+    ['401 SESSION_REUSE_DETECTED', () => json(401, { error: { code: 'SESSION_REUSE_DETECTED', message: 'reuse', requestId: 'r2' } })],
+    ['403 ACCOUNT_BLOCKED', () => json(403, { error: { code: 'ACCOUNT_BLOCKED', message: 'blocked', requestId: 'r2' } })],
+  ])('refresh rejected with %s ends the session', async (_label, refreshResponse) => {
+    setAccessToken('old');
+    const expired = vi.fn();
+    const off = onSessionExpired(expired);
+    fetchMock
+      .mockResolvedValueOnce(json(401, { error: { code: 'UNAUTHENTICATED', message: 'expired', requestId: 'r1' } }))
+      .mockResolvedValueOnce(refreshResponse());
+    const err = (await api('/orders').catch((e: unknown) => e)) as ApiError;
+    expect(err.status).toBe(401);
+    expect(expired).toHaveBeenCalledTimes(1);
+    expect(getAccessToken()).toBeNull();
+    off();
+  });
+
+  it.each([
+    ['network error', () => Promise.reject(new TypeError('Failed to fetch')), 'NETWORK_ERROR', 0],
+    ['503', () => Promise.resolve(json(503, { error: { code: 'SERVICE_UNAVAILABLE', message: 'down', requestId: 'r2' } })), 'SERVICE_UNAVAILABLE', 503],
+    ['502 html', () => Promise.resolve(new Response('bad gateway', { status: 502, headers: { 'content-type': 'text/html' } })), 'UPSTREAM_UNAVAILABLE', 502],
+    ['504', () => Promise.resolve(json(504, { error: { code: 'UPSTREAM_TIMEOUT', message: 'slow', requestId: 'r2' } })), 'UPSTREAM_TIMEOUT', 504],
+    ['429', () => Promise.resolve(json(429, { error: { code: 'RATE_LIMITED', message: 'slow down', requestId: 'r2' } }, { 'Retry-After': '5' })), 'RATE_LIMITED', 429],
+  ])('transient refresh failure (%s) keeps the session and throws a retryable error', async (_label, refreshResponse, code, status) => {
+    setAccessToken('old');
+    const expired = vi.fn();
+    const off = onSessionExpired(expired);
+    fetchMock
+      .mockResolvedValueOnce(json(401, { error: { code: 'UNAUTHENTICATED', message: 'expired', requestId: 'r1' } }))
+      .mockImplementationOnce(refreshResponse);
+    const err = (await api('/orders').catch((e: unknown) => e)) as ApiError;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err.code).toBe(code);
+    expect(err.status).toBe(status);
+    expect(expired).not.toHaveBeenCalled();
+    expect(getAccessToken()).toBe('old');
+    off();
+  });
+
+  it('403 CSRF_CHECK_FAILED from refresh keeps the session (original 401 rethrown, no expiry event)', async () => {
+    setAccessToken('old');
+    const expired = vi.fn();
+    const off = onSessionExpired(expired);
+    fetchMock
+      .mockResolvedValueOnce(json(401, { error: { code: 'UNAUTHENTICATED', message: 'expired', requestId: 'r1' } }))
+      .mockResolvedValueOnce(json(403, { error: { code: 'CSRF_CHECK_FAILED', message: 'csrf', requestId: 'r2' } }));
+    const err = (await api('/orders').catch((e: unknown) => e)) as ApiError;
+    expect(err.code).toBe('UNAUTHENTICATED');
+    expect(expired).not.toHaveBeenCalled();
+    expect(getAccessToken()).toBe('old');
+    off();
+  });
+
   it('does not emit session-expired for anonymous 401s (no session to expire)', async () => {
     const expired = vi.fn();
     const off = onSessionExpired(expired);

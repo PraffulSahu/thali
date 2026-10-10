@@ -8,13 +8,14 @@
  * - Parses the LLD §1.2 error envelope into `ApiError { code, status, message, details, requestId, retryAfterSec }`.
  * - Access token lives in memory only (`setAccessToken`); never in storage.
  * - On 401 it performs ONE `POST /auth/refresh` (cookie, `credentials: 'include'`, `X-Requested-With: thali-web`),
- *   shared by all concurrent callers, then retries the request once with the new token. If the refresh fails and
- *   there was a session, the token is cleared and `onSessionExpired` listeners fire (the UI shows
- *   "Session expired — sign in again" and preserves the route).
+ *   shared by all concurrent callers, then retries the request once with the new token. If the refresh is
+ *   rejected with 401 (or 403 ACCOUNT_BLOCKED) and there was a session, the token is cleared and
+ *   `onSessionExpired` listeners fire (the UI shows "Session expired — sign in again" and preserves the route).
+ *   Transient refresh failures (offline, 5xx, 429) keep the token and throw that retryable error instead.
  * - `X-Requested-With: thali-web` is sent on every request (CSRF header required by the cookie endpoints).
  */
 import type { Paginated } from '@thali/contracts';
-import { ApiError, isApiError } from './errors';
+import { ApiError, isApiError, isRetryable } from './errors';
 import { ensureGuestCartToken, getGuestCartToken, GUEST_CART_HEADER } from './guest';
 
 export type { Paginated };
@@ -240,6 +241,15 @@ export function refreshSession(): Promise<AuthTokenResponse> {
 }
 
 const NO_REFRESH_CODES = new Set(['INVALID_CREDENTIALS']);
+
+/**
+ * Whether a failed `POST /auth/refresh` means the session is really over: any 401 from refresh
+ * (UNAUTHENTICATED, SESSION_REVOKED, SESSION_REUSE_DETECTED, ...) or 403 ACCOUNT_BLOCKED.
+ * Network errors, 5xx, 429 and other 403s (CSRF_CHECK_FAILED) do NOT end the session.
+ */
+export function refreshEndsSession(e: unknown): boolean {
+  return isApiError(e) && (e.status === 401 || (e.status === 403 && e.code === 'ACCOUNT_BLOCKED'));
+}
 const isAuthPath = (path: string) => /^(\/api\/v1)?\/?auth\//.test(path);
 
 /** Typed request to the API. See module docs. Throws `ApiError` (or `AbortError` when aborted). */
@@ -260,12 +270,19 @@ export async function api<T = unknown>(path: string, opts: ApiOptions = {}): Pro
     let refreshed: AuthTokenResponse;
     try {
       refreshed = await refreshSession();
-    } catch {
-      if (tokenAtStart && accessToken !== null) {
-        setAccessToken(null);
-        emitSessionExpired();
+    } catch (refreshErr) {
+      if (refreshEndsSession(refreshErr)) {
+        if (tokenAtStart && accessToken !== null) {
+          setAccessToken(null);
+          emitSessionExpired();
+        }
+        throw err;
       }
-      throw err;
+      // Transient refresh failure (offline, 5xx, 429): the session may still be fine. Keep the token and
+      // surface the retryable refresh error so the UI offers "Try again" rather than "sign in again".
+      // Anything else (e.g. 403 CSRF_CHECK_FAILED, a 200 without a token) also keeps the token and
+      // rethrows the original 401.
+      throw isRetryable(refreshErr) ? refreshErr : err;
     }
     return send<T>(path, opts, refreshed.accessToken);
   }

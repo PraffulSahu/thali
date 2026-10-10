@@ -31,6 +31,7 @@ RUN npm run build -w @thali/web && rm -f apps/web/dist/assets/*.map
 # ---- runtime: static files + reverse proxy ----
 FROM nginx:1.28.0-alpine AS runtime
 COPY infra/nginx/web.conf /etc/nginx/conf.d/default.conf
+COPY infra/nginx/security-headers.conf /etc/nginx/snippets/thali-security-headers.conf
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 EXPOSE 80
 HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \

@@ -86,9 +86,9 @@ const FRIENDLY: Record<string, string> = {
   MFA_REQUIRED: 'Two-factor verification is required for this action.',
   ACCOUNT_BLOCKED: 'This account has been blocked. Contact support for help.',
   ACCOUNT_LOCKED: 'Too many failed attempts. The account is locked for a few minutes.',
-  OTP_INVALID: "That code isn't right. Check the SMS and try again.",
+  OTP_INVALID: 'Incorrect code. Check the SMS and try again.',
   OTP_EXPIRED: 'That code has expired. Request a new one.',
-  OTP_ATTEMPTS_EXCEEDED: 'Too many wrong codes. Request a new code.',
+  OTP_ATTEMPTS_EXCEEDED: 'Too many incorrect attempts. Request a new code.',
   OTP_DELIVERY_FAILED: "We couldn't send the SMS right now. Please try again shortly.",
   INVALID_CREDENTIALS: 'Email or password is incorrect.',
   IDEMPOTENCY_IN_PROGRESS: 'Your previous attempt is still being processed. Please wait.',
@@ -147,27 +147,23 @@ export function fieldErrors(e: unknown): Record<string, string> {
 export interface OtpErrorInfo {
   /** Seconds until another OTP may be requested (cooldown / rate limit). */
   retryAfterSec?: number;
-  /** Verify attempts left for the current code, when the server reports it. */
-  attemptsRemaining?: number;
+  /** The current code can no longer be used (expired or too many attempts): ask for a new one. */
+  needsNewCode: boolean;
 }
 
 /**
- * Extract cooldown and remaining attempts from an OTP request/verify error. Tolerant of naming:
- * `retryAfterSec` / `retryAfter` / `cooldownSec` and `attemptsRemaining` / `remainingAttempts` /
- * `attemptsLeft` in `details`, plus the `Retry-After` header.
+ * OTP request/verify error details. Cooldown comes from the `Retry-After` header or
+ * `details.retryAfterSec` (also accepts `retryAfter` / `cooldownSec`). The server does not report
+ * attempts remaining, so the UI shows a generic "Incorrect code" and relies on OTP_ATTEMPTS_EXCEEDED.
  */
 export function otpErrorInfo(e: unknown): OtpErrorInfo {
-  if (!isApiError(e)) return {};
+  if (!isApiError(e)) return { needsNewCode: false };
   const d = (e.details ?? {}) as Record<string, unknown>;
-  const num = (...vals: unknown[]) => {
-    for (const v of vals) if (typeof v === 'number' && Number.isFinite(v)) return v;
-    return undefined;
+  const retry = [e.retryAfterSec, d.retryAfterSec, d.retryAfter, d.cooldownSec].find(
+    (v): v is number => typeof v === 'number' && Number.isFinite(v),
+  );
+  return {
+    ...(retry !== undefined ? { retryAfterSec: Math.max(0, Math.ceil(retry)) } : {}),
+    needsNewCode: e.code === 'OTP_ATTEMPTS_EXCEEDED' || e.code === 'OTP_EXPIRED',
   };
-  const info: OtpErrorInfo = {};
-  const retry = num(e.retryAfterSec, d.retryAfterSec, d.retryAfter, d.cooldownSec);
-  if (retry !== undefined) info.retryAfterSec = Math.max(0, Math.ceil(retry));
-  const remaining = num(d.attemptsRemaining, d.remainingAttempts, d.attemptsLeft);
-  if (remaining !== undefined) info.attemptsRemaining = Math.max(0, remaining);
-  if (e.code === 'OTP_ATTEMPTS_EXCEEDED') info.attemptsRemaining = 0;
-  return info;
 }
