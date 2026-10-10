@@ -1,26 +1,31 @@
 /**
- * Mounts a lazily-loaded role area: AppShell (with the area's nav) + the area guard + an error boundary +
- * the area's own `routes` (rendered with useRoutes, paths RELATIVE to the area root).
+ * Role-area layout routes. Each area is a pathless layout route in the single data router
+ * (src/routes.tsx); its `routes` are patched in as real CHILD routes the first time the user navigates
+ * into the area (`patchRoutesOnNavigation`), so everything the data router supports works inside areas:
+ * route `lazy`, `errorElement` / `ErrorBoundary`, loaders, `handle`, nested layouts with <Outlet/>.
  *
  * Area module contract (features/<area>/routes.tsx):
- *   export const routes: RouteObject[];          // required; index route = area home, add a '*' NotFound
+ *   export const routes: RouteObject[];          // required; paths RELATIVE to the area root, index = area home,
+ *                                                // keep a '*' NotFound
  *   export const nav?: NavItem[];                // shell navigation (absolute `to` paths)
  *   export const HeaderActions?: ComponentType;  // extra header controls (consumer: location + cart)
  *   export const wide?: boolean;                 // full-bleed main column
  *
+ * <AreaLayout> = AppShell (area nav) + path-based guard + Suspense (for React.lazy pages) + <Outlet/>.
  * Guards (by path):
  *   consumer   no area guard: guests browse; wrap private pages in <RequireAuth>
  *   restaurant RESTAURANT_OWNER, except /restaurant/onboarding* which only needs sign-in
  *   partner    DELIVERY_PARTNER, except /partner/onboarding* which only needs sign-in
  *   admin      ADMIN + MFA (amr has 'mfa'), except /admin/login* which is public
  */
-import type { ComponentType, ReactNode } from 'react';
-import { useLocation, useRoutes, type RouteObject } from 'react-router';
+import { Suspense, type ComponentType, type ReactNode } from 'react';
+import { isRouteErrorResponse, Outlet, useLocation, useRouteError, type RouteObject } from 'react-router';
 import { useAuth } from '../../lib/auth';
 import { AppShell, type AreaKey } from './AppShell';
-import { AreaErrorBoundary } from './ErrorBoundary';
+import { CrashView, NotFoundPage } from './ErrorBoundary';
 import { RequireAuth, RequireRole } from './RequireRole';
 import type { NavItem } from './RoleNav';
+import { Spinner } from '../ui/Spinner';
 
 export interface AreaModule {
   routes: RouteObject[];
@@ -28,6 +33,21 @@ export interface AreaModule {
   HeaderActions?: ComponentType;
   wide?: boolean;
 }
+
+/* ------------------------------------------------------------------ area module registry */
+
+const loadedModules = new Map<AreaKey, AreaModule>();
+
+/** Remember a loaded area module so its layout can read nav / HeaderActions / wide synchronously. */
+export function registerAreaModule(area: AreaKey, module: AreaModule): void {
+  loadedModules.set(area, module);
+}
+
+export function getAreaModule(area: AreaKey): AreaModule | undefined {
+  return loadedModules.get(area);
+}
+
+/* ------------------------------------------------------------------ guards */
 
 export const AREA_PUBLIC_PREFIX: Partial<Record<AreaKey, string>> = {
   restaurant: '/restaurant/onboarding',
@@ -99,14 +119,48 @@ function useNavVisible(area: AreaKey): boolean {
   }
 }
 
-export function RoleArea({ area, module }: { area: AreaKey; module: AreaModule }) {
-  const element = useRoutes(module.routes);
+/* ------------------------------------------------------------------ layout + error routes */
+
+/** Shown while a React.lazy page inside an area suspends (route `lazy` keeps the previous page instead). */
+export function PageLoading() {
+  return (
+    <div role="status" className="flex items-center justify-center gap-3 py-24 text-slate-600">
+      <Spinner label={null} size={22} />
+      <span>Loading…</span>
+    </div>
+  );
+}
+
+function AreaChrome({ area, children }: { area: AreaKey; children: ReactNode }) {
+  const module = getAreaModule(area);
   const showNav = useNavVisible(area);
   return (
-    <AppShell variant={area} nav={module.nav} HeaderActions={module.HeaderActions} showNav={showNav} wide={module.wide}>
-      <AreaGuard area={area}>
-        <AreaErrorBoundary home={area === 'consumer' ? '/' : `/${area}`}>{element}</AreaErrorBoundary>
-      </AreaGuard>
+    <AppShell variant={area} nav={module?.nav} HeaderActions={module?.HeaderActions} showNav={showNav} wide={module?.wide}>
+      {children}
     </AppShell>
+  );
+}
+
+/** Layout route element for an area: shell + guard + Suspense + child routes. */
+export function AreaLayout({ area }: { area: AreaKey }) {
+  return (
+    <AreaChrome area={area}>
+      <AreaGuard area={area}>
+        <Suspense fallback={<PageLoading />}>
+          <Outlet />
+        </Suspense>
+      </AreaGuard>
+    </AreaChrome>
+  );
+}
+
+/** Area `ErrorBoundary`: errors thrown by area pages/loaders render inside the area shell. */
+export function AreaRouteError({ area }: { area: AreaKey }) {
+  const error = useRouteError();
+  const home = area === 'consumer' ? '/' : `/${area}`;
+  return (
+    <AreaChrome area={area}>
+      {isRouteErrorResponse(error) && error.status === 404 ? <NotFoundPage home={home} /> : <CrashView error={error} home={home} />}
+    </AreaChrome>
   );
 }

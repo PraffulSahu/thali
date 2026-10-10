@@ -3,14 +3,13 @@
  */
 import { QueryClientProvider } from '@tanstack/react-query';
 import { useState } from 'react';
-import { createBrowserRouter } from 'react-router';
 import { RouterProvider } from 'react-router/dom';
 import { ToastProvider } from './components/ui/Toast';
 import { AuthProvider } from './lib/auth';
 import { createQueryClient } from './lib/query';
-import { appRoutes } from './routes';
+import { createAppRouter } from './routes';
 
-const router = createBrowserRouter(appRoutes);
+const router = createAppRouter();
 
 export function App() {
   const [queryClient] = useState(createQueryClient);

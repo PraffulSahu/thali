@@ -1,6 +1,6 @@
 /**
  * Router root: global, router-aware singletons (session-expired dialog, scroll restoration, focus on
- * navigation). Area chrome lives in AppShell (rendered by RoleArea).
+ * navigation). Area chrome lives in AppShell (rendered by AreaLayout in RoleArea.tsx).
  */
 import { useEffect, useRef } from 'react';
 import { Outlet, ScrollRestoration, useLocation } from 'react-router';

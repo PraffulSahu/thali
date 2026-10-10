@@ -1,5 +1,5 @@
 /**
- * Page chrome for each role area. RoleArea renders it automatically around every area route, so feature
+ * Page chrome for each role area. AreaLayout (RoleArea.tsx) renders it around every area route, so feature
  * pages only render their content (start with <PageHeader>).
  *
  * consumer   : sticky top bar (logo, area HeaderActions such as location/cart, inline nav on desktop,

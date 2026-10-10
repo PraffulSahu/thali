@@ -43,8 +43,8 @@ import type { RouteObject } from 'react-router';
 import type { NavItem } from '../../components/layout/RoleNav';
 import { NotFoundPage } from '../../components/layout/ErrorBoundary';
 
-// Paths are RELATIVE to the area root. Index = area home. Keep a '*' NotFound last.
-// Lazy-load each page so the area chunk stays small:
+// Paths are RELATIVE to the area root. Index = area home. Keep a '*' NotFound.
+// Lazy-load each page so the area chunk stays small (route `lazy` or React.lazy both work):
 export const routes: RouteObject[] = [
   { index: true, lazy: () => import('./DashboardPage').then((m) => ({ Component: m.default })) },
   { path: 'orders', lazy: () => import('./OrdersBoard').then((m) => ({ Component: m.default })) },
@@ -62,7 +62,13 @@ export const HeaderActions = CartButton;   // optional: extra header controls (c
 export const wide = false;                 // optional: full-bleed main column (maps, boards)
 ```
 
-How it works: `routes.tsx` at the app root lazy-loads your module and renders `<RoleArea>`, which is `AppShell` + area guard + error boundary + `useRoutes(routes)`. Area routes are descendant routes, so **don't use loaders/actions or `errorElement`**; fetch with TanStack Query. Render errors are caught by the area error boundary. Use relative or absolute links (`<Link to="orders">` or `<Link to="/restaurant/orders">`).
+How it works: there is ONE data router (`createAppRouter()` in `src/routes.tsx`). Each area is a pathless layout route (`AreaLayout` = `AppShell` + area guard + `<Suspense>` + `<Outlet/>`). The first time the user navigates into an area, its module is imported and its `routes` are patched in as real child routes (`patchRoutesOnNavigation`), so area modules stay code-split. Non-consumer areas are mounted under their base path (`/restaurant`, `/partner`, `/admin`); consumer routes sit at the root. Because area routes are genuine data-router children, everything works inside them:
+- **route-object `lazy`** (recommended for pages; the previous page stays visible while the chunk loads),
+- **React.lazy elements** (an area-level `<Suspense>` fallback is provided; you may add your own),
+- nested layout routes with `<Outlet/>`, `errorElement` / `ErrorBoundary`, `handle`, and loaders/actions (prefer TanStack Query for data).
+Errors that escape your routes render `AreaRouteError` inside the area shell. Use relative or absolute links (`<Link to="orders">` or `<Link to="/restaurant/orders">`).
+
+In tests, mount the real tree with `const cfg = createAppRouterConfig(); createMemoryRouter(cfg.routes, { initialEntries: [path], patchRoutesOnNavigation: cfg.patchRoutesOnNavigation })` (see `test/routing.areas.test.tsx`).
 
 Reserved shared paths:
 - `/signin?next=...`: shared phone-OTP sign-in page (consumers, owners, partners). Guards and the session-expired dialog send users here.
@@ -248,7 +254,7 @@ Props: `center`, `zoom` (14), `markers [{id, position:{lat,lng}, kind: restauran
 ## 11. Layout and guards
 
 - `RequireAuth` / `RequireRole` (`components/layout/RequireRole`): `role` (one or an array, any-of), `signInPath`, `requireMfa`, `forbiddenAction={{label,to}}`, `forbiddenTitle`, `forbiddenMessage`, `signInMessage`. States: "Checking your session..." while loading, then the sign-in prompt (route preserved), then Forbidden. Area guards are already applied (§1); use these for page-level needs (e.g. consumer `/orders`).
-- `AppShell` variants, `RoleNav`, `NavCount` (badge bubble for `NavItem.Badge`), `ModeBanner` (DEMO/SANDBOX from `/meta`, hidden in production), `SessionExpiredDialog`, `NotFoundPage`, `AreaErrorBoundary` are mounted for you.
+- `AppShell` variants, `RoleNav`, `NavCount` (badge bubble for `NavItem.Badge`), `ModeBanner` (DEMO/SANDBOX from `/meta`, hidden in production), `SessionExpiredDialog`, `NotFoundPage`, and the area error view (`AreaRouteError`) are mounted for you. `PageLoading` is the default Suspense fallback; `CrashView` and `AreaErrorBoundary` are available for custom error UIs.
 - Focus moves to `<main id="main">` on navigation; a skip link exists. Don't add another `<main>`.
 
 ## 12. Design tokens

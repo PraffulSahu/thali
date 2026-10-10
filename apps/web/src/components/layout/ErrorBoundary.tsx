@@ -1,7 +1,8 @@
 /**
  * Render-error safety nets.
- *  - <AreaErrorBoundary> wraps each role area's routes (descendant routes don't get router errorElements);
- *    it resets when the path changes.
+ *  - <AreaErrorBoundary>: a plain React error boundary that resets when the path changes (for widgets
+ *    outside the router's error handling; area routes already get <AreaRouteError> from RoleArea).
+ *  - <CrashView>: the shared "Something went wrong / new version available" view.
  *  - <RouteErrorPage> is the router `errorElement` (e.g. a lazy chunk failed to load after a deploy).
  *  - <NotFoundPage> for `*` routes inside areas.
  */
@@ -16,7 +17,7 @@ function isChunkError(e: unknown): boolean {
   return /dynamically imported module|Importing a module script failed|Failed to fetch dynamically|error loading dynamically/i.test(msg);
 }
 
-function CrashView({ error, home = '/' }: { error: unknown; home?: string }) {
+export function CrashView({ error, home = '/' }: { error: unknown; home?: string }) {
   const chunk = isChunkError(error);
   return (
     <div role="alert" className="flex flex-col items-center gap-3 px-6 py-20 text-center">
