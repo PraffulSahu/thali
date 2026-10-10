@@ -51,6 +51,10 @@ describe('DLV-2 offer privacy', () => {
     expect(offers.body.items).toHaveLength(1);
     const offer = offers.body.items[0];
     expect(offer.job.drop).toEqual({ area: 'HAL 2nd Stage', distanceFromPickupKm: Math.round(job.distanceKm * 10) / 10 });
+    // no metre-precise pickup→drop distance or fractional minutes anywhere on the offer
+    expect(offer.job.distanceKm).toBe(Math.round(job.distanceKm * 10) / 10);
+    expect(Number.isInteger(offer.job.estimatedMinutes)).toBe(true);
+    expect(JSON.stringify(offer)).not.toContain(String(job.distanceKm).slice(0, 6));
     expect(offer.job.pickup.name).toBe('Meghana Foods');
 
     for (const leak of [JSON.stringify(offer), JSON.stringify(msgs[0])]) {
@@ -85,6 +89,33 @@ describe('DLV-2 offer privacy', () => {
     expect(picked.status).toBe(200);
     expect(picked.body.drop).toMatchObject({ address: LINE, location: DROP, label: 'Home', area: 'HAL 2nd Stage', addressRevealed: true });
     expect(picked.body.navigation.dropUrl).toContain(`${DROP.lat},${DROP.lng}`);
+    const started = await request(h.app).post(`/api/v1/deliveries/${job.id}/start`).set(bearer(token));
+    expect(started.body.drop).toMatchObject({ address: LINE, addressRevealed: true });
+
+    // ruling: once finished, the job (deliver response + history) is back to area + label only
+    const delivered = await request(h.app).post(`/api/v1/deliveries/${job.id}/deliver`).set(bearer(token)).send({ code: '5678' });
+    expect(delivered.status).toBe(200);
+    expect(delivered.body.drop).toMatchObject({ area: 'HAL 2nd Stage', label: 'Home', address: null, location: null, addressRevealed: false });
+    expect(delivered.body.navigation.dropUrl).toBeNull();
+    const history = await request(h.app).get('/api/v1/deliveries/history').set(bearer(token));
+    const row = history.body.items.find((j: { id: string }) => j.id === job.id);
+    expect(row.drop).toMatchObject({ area: 'HAL 2nd Stage', label: 'Home', address: null, location: null, addressRevealed: false });
+    expect(row.navigation.dropUrl).toBeNull();
+    expect(JSON.stringify(history.body)).not.toContain('12th Main');
+  });
+
+  it('a job that failed after pickup also hides the address in history', async () => {
+    const { job, token } = await offered();
+    await runDispatchTick(h.ctx);
+    const offerId = (await h.ctx.models.Offer.findOne({ jobId: job._id }))!.id;
+    await request(h.app).post(`/api/v1/deliveries/offers/${offerId}/accept`).set(bearer(token)).expect(200);
+    await request(h.app).post(`/api/v1/deliveries/${job.id}/arrived`).set(bearer(token)).expect(200);
+    await request(h.app).post(`/api/v1/deliveries/${job.id}/pickup`).set(bearer(token)).send({ code: '1234' }).expect(200);
+    const failed = await request(h.app).post(`/api/v1/deliveries/${job.id}/fail`).set(bearer(token)).send({ reason: 'Customer not reachable' });
+    expect(failed.status).toBe(200);
+    expect(failed.body.drop).toMatchObject({ address: null, location: null, addressRevealed: false });
+    const history = await request(h.app).get('/api/v1/deliveries/history').set(bearer(token));
+    expect(JSON.stringify(history.body)).not.toContain('12th Main');
   });
 
   it('admin job view keeps the full drop plus area + label', async () => {

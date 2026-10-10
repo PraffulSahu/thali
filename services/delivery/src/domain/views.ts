@@ -51,12 +51,14 @@ type DropLike = { address: string; area?: string | null; label?: string | null }
 export const dropArea = (d: DropLike): string | null => d.area?.trim() || areaFromAddress(d.address);
 
 /**
- * DLV-2: the full drop address (and exact coordinates) reach the assigned partner only once the food
- * is picked up; before that the partner sees area + label (design: "Full address after pickup").
+ * DLV-2: the full drop address, exact coordinates and map link reach the assigned partner only while
+ * the food is on its way (PICKED_UP / OUT_FOR_DELIVERY; design: "Full address after pickup"). Before
+ * pickup and once the job is finished (DELIVERED / FAILED / CANCELLED, e.g. history) the partner sees
+ * area + label only (controller ruling: no retention of customer addresses in partner history).
  */
-const REVEALED_STATUSES = new Set(['PICKED_UP', 'OUT_FOR_DELIVERY', 'DELIVERED']);
-export function dropRevealed(j: Pick<JobLean, 'status' | 'pickedUpAt'>): boolean {
-  return REVEALED_STATUSES.has(j.status) || !!j.pickedUpAt;
+const REVEALED_STATUSES = new Set(['PICKED_UP', 'OUT_FOR_DELIVERY']);
+export function dropRevealed(j: Pick<JobLean, 'status'>): boolean {
+  return REVEALED_STATUSES.has(j.status);
 }
 
 const round1 = (km: number) => Math.round(km * 10) / 10;
@@ -152,8 +154,9 @@ export function offerView(o: OfferLean, j: JobLean | undefined) {
           childOrderId: j.childOrderId,
           pickup: place(j.pickup),
           drop: { area: dropArea(j.drop), distanceFromPickupKm: round1(j.distanceKm) },
-          distanceKm: j.distanceKm,
-          estimatedMinutes: j.estimatedMinutes,
+          // coarse on purpose: a metre-precise pickup→drop distance would undo the area-only privacy
+          distanceKm: round1(j.distanceKm),
+          estimatedMinutes: Math.ceil(j.estimatedMinutes),
           estimateSource: j.estimateSource,
           readyEta: iso(j.readyEta),
         }
