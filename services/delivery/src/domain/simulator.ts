@@ -6,6 +6,7 @@
  */
 import type { DeliveryContext } from '../context.js';
 import { ACTIVE_JOB_STATUSES, type JobLean } from '../models/delivery-job.js';
+import { remainingEta } from './eta.js';
 import { lerp, toLatLng, toPoint } from './geo.js';
 import { publishLocation } from './tracking.js';
 
@@ -22,7 +23,7 @@ export function createSimulator(ctx: DeliveryContext): Simulator {
   const running = new Map<string, { timer: NodeJS.Timeout; inFlight: Promise<void> }>();
 
   async function step(job: JobLean, i: number): Promise<boolean> {
-    const fresh = await ctx.models.Job.findById(job._id, { status: 1 }).lean();
+    const fresh = await ctx.models.Job.findById(job._id).lean<JobLean>();
     if (!fresh || !(ACTIVE_JOB_STATUSES as readonly string[]).includes(fresh.status)) return false;
     const pos = lerp(toLatLng(job.pickup.location), toLatLng(job.drop.location), i / SIMULATION_STEPS);
     const at = ctx.now();
@@ -32,7 +33,8 @@ export function createSimulator(ctx: DeliveryContext): Simulator {
       { $set: { lastLocation: point, lastLocationAt: at, locationSimulated: true } },
     );
     await ctx.models.LocationPing.create({ partnerId: job.partnerId ?? null, jobId: job._id, location: point, accuracyM: null, simulated: true, at });
-    await publishLocation(ctx, job.customerUserId, { childOrderId: job.childOrderId, lat: pos.lat, lng: pos.lng, at: at.toISOString(), simulated: true });
+    const eta = await remainingEta(ctx, fresh, { location: pos });
+    await publishLocation(ctx, job.customerUserId, { childOrderId: job.childOrderId, lat: pos.lat, lng: pos.lng, at: at.toISOString(), simulated: true, remainingMinutes: eta?.minutes ?? null });
     return true;
   }
 

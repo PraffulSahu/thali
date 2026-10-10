@@ -1,14 +1,16 @@
 /**
  * Live location (context §5 "location tracking", LLD 11). Pings are ephemeral: they update the
  * partner + the partner's active jobs, store a TTL'd `location_pings` row and publish
- * `delivery.location {childOrderId, lat, lng, at, simulated}` to `user:<customerUserId>` — never a
- * stream event. A partner can only move jobs assigned to them.
+ * `delivery.location {childOrderId, lat, lng, at, simulated, remainingMinutes}` to `user:<customerUserId>` —
+ * never a stream event. A partner can only move jobs assigned to them. `remainingMinutes` (DLV-3) is the
+ * cached live ETA (null when it cannot be estimated).
  */
 import { DomainError } from '@thali/contracts';
 import { publishRealtime, realtimeChannel } from '@thali/service-kit';
 import type { DeliveryContext } from '../context.js';
 import { ACTIVE_JOB_STATUSES, type JobLean } from '../models/delivery-job.js';
 import type { PartnerLean } from '../models/partner.js';
+import { remainingEta, type RemainingEta } from './eta.js';
 import { toLatLng, toPoint, type LatLng } from './geo.js';
 import { requirePartner } from './onboarding.js';
 
@@ -31,7 +33,7 @@ export async function recordPing(ctx: DeliveryContext, userId: string, input: Pi
   const point = toPoint(input);
 
   await ctx.models.Partner.updateOne({ _id: partner._id }, { $set: { lastLocation: point, lastLocationAt: at } });
-  const jobs = await ctx.models.Job.find(filter, { _id: 1, childOrderId: 1, customerUserId: 1 }).lean<Pick<JobLean, '_id' | 'childOrderId' | 'customerUserId'>[]>();
+  const jobs = await ctx.models.Job.find(filter).lean<JobLean[]>();
   if (jobs.length) {
     await ctx.models.Job.updateMany(
       { _id: { $in: jobs.map((j) => j._id) }, partnerId: partner._id, status: { $in: ACTIVE_JOB_STATUSES } },
@@ -44,12 +46,23 @@ export async function recordPing(ctx: DeliveryContext, userId: string, input: Pi
   await ctx.models.LocationPing.insertMany(rows);
 
   for (const j of jobs) {
-    await publishLocation(ctx, j.customerUserId, { childOrderId: j.childOrderId, lat: input.lat, lng: input.lng, at: at.toISOString(), simulated: false });
+    const eta = await remainingEta(ctx, j, { location: input });
+    await publishLocation(ctx, j.customerUserId, { childOrderId: j.childOrderId, lat: input.lat, lng: input.lng, at: at.toISOString(), simulated: false, remainingMinutes: eta?.minutes ?? null });
   }
   return { at: at.toISOString(), jobsUpdated: jobs.length };
 }
 
-export async function publishLocation(ctx: DeliveryContext, customerUserId: string, data: { childOrderId: string; lat: number; lng: number; at: string; simulated: boolean }) {
+export interface LocationMessage {
+  childOrderId: string;
+  lat: number;
+  lng: number;
+  at: string;
+  simulated: boolean;
+  /** DLV-3 live remaining minutes (null when unknown). */
+  remainingMinutes: number | null;
+}
+
+export async function publishLocation(ctx: DeliveryContext, customerUserId: string, data: LocationMessage) {
   await publishRealtime(ctx.redis, realtimeChannel.user(customerUserId), 'delivery.location', data).catch((err) =>
     ctx.logger.warn({ err, childOrderId: data.childOrderId }, 'delivery.location publish failed'),
   );
@@ -65,6 +78,7 @@ export interface TrackingView {
   simulated: boolean;
   estimatedMinutes: number;
   estimateSource: string;
+  remaining: RemainingEta | null;
 }
 
 /** GET /deliveries/tracking/:childOrderId — order owner only (404 for everyone else). */
@@ -90,5 +104,6 @@ export async function trackingFor(ctx: DeliveryContext, userId: string, childOrd
     simulated: hasLocation ? !!job.locationSimulated : false,
     estimatedMinutes: job.estimatedMinutes,
     estimateSource: job.estimateSource,
+    remaining: await remainingEta(ctx, job),
   };
 }

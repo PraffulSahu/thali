@@ -200,8 +200,17 @@ export const TrackingResponse = z
     lastLocationAt: iso,
     stale: z.boolean().describe('true when the last location is older than LOCATION_STALE_SEC (60 s)'),
     simulated: z.boolean().describe('true when the location comes from the demo simulator'),
-    estimatedMinutes: z.number(),
+    estimatedMinutes: z.number().describe('Static job estimate (restaurant → drop at job creation)'),
     estimateSource: z.enum(enumValues(EstimateSource)),
+    remaining: z
+      .object({
+        minutes: z.number().int(),
+        distanceKm: z.number(),
+        source: z.enum(enumValues(EstimateSource)).describe('GOOGLE = estimate; DEMO_HAVERSINE / HAVERSINE_FALLBACK = demo / approximate estimate'),
+        computedAt: z.string(),
+      })
+      .nullable()
+      .describe('Live remaining ETA from the rider position (cached 30 s); null before assignment or without a position — fall back to the static estimate'),
   })
   .meta({ id: 'DeliveryTracking' });
 
