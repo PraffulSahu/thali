@@ -71,13 +71,14 @@ x-geo-env: &geo-env
 # are served from S3_PUBLIC_BASE_URL. MinIO CORS (MINIO_API_CORS_ALLOW_ORIGIN) admits the web origins.
 x-storage-env: &storage-env
   S3_ENDPOINT: http://minio:9000
-  S3_PUBLIC_ENDPOINT: http://localhost:${MINIO_HOST_PORT:-9000}
+  # S3_PUBLIC_HOST: host name browsers use to reach the published MinIO port (e.g. a LAN IP with PUBLISH_ADDR=0.0.0.0).
+  S3_PUBLIC_ENDPOINT: http://${S3_PUBLIC_HOST:-localhost}:${MINIO_HOST_PORT:-9000}
   S3_REGION: ${S3_REGION:-us-east-1}
   S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-thali}
   S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
   S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-thali-public}
   S3_PRIVATE_BUCKET: ${S3_PRIVATE_BUCKET:-thali-private}
-  S3_PUBLIC_BASE_URL: http://localhost:${MINIO_HOST_PORT:-9000}/${S3_PUBLIC_BUCKET:-thali-public}
+  S3_PUBLIC_BASE_URL: http://${S3_PUBLIC_HOST:-localhost}:${MINIO_HOST_PORT:-9000}/${S3_PUBLIC_BUCKET:-thali-public}
 
 x-backend-depends: &backend-depends
   mongo-init:
@@ -89,7 +90,7 @@ services:
   # ------------------------------------------------------------------------------------------ data --
   mongo:
     <<: *restart
-    image: mongo:8.0
+    image: mongo:8.0.32
     entrypoint: ["/bin/bash", "/infra/mongo/keyfile.sh"]
     # Cache capped: the default (50% of VM RAM - 1 GB) starves the services/builds on a small dev VM.
     command: ["mongod", "--replSet", "rs0", "--bind_ip_all", "--wiredTigerCacheSizeGB", "0.5"]
@@ -120,7 +121,7 @@ services:
   # One-shot: initiates rs0 (member host mongo:27017), waits for PRIMARY, creates/updates the per-service
   # users (readWrite on their own thali_<service> database only). Idempotent; re-runs on every `up`.
   mongo-init:
-    image: mongo:8.0
+    image: mongo:8.0.32
     restart: "no"
     depends_on:
       mongo:
@@ -145,7 +146,7 @@ services:
 
   redis:
     <<: *restart
-    image: redis:7.4-alpine
+    image: redis:7.4.11-alpine
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     volumes:
       - redis-data:/data
@@ -458,7 +459,8 @@ services:
       <<: *service-healthcheck
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health/ready >/dev/null || exit 1"]
 
-  # SPA served by nginx (infra/nginx/web.conf); /api/* is proxied to gateway:8080 (SSE unbuffered).
+  # SPA served by non-root nginx (nginx-unprivileged, :8080 in the container; infra/nginx/web.conf);
+  # /api/* is proxied to gateway:8080 (SSE unbuffered).
   web:
     <<: *restart
     build:
@@ -469,9 +471,9 @@ services:
       gateway:
         condition: service_healthy
     ports:
-      - "${PUBLISH_ADDR:-127.0.0.1}:${WEB_HOST_PORT:-5173}:80"
+      - "${PUBLISH_ADDR:-127.0.0.1}:${WEB_HOST_PORT:-5173}:8080"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
       interval: 10s
       timeout: 3s
       retries: 6

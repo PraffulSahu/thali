@@ -2,7 +2,7 @@
 # Thali web SPA. Build context = repository root:
 #   docker build -f apps/web/Dockerfile -t thali-web .
 # Serves the Vite build with nginx (infra/nginx/web.conf): SPA fallback + /api proxy to gateway:8080
-# (unbuffered for /api/v1/realtime SSE). Compose maps 5173 -> 80.
+# (unbuffered for /api/v1/realtime SSE). Compose maps 5173 -> 8080 (non-root nginx).
 
 # ---- build: install the web workspace closure and run `tsc --noEmit && vite build` ----
 FROM node:22.20.0-alpine3.22 AS build
@@ -29,10 +29,11 @@ COPY apps/web apps/web
 RUN npm run build -w @thali/web && rm -f apps/web/dist/assets/*.map
 
 # ---- runtime: static files + reverse proxy ----
-FROM nginx:1.28.0-alpine AS runtime
+# nginx-unprivileged: same nginx build, runs as uid 101 (non-root) and listens on 8080.
+FROM nginxinc/nginx-unprivileged:1.28.0-alpine AS runtime
 COPY infra/nginx/web.conf /etc/nginx/conf.d/default.conf
 COPY infra/nginx/security-headers.conf /etc/nginx/snippets/thali-security-headers.conf
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
-EXPOSE 80
+EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=5s --retries=3 \
-  CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1
+  CMD wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1
