@@ -29,17 +29,17 @@
     "e2e": "npm run stack:up && npm run seed && npm run test -w @thali/e2e"
   },
   "devDependencies": {
-    "typescript": "5.9.3",
-    "tsx": "4.23.15",
-    "vitest": "3.2.7",
-    "supertest": "7.3.1",
-    "fast-check": "4.10.2",
-    "@types/node": "22.20.5",
-    "@types/express": "5.0.6",
-    "@types/supertest": "7.2.1",
-    "@types/cors": "2.8.19",
     "@types/cookie-parser": "1.4.10",
+    "@types/cors": "2.8.19",
+    "@types/express": "5.0.6",
+    "@types/node": "22.20.5",
+    "@types/supertest": "7.2.1",
     "@types/swagger-ui-express": "4.1.8",
-    "@types/nodemailer": "7.0.12"
+    "fast-check": "4.10.2",
+    "supertest": "7.3.1",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "4.1.11"
   }
 }
