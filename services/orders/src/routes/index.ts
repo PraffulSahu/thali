@@ -7,7 +7,23 @@ import type { RouteModule } from './types.js';
 import { cartModule } from './cart.js';
 import { checkoutsModule } from './checkouts.js';
 import { internalModule } from './internal.js';
+import { ordersModule } from './orders.js';
+import { ownerOrdersModule } from './owner-orders.js';
+import { adminOrdersModule } from './admin-orders.js';
+import { supportModule } from './support.js';
+import { adminSupportModule } from './admin-support.js';
+import { internalOrdersModule } from './internal-orders.js';
 
-export const routeModules: RouteModule[] = [cartModule, checkoutsModule, internalModule];
+export const routeModules: RouteModule[] = [
+  cartModule,
+  checkoutsModule,
+  internalModule,
+  ordersModule,
+  ownerOrdersModule,
+  adminOrdersModule,
+  supportModule,
+  adminSupportModule,
+  internalOrdersModule,
+];
 
 export type { RouteModule };

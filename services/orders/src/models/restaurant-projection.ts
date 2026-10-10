@@ -12,6 +12,8 @@ export interface RestaurantProjection {
   name: string;
   status: string;
   location?: GeoJsonPoint | null;
+  /** `occurredAt` of the last applied restaurant.* event (older events are ignored). */
+  eventAt?: Date | null;
   updatedAt: Date;
 }
 
@@ -22,6 +24,7 @@ export const RestaurantProjectionSchema = new Schema<RestaurantProjection>(
     name: { type: String, required: true },
     status: { type: String, required: true },
     location: { type: PointSchema, default: null },
+    eventAt: { type: Date, default: null },
   },
   { collection: 'restaurant_projection', timestamps: { createdAt: false, updatedAt: true }, versionKey: false },
 );

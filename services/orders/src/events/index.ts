@@ -6,9 +6,12 @@
 import { startConsumer, type ConsumerHandle, type EventHandlers, type StartConsumerOptions } from '@thali/service-kit';
 import type { OrdersContext } from '../context.js';
 import { paymentEventsModule } from './payment-handlers.js';
+import { deliveryEventsModule } from './delivery-handlers.js';
+import { refundEventsModule } from './refund-handlers.js';
+import { restaurantEventsModule } from './restaurant-handlers.js';
 import type { EventModule } from './types.js';
 
-export const eventModules: EventModule[] = [paymentEventsModule];
+export const eventModules: EventModule[] = [paymentEventsModule, deliveryEventsModule, refundEventsModule, restaurantEventsModule];
 
 export function consumedStreams(modules: EventModule[] = eventModules): string[] {
   return [...new Set(modules.flatMap((m) => m.streams))];

@@ -9,6 +9,7 @@ import { checkoutGroupModel, type CheckoutGroup } from './checkout-group.js';
 import { childOrderModel, type ChildOrder } from './child-order.js';
 import { orderEventModel, type OrderEvent } from './order-event.js';
 import { restaurantProjectionModel, type RestaurantProjection } from './restaurant-projection.js';
+import { supportTicketModel, type SupportTicket } from './support-ticket.js';
 
 export interface OrdersModels {
   Cart: Model<Cart>;
@@ -16,6 +17,7 @@ export interface OrdersModels {
   ChildOrder: Model<ChildOrder>;
   OrderEvent: Model<OrderEvent>;
   RestaurantProjection: Model<RestaurantProjection>;
+  SupportTicket: Model<SupportTicket>;
 }
 
 export function getModels(conn: Connection): OrdersModels {
@@ -25,6 +27,7 @@ export function getModels(conn: Connection): OrdersModels {
     ChildOrder: childOrderModel(conn),
     OrderEvent: orderEventModel(conn),
     RestaurantProjection: restaurantProjectionModel(conn),
+    SupportTicket: supportTicketModel(conn),
   };
 }
 
@@ -48,4 +51,5 @@ export * from './checkout-group.js';
 export * from './child-order.js';
 export * from './order-event.js';
 export * from './restaurant-projection.js';
+export * from './support-ticket.js';
 export * from './common.js';

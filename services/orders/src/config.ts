@@ -21,6 +21,8 @@ export const ordersConfigShape = {
   CHECKOUT_EXPIRY_INTERVAL_MS: int(30_000, 100),
   /** AUTHORIZED payments get this grace past expiresAt for auto-capture before the checkout is expired. */
   AUTHORIZED_GRACE_SEC: int(600, 0),
+  /** Sweeper interval for PLACED children past `acceptBy` (LLD §8 sweeper b → REJECTED RESTAURANT_TIMEOUT). */
+  ACCEPT_TIMEOUT_INTERVAL_MS: int(15_000, 100),
   /** Checkout create rate limit per user per minute (LLD §5.4). */
   CHECKOUT_RATE_LIMIT_PER_MIN: int(10, 1),
   IDENTITY_URL: z.url().default('http://localhost:4001'),

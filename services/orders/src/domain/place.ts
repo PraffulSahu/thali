@@ -17,7 +17,8 @@ import type { ChildOrderDoc } from '../models/child-order.js';
 import { appendOrderEvents } from '../models/order-event.js';
 import { applyChildTransition, applyDerivedCheckoutStatus } from './child-state.js';
 import { emitOrdersEvent } from './events.js';
-import { queueOrderUpdated } from './realtime.js';
+import { queueOrderUpdated, queueRealtime } from './realtime.js';
+import { realtimeChannel } from '@thali/service-kit';
 
 export type CaptureOutcome = 'PLACED' | 'ALREADY_PLACED' | 'LATE_PAYMENT' | 'LATE_PAYMENT_DUPLICATE' | 'AMOUNT_MISMATCH' | 'NOT_FOUND';
 
@@ -105,7 +106,15 @@ export async function applyCapturedPayment(ctx: OrdersContext, session: ClientSe
   ]);
 
   await clearPurchasedCartLines(ctx, session, group, children);
-  for (const child of children) publishChildUpdate(ctx, session, group, child);
+  for (const child of children) {
+    publishChildUpdate(ctx, session, group, child);
+    // LLD §11 owner.order: incoming order for the restaurant dashboard (Task 12)
+    queueRealtime(session, ctx.redis, ctx.logger, realtimeChannel.owner(child.restaurantOwnerId), 'owner.order', {
+      childOrderId: String(child._id),
+      restaurantId: child.restaurantId,
+      status: child.status,
+    });
+  }
   return 'PLACED';
 }
 

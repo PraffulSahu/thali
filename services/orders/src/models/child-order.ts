@@ -39,6 +39,21 @@ export interface RestaurantAddress {
   pincode: string;
 }
 
+export interface ChildRefundEntry {
+  refundId: string;
+  amountPaise: number;
+  reason: string;
+  status: 'REQUESTED' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED';
+  updatedAt: Date;
+}
+
+export interface ChildPartner {
+  partnerId: string;
+  partnerUserId: string;
+  name: string;
+  vehicle: { type: string; registrationNumber: string };
+}
+
 export interface ChildOrder {
   _id: Types.ObjectId;
   code: string;
@@ -82,6 +97,20 @@ export interface ChildOrder {
   pickedUpAt?: Date | null;
   deliveredAt?: Date | null;
   cancelledAt?: Date | null;
+  // ---- Task 12 (lifecycle, refunds, delivery mirror) ----
+  /** Total refund orders has requested for this child (rejection / cancellation), or seen from payments. */
+  refundRequestedPaise: number;
+  /** Mirror of payments refunds for this child (from `refund.*`), one entry per refundId. */
+  refunds: ChildRefundEntry[];
+  /** Actor that cancelled (CUSTOMER / ADMIN). */
+  cancelledBy?: string | null;
+  deliveryFailureReason?: string | null;
+  /** Partner from `delivery.assigned` (cleared on `delivery.unassigned`). */
+  partner?: ChildPartner | null;
+  /** From `delivery.delivered.distanceKm` (payments partner earning). */
+  deliveryDistanceKm?: number | null;
+  /** `occurredAt` of the last applied delivery mirror update (assigned / unassigned ordering). */
+  deliveryUpdatedAt?: Date | null;
   schemaVersion: number;
   createdAt: Date;
   updatedAt: Date;
@@ -151,6 +180,32 @@ export const ChildOrderSchema = new Schema<ChildOrder>(
     pickedUpAt: { type: Date, default: null },
     deliveredAt: { type: Date, default: null },
     cancelledAt: { type: Date, default: null },
+    refundRequestedPaise: { type: Number, default: 0 },
+    refunds: {
+      type: [
+        new Schema<ChildRefundEntry>(
+          { refundId: String, amountPaise: Number, reason: String, status: String, updatedAt: Date },
+          { _id: false },
+        ),
+      ],
+      default: [],
+    },
+    cancelledBy: { type: String, default: null },
+    deliveryFailureReason: { type: String, default: null },
+    partner: {
+      type: new Schema<ChildPartner>(
+        {
+          partnerId: String,
+          partnerUserId: String,
+          name: String,
+          vehicle: { type: new Schema({ type: { type: String }, registrationNumber: String }, { _id: false }) },
+        },
+        { _id: false },
+      ),
+      default: null,
+    },
+    deliveryDistanceKm: { type: Number, default: null },
+    deliveryUpdatedAt: { type: Date, default: null },
     schemaVersion: { type: Number, default: 1 },
   },
   { collection: 'child_orders', timestamps: true, optimisticConcurrency: true },
