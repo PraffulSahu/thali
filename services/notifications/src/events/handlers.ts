@@ -101,29 +101,33 @@ export function createEventHandlers(deps: HandlerDeps): EventHandlers {
 
     'order.placed': async (e: Env<'order.placed'>, s) => {
       const p = e.payload;
-      await notifyUser(e, p.userId, 'order_placed_customer', { code: p.code, totalPaise: p.totalPaise }, s);
-      await notifyUser(e, p.restaurantOwnerId, 'order_placed_restaurant', { code: p.code, totalPaise: p.totalPaise, acceptBy: p.acceptBy }, s);
+      await notifyUser(e, p.userId, 'order_placed_customer', { code: p.code, totalPaise: p.totalPaise, checkoutId: p.checkoutId, childOrderId: p.childOrderId }, s);
+      await notifyUser(e, p.restaurantOwnerId, 'order_placed_restaurant', { code: p.code, totalPaise: p.totalPaise, acceptBy: p.acceptBy, childOrderId: p.childOrderId, restaurantId: p.restaurantId }, s);
     },
 
+    // Customer notifications carry checkoutId/childOrderId (non-secret) so the web inbox can deep-link to the order.
     // Pickup/delivery codes are deliberately NOT forwarded: they stay inside orders/delivery.
     'order.accepted': async (e: Env<'order.accepted'>, s) => {
-      await notifyUser(e, e.payload.userId, 'order_accepted', { prepMinutes: e.payload.prepMinutes }, s);
+      const { prepMinutes, checkoutId, childOrderId } = e.payload;
+      await notifyUser(e, e.payload.userId, 'order_accepted', { prepMinutes, checkoutId, childOrderId }, s);
     },
 
     'order.rejected': async (e: Env<'order.rejected'>, s) => {
-      await notifyUser(e, e.payload.userId, 'order_rejected', { reason: e.payload.reason, refundPaise: e.payload.refundPaise }, s);
+      const { reason, refundPaise, checkoutId, childOrderId } = e.payload;
+      await notifyUser(e, e.payload.userId, 'order_rejected', { reason, refundPaise, checkoutId, childOrderId }, s);
     },
 
     'order.cancelled': async (e: Env<'order.cancelled'>, s) => {
-      await notifyUser(e, e.payload.userId, 'order_cancelled', { reason: e.payload.reason, refundPaise: e.payload.refundPaise, actor: e.payload.actor }, s);
+      const { reason, refundPaise, actor, checkoutId, childOrderId } = e.payload;
+      await notifyUser(e, e.payload.userId, 'order_cancelled', { reason, refundPaise, actor, checkoutId, childOrderId }, s);
     },
 
     'order.out_for_delivery': async (e: Env<'order.out_for_delivery'>, s) => {
-      await notifyUser(e, e.payload.userId, 'order_out_for_delivery', {}, s);
+      await notifyUser(e, e.payload.userId, 'order_out_for_delivery', { childOrderId: e.payload.childOrderId }, s);
     },
 
     'order.delivered': async (e: Env<'order.delivered'>, s) => {
-      await notifyUser(e, e.payload.userId, 'order_delivered', {}, s);
+      await notifyUser(e, e.payload.userId, 'order_delivered', { checkoutId: e.payload.checkoutId, childOrderId: e.payload.childOrderId }, s);
     },
 
     'order.delivery_failed': async (e: Env<'order.delivery_failed'>, s) => {
@@ -138,12 +142,12 @@ export function createEventHandlers(deps: HandlerDeps): EventHandlers {
     // The refund payload has no user id: the user is resolved from the child order at dispatch time. Checkout-level
     // refunds without a child order cannot be attributed and are skipped (see report "Contract gaps").
     'refund.succeeded': async (e: Env<'refund.succeeded'>, s) => {
-      const { childOrderId, amountPaise, refundId } = e.payload;
+      const { childOrderId, amountPaise, refundId, checkoutGroupId } = e.payload;
       if (!childOrderId) {
         logger.info({ eventId: e.id, refundId }, 'refund has no child order; cannot resolve recipient; skipping');
         return;
       }
-      await enqueueFor(e, { childOrderId }, 'refund_succeeded', { amountPaise }, s);
+      await enqueueFor(e, { childOrderId }, 'refund_succeeded', { amountPaise, checkoutId: checkoutGroupId, childOrderId }, s);
     },
 
     'partner.status_changed': async (e: Env<'partner.status_changed'>, s) => {

@@ -187,6 +187,33 @@ describe('preferences are applied at dispatch time', () => {
     expect(new Set(templates)).toEqual(new Set(['c:order_placed_customer', 'o:order_placed_restaurant']));
   });
 
+  it('customer order notifications carry checkoutId + childOrderId (web inbox deep links); codes stay out', async () => {
+    const checkoutId = oid();
+    const childOrderId = oid();
+    const placed = await publish('order.placed', { childOrderId, checkoutId, userId: CUSTOMER, restaurantId: oid(), restaurantOwnerId: OWNER, code: 'TH-LINK0001', totalPaise: 100, acceptBy: new Date().toISOString() });
+    await waitRows(placed.id, 6);
+    const customer = await h.models.Notification.findOne({ sourceEventId: placed.id, userId: CUSTOMER, channel: 'IN_APP' }).lean();
+    expect(customer!.data).toMatchObject({ checkoutId, childOrderId, code: 'TH-LINK0001' });
+    const owner = await h.models.Notification.findOne({ sourceEventId: placed.id, userId: OWNER, channel: 'IN_APP' }).lean();
+    expect(owner!.data).toMatchObject({ childOrderId });
+    expect(owner!.data.checkoutId).toBeUndefined(); // the owner never opens the customer's checkout
+
+    const refund = await publish('refund.succeeded', { refundId: oid(), childOrderId, checkoutGroupId: checkoutId, amountPaise: 5, reason: 'RESTAURANT_REJECTED', status: 'SUCCEEDED' }, 'payments');
+    await waitRows(refund.id, 3);
+    const r = await h.models.Notification.findOne({ sourceEventId: refund.id, channel: 'IN_APP' }).lean();
+    expect(r!.data).toMatchObject({ checkoutId, childOrderId });
+
+    const accepted = await publish('order.accepted', {
+      childOrderId, checkoutId, userId: CUSTOMER, restaurantId: oid(), prepMinutes: 15,
+      pickup: { name: 'R', address: 'a', location: { type: 'Point', coordinates: [77.6, 12.9] } },
+      drop: { name: 'C', address: 'b', location: { type: 'Point', coordinates: [77.61, 12.91] }, phoneMasked: '' },
+      pickupCode: '1111', deliveryCode: '2222',
+    } as EventPayloads['order.accepted']);
+    await waitFor(async () => !!(await h.models.Notification.exists({ sourceEventId: accepted.id, channel: 'IN_APP' })));
+    const a = await h.models.Notification.findOne({ sourceEventId: accepted.id, channel: 'IN_APP' }).lean();
+    expect(a!.data).toEqual({ prepMinutes: 15, checkoutId, childOrderId });
+  });
+
   it('a user who is both the customer and the restaurant owner gets BOTH notifications (dedupeKey includes the template)', async () => {
     const env = await publish('order.placed', { childOrderId: oid(), checkoutId: oid(), userId: CUSTOMER, restaurantId: oid(), restaurantOwnerId: CUSTOMER, code: 'TH-SELF0001', totalPaise: 100, acceptBy: new Date().toISOString() });
     await waitRows(env.id, 6);
