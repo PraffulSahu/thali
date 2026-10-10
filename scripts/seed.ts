@@ -16,6 +16,8 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+// The gateway owns no database and has no seed: it is deliberately not in this list (its package.json `seed`
+// script points at a file that does not exist; never call it).
 const ORDER = ['identity', 'marketplace', 'delivery', 'payments', 'notifications', 'orders'] as const;
 type Service = (typeof ORDER)[number];
 const PORTS: Record<Service, string> = { identity: '4001', marketplace: '4002', orders: '4003', payments: '4004', delivery: '4005', notifications: '4006' };
@@ -70,7 +72,8 @@ function parseResult(out: string): { inserted: number; existing: number } | null
 }
 
 async function seedOne(service: Service, local: boolean, dotenv: Record<string, string>): Promise<Result> {
-  if (!existsSync(resolve(ROOT, `services/${service}/src/seed.ts`))) return { service, status: 'skipped', note: 'no seed script yet' };
+  // `skipped` only for a service that has no seed at all; anything that should seed but cannot is `failed`.
+  if (!existsSync(resolve(ROOT, `services/${service}/src/seed.ts`))) return { service, status: 'skipped', note: 'service has no seed script' };
   process.stdout.write(`\n=== seed ${service} ${local ? '(local)' : '(docker compose exec)'}\n`);
   let res: { code: number; out: string };
   if (local) {
@@ -78,7 +81,7 @@ async function seedOne(service: Service, local: boolean, dotenv: Record<string, 
     res = await run('npx', ['tsx', `services/${service}/src/seed.ts`], env);
   } else {
     const probe = await run('docker', ['compose', 'exec', '-T', service, 'test', '-f', 'dist/seed.js']);
-    if (probe.code !== 0) return { service, status: 'skipped', note: 'container not running or image has no dist/seed.js (rebuild: npm run stack:up)' };
+    if (probe.code !== 0) return { service, status: 'failed', note: 'container not running or image has no dist/seed.js (start/rebuild: npm run stack:up)' };
     res = await run('docker', ['compose', 'exec', '-T', service, 'node', 'dist/seed.js']);
   }
   const parsed = parseResult(res.out);
@@ -108,8 +111,15 @@ async function main() {
     process.stdout.write(`  ${r.service.padEnd(14)} ${r.status.toUpperCase().padEnd(8)} ${counts}${r.note ? `  (${r.note})` : ''}\n`);
   }
   const total = results.reduce((n, r) => n + (r.inserted ?? 0), 0);
-  process.stdout.write(`  total inserted: ${total}${total === 0 ? ' (already seeded: nothing changed)' : ''}\n`);
-  if (results.some((r) => r.status === 'failed')) process.exit(1);
+  const failed = results.some((r) => r.status === 'failed');
+  const notRun = services.length - results.length; // stopped after a failure
+  const allOk = results.length === services.length && results.every((r) => r.status === 'ok');
+  process.stdout.write(`  total inserted: ${total}${allOk && total === 0 ? ' (already seeded: nothing changed)' : ''}\n`);
+  if (notRun) process.stdout.write(`  not run: ${notRun} service(s) after the failure\n`);
+  if (failed) {
+    process.stdout.write('  SEED FAILED\n');
+    process.exit(1);
+  }
 }
 
 main().catch((e: unknown) => {
