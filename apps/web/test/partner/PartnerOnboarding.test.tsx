@@ -1,81 +1,110 @@
 import '../setup';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import PartnerOnboarding from '../../src/features/partner/PartnerOnboarding';
 import { makeAuth, renderWithProviders } from '../utils';
+import { apiError, bodyOf, json, profile, routeFetch } from './fixtures';
 
-const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-const fetchMock = vi.fn();
-const created = { id: 'p1', userId: 'u1', name: 'Ravi Kumar', phone: null, vehicle: { type: 'SCOOTER', registrationNumber: 'KA05MN4321' }, status: 'DRAFT', statusReason: null, documents: [], online: false, lastLocation: null, lastLocationAt: null, activeJobIds: [], maxActive: 2, isDemo: true, createdAt: null };
-
-beforeEach(() => {
-  fetchMock.mockReset();
-  vi.stubGlobal('fetch', fetchMock);
-});
 afterEach(() => vi.unstubAllGlobals());
 
-describe('PartnerOnboarding', () => {
-  it('creates the profile and refreshes the user so DELIVERY_PARTNER is picked up', async () => {
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (init?.method === 'POST' && String(url).endsWith('/partner/profile')) return json(201, created);
-      return json(404, { error: { code: 'NOT_FOUND', message: 'Create your delivery partner profile first', requestId: 'r' } });
+const draft = (over = {}) => profile({ status: 'DRAFT', online: false, vehicle: null, ...over });
+const idDoc = { id: 'd1', type: 'ID_PROOF' as const, demoVerified: true, uploadedAt: '2026-10-10T10:00:00Z' };
+
+describe('PartnerOnboarding wizard', () => {
+  it('creates the profile (refreshing the user for DELIVERY_PARTNER), then saves the vehicle from option cards', async () => {
+    let current: unknown = null;
+    const fetchMock = routeFetch({
+      'GET /partner/profile': () => (current ? json(200, current) : apiError(404, 'NOT_FOUND', 'Create your delivery partner profile first')),
+      'POST /partner/profile': () => {
+        current = draft();
+        return json(201, current);
+      },
+      'PATCH /partner/profile': () => {
+        current = draft({ vehicle: { type: 'SCOOTER', registrationNumber: 'KA05MN4321' } });
+        return json(200, current);
+      },
     });
+    vi.stubGlobal('fetch', fetchMock);
     const auth = makeAuth({ roles: ['CONSUMER'] });
     (auth.refreshUser as ReturnType<typeof vi.fn>).mockResolvedValue(auth.user);
     renderWithProviders(<PartnerOnboarding />, { auth });
 
-    const nameInput = await screen.findByLabelText(/full name/i);
-    await userEvent.clear(nameInput);
-    await userEvent.type(nameInput, 'Ravi Kumar');
-    await userEvent.selectOptions(screen.getByLabelText(/vehicle type/i), 'SCOOTER');
-    await userEvent.type(screen.getByLabelText(/registration number/i), 'ka05mn4321');
-    await userEvent.click(screen.getByRole('button', { name: /create profile/i }));
-
+    expect(await screen.findByRole('heading', { level: 1, name: 'Become a delivery partner' })).toBeInTheDocument();
+    const name = await screen.findByLabelText(/full name/i);
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Ravi Kumar');
+    await userEvent.click(screen.getByRole('button', { name: /create profile & continue/i }));
     await waitFor(() => expect(auth.refreshUser).toHaveBeenCalled());
-    const post = fetchMock.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === 'POST')!;
-    expect(JSON.parse(String((post[1] as RequestInit).body))).toEqual({ name: 'Ravi Kumar', vehicle: { type: 'SCOOTER', registrationNumber: 'KA05MN4321' } });
-    expect((await screen.findAllByText(/driving licence/i)).length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: /submit for review/i })).toBeDisabled();
+    expect(bodyOf(fetchMock, 'POST /partner/profile')).toEqual({ name: 'Ravi Kumar' });
+
+    // Vehicle step
+    await userEvent.click(await screen.findByRole('radio', { name: /scooter/i }));
+    await userEvent.type(screen.getByLabelText(/registration number/i), 'ka05 mn4321');
+    await userEvent.click(screen.getByRole('button', { name: /save & continue/i }));
+    await waitFor(() => expect(bodyOf(fetchMock, 'PATCH /partner/profile')).toEqual({ vehicle: { type: 'SCOOTER', registrationNumber: 'KA05MN4321' } }));
+    // Documents step for a scooter: ID, licence and RC
+    expect(await screen.findByRole('region', { name: 'Documents' })).toBeInTheDocument();
+    expect(screen.getByText(/driving licence/i)).toBeInTheDocument();
+    expect(screen.getByText(/vehicle registration certificate/i)).toBeInTheDocument();
   });
 
-  it('uploads a document through presign, storage PUT and attach', async () => {
-    const withDoc = { ...created, documents: [{ id: 'd1', type: 'ID_PROOF', demoVerified: true, uploadedAt: '2026-10-10T10:00:00Z' }] };
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      const u = String(url);
-      if (u.endsWith('/partner/profile') && (!init?.method || init.method === 'GET')) return json(200, created);
-      if (u.endsWith('/partner/uploads')) return json(200, { key: 'partner-kyc/u1/ID_PROOF/x.png', upload: { url: 'https://s3.example/put', method: 'PUT', headers: { 'content-type': 'image/png' }, expiresAt: '', maxBytes: 5242880 } });
-      if (u === 'https://s3.example/put') return new Response(null, { status: 200 });
-      if (u.endsWith('/partner/documents')) return json(200, withDoc);
-      return json(500, { error: { code: 'INTERNAL', message: 'x', requestId: 'r' } });
+  it('uploads a document through presign → storage PUT → attach and labels demo checks', async () => {
+    const withVehicle = draft({ vehicle: { type: 'BICYCLE', registrationNumber: 'FRAME1234' } });
+    const fetchMock = routeFetch({
+      'GET /partner/profile': () => json(200, withVehicle),
+      'POST /partner/uploads': () => json(200, { key: 'partner-kyc/u1/ID_PROOF/x.png', upload: { url: 'https://s3.example/put', method: 'PUT', headers: { 'content-type': 'image/png' }, expiresAt: '', maxBytes: 5242880 } }),
+      'PUT https://s3.example/put': () => new Response(null, { status: 200 }),
+      'POST /partner/documents': () => json(200, { ...withVehicle, documents: [idDoc] }),
     });
+    vi.stubGlobal('fetch', fetchMock);
     renderWithProviders(<PartnerOnboarding />, { auth: makeAuth({ roles: ['DELIVERY_PARTNER'] }) });
-    const input = (await screen.findAllByLabelText(/choose file/i))[0]!;
+    const input = await screen.findByLabelText(/choose file: id proof/i);
     await userEvent.upload(input, new File(['abc'], 'id.png', { type: 'image/png' }));
-
-    expect(await screen.findByText(/demo check only/i)).toBeInTheDocument();
-    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
-    expect(urls).toEqual(expect.arrayContaining(['/api/v1/partner/uploads', 'https://s3.example/put', '/api/v1/partner/documents']));
-    const presign = fetchMock.mock.calls.find((c) => String(c[0]).endsWith('/partner/uploads'))!;
-    expect(JSON.parse(String((presign[1] as RequestInit).body))).toEqual({ type: 'ID_PROOF', contentType: 'image/png', sizeBytes: 3 });
+    expect(await screen.findByText(/demo check only, not an approval/i)).toBeInTheDocument();
+    expect(bodyOf(fetchMock, 'POST /partner/uploads')).toEqual({ type: 'ID_PROOF', contentType: 'image/png', sizeBytes: 3 });
+    expect(bodyOf(fetchMock, 'POST /partner/documents')).toEqual({ type: 'ID_PROOF', key: 'partner-kyc/u1/ID_PROOF/x.png' });
   });
 
-  it('locks vehicle fields while under review and PATCHes only the changed name', async () => {
-    const pending = { ...created, status: 'APPROVAL_PENDING' };
-    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (init?.method === 'PATCH') return json(200, { ...pending, name: 'Ravi K' });
-      return json(200, pending);
-    });
+  it('rejects a wrong file type locally', async () => {
+    vi.stubGlobal('fetch', routeFetch({ 'GET /partner/profile': () => json(200, draft({ vehicle: { type: 'BICYCLE', registrationNumber: 'FRAME1234' } })) }));
     renderWithProviders(<PartnerOnboarding />, { auth: makeAuth({ roles: ['DELIVERY_PARTNER'] }) });
-    const nameInput = await screen.findByLabelText(/full name/i);
-    expect(screen.getByLabelText(/vehicle type/i)).toBeDisabled();
-    expect(screen.getByLabelText(/registration number/i)).toBeDisabled();
-    expect(screen.getByRole('button', { name: /save details/i })).toBeDisabled();
-    await userEvent.clear(nameInput);
-    await userEvent.type(nameInput, 'Ravi K');
-    await userEvent.click(screen.getByRole('button', { name: /save details/i }));
-    await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit | undefined)?.method === 'PATCH')).toBe(true));
-    const patch = fetchMock.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === 'PATCH')!;
-    expect(JSON.parse(String((patch[1] as RequestInit).body))).toEqual({ name: 'Ravi K' });
+    const input = await screen.findByLabelText(/choose file: id proof/i);
+    await userEvent.upload(input, new File(['abc'], 'id.gif', { type: 'image/gif' }), { applyAccept: false });
+    expect(await screen.findByText('Upload a JPG, PNG or PDF file.')).toBeInTheDocument();
+  });
+
+  it('rejected: banner with reason, review step lists missing items with Fix, and Resubmit posts /submit', async () => {
+    const rejected = draft({ status: 'REJECTED', statusReason: 'Licence photo is blurry', vehicle: { type: 'BICYCLE', registrationNumber: 'FRAME1234' }, documents: [idDoc] });
+    const fetchMock = routeFetch({
+      'GET /partner/profile': () => json(200, rejected),
+      'POST /partner/submit': () => json(200, { ...rejected, status: 'APPROVAL_PENDING', statusReason: null }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    renderWithProviders(<PartnerOnboarding />, { auth: makeAuth({ roles: ['DELIVERY_PARTNER'] }) });
+    expect(await screen.findByText('Your application wasn’t approved')).toBeInTheDocument();
+    expect(screen.getByText(/licence photo is blurry/i)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: 'Resubmit for review' }));
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/v1/partner/submit')).toBe(true));
+    expect(await screen.findByText('Awaiting approval')).toBeInTheDocument();
+  });
+
+  it('review lists missing documents with Fix links and keeps submit disabled', async () => {
+    vi.stubGlobal('fetch', routeFetch({ 'GET /partner/profile': () => json(200, draft({ vehicle: { type: 'SCOOTER', registrationNumber: 'KA05MN4321' }, documents: [idDoc] })) }));
+    renderWithProviders(<PartnerOnboarding />, { auth: makeAuth({ roles: ['DELIVERY_PARTNER'] }) });
+    await userEvent.click(await screen.findByRole('button', { name: '4. Review & submit' }));
+    expect(screen.getByRole('button', { name: 'Submit for review' })).toBeDisabled();
+    const fixes = screen.getAllByRole('button', { name: 'Fix' });
+    expect(fixes).toHaveLength(2); // licence + RC
+    await userEvent.click(fixes[0]!);
+    expect(await screen.findByRole('region', { name: 'Documents' })).toBeInTheDocument();
+  });
+
+  it('under review the vehicle is locked with the reason', async () => {
+    vi.stubGlobal('fetch', routeFetch({ 'GET /partner/profile': () => json(200, draft({ status: 'APPROVAL_PENDING', vehicle: { type: 'SCOOTER', registrationNumber: 'KA05MN4321' } })) }));
+    renderWithProviders(<PartnerOnboarding />, { auth: makeAuth({ roles: ['DELIVERY_PARTNER'] }) });
+    await userEvent.click(await screen.findByRole('button', { name: '2. Vehicle' }));
+    expect(screen.getByRole('radio', { name: /scooter/i })).toBeDisabled();
+    expect(screen.getByText(/locked while your application is under review/i)).toBeInTheDocument();
   });
 });

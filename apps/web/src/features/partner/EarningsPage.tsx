@@ -1,18 +1,22 @@
 /**
- * Earnings and payouts (services/payments `GET /finance/partner/summary|ledger|payouts`).
- * Payouts are recorded manually by Thali ops (bank transfer, UTR); nothing here can move money.
+ * Earnings & payouts `/partner/earnings` (design-spec §7.4, services/payments):
+ *   KPI tiles  Today + This week (PAY-1 windows: deliveries + earned) · Available for payout · Balance ·
+ *              Payout in progress · Paid out so far (all-time summary)
+ *   Tabs       Earnings ledger (`GET /finance/partner/ledger`) · Payouts (`GET /finance/partner/payouts`, "Paid" only
+ *              with a UTR). Payouts are made by Thali ops by bank transfer; nothing here moves money.
  */
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { Card } from '../../components/ui/Card';
+import { useState } from 'react';
 import { DataTable, type Column } from '../../components/ui/DataTable';
+import { KpiTile } from '../../components/ui/KpiTile';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Pagination, useCursorPages } from '../../components/ui/Pagination';
 import { Price } from '../../components/ui/Price';
-import { QueryState } from '../../components/ui/QueryState';
-import { StatusPill } from '../../components/ui/StatusPill';
-import { Tabs } from '../../components/ui/Tabs';
+import { SegmentedTabs } from '../../components/ui/SegmentedTabs';
 import { formatDateTime, plural } from '../../lib/format';
-import { getSummary, listLedger, listPayouts, partnerKeys, type FinanceSummary, type LedgerEntry, type Payout } from './api';
+import { getSummary, listLedger, listPayouts, partnerKeys, type LedgerEntry, type Payout } from './api';
+import { formatRupeesShort, groupUtr, istWeekStart } from './format';
+import { PayoutStatus } from './PartnerAside';
 
 const ENTRY_LABELS: Record<string, string> = {
   DELIVERY_EARNING: 'Delivery earning',
@@ -23,45 +27,58 @@ const ENTRY_LABELS: Record<string, string> = {
   COMMISSION: 'Commission',
 };
 
-function Stat({ label, paise, hint, strong }: { label: string; paise: number; hint?: string; strong?: boolean }) {
-  return (
-    <Card padding="sm">
-      <dt className="text-sm text-slate-600">{label}</dt>
-      <dd className="mt-1">
-        <Price paise={paise} size={strong ? 'xl' : 'lg'} />
-        {hint ? <span className="mt-0.5 block text-xs text-slate-600">{hint}</span> : null}
-      </dd>
-    </Card>
-  );
-}
-
-function Summary({ s }: { s: FinanceSummary }) {
-  return (
-    <div className="space-y-2">
-      <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Stat label="Available to pay out" paise={s.availablePaise} strong hint={`Earnings unlock after ${plural(s.holdDays, 'day')}`} />
-        <Stat label="Balance" paise={s.balancePaise} hint="Including earnings still on hold" />
-        <Stat label="Payout in progress" paise={s.pendingPayoutPaise} />
-        <Stat label="Paid out so far" paise={s.paidOutPaise} />
-      </dl>
-      <p className="text-xs text-slate-600">As of {formatDateTime(s.asOf)}. Payouts are made by Thali by bank transfer.</p>
-    </div>
-  );
-}
-
 const ledgerColumns: Column<LedgerEntry>[] = [
   { key: 'type', header: 'Entry', cell: (e) => ENTRY_LABELS[e.entryType] ?? e.entryType, primary: true },
-  { key: 'memo', header: 'Details', cell: (e) => e.memo || (e.childOrderId ? `Order ${e.childOrderId}` : ''), secondary: true },
-  { key: 'when', header: 'Date', cell: (e) => <span className="tabular-nums">{formatDateTime(e.createdAt)}</span> },
-  { key: 'amount', header: 'Amount', cell: (e) => <Price paise={e.amountPaise} tone={e.amountPaise < 0 ? 'muted' : 'success'} />, align: 'right' },
+  { key: 'memo', header: 'Details', cell: (e) => e.memo || (e.childOrderId ? `Order ${e.childOrderId}` : '—'), secondary: true },
+  { key: 'when', header: 'Date (IST)', cell: (e) => <span className="font-mono text-[12.5px]">{formatDateTime(e.createdAt)}</span> },
+  { key: 'amount', header: 'Amount', cell: (e) => <Price paise={e.amountPaise} tone={e.amountPaise < 0 ? 'muted' : 'ok'} />, align: 'right' },
 ];
 
 const payoutColumns: Column<Payout>[] = [
   { key: 'amount', header: 'Amount', cell: (p) => <Price paise={p.amountPaise} />, primary: true },
-  { key: 'status', header: 'Status', cell: (p) => <StatusPill kind="payout" status={p.status} />, secondary: true },
-  { key: 'utr', header: 'Bank reference (UTR)', cell: (p) => p.utr ?? (p.failureReason ? `Failed: ${p.failureReason}` : 'Pending') },
-  { key: 'when', header: 'Requested', cell: (p) => <span className="tabular-nums">{formatDateTime(p.createdAt)}</span> },
+  { key: 'status', header: 'Status', cell: (p) => <PayoutStatus payout={p} />, secondary: true },
+  {
+    key: 'utr',
+    header: 'Bank reference (UTR)',
+    cell: (p) => (p.utr ? <span className="font-mono text-[12.5px]">{groupUtr(p.utr)}</span> : p.failureReason ? <span className="text-bad">Failed: {p.failureReason}</span> : <span className="text-fg-3">Pending</span>),
+  },
+  { key: 'when', header: 'Requested (IST)', cell: (p) => <span className="font-mono text-[12.5px]">{formatDateTime(p.createdAt)}</span> },
+  { key: 'paid', header: 'Paid (IST)', cell: (p) => <span className="font-mono text-[12.5px]">{p.utr && p.confirmedAt ? formatDateTime(p.confirmedAt) : '—'}</span>, hideOnMobile: true },
 ];
+
+function WindowTile({ label, from }: { label: string; from?: string }) {
+  const q = useQuery({ queryKey: partnerKeys.summary(from), queryFn: () => getSummary(from ? { from } : undefined) });
+  const w = q.data?.window;
+  return (
+    <KpiTile
+      label={label}
+      loading={q.isPending}
+      unavailable={q.isError || (q.data !== undefined && !w)}
+      onRetry={() => void q.refetch()}
+      value={w ? formatRupeesShort(w.earningsPaise) : undefined}
+      sub={w ? `${plural(w.deliveries, 'delivery', 'deliveries')} · earned` : undefined}
+    />
+  );
+}
+
+function SummaryTiles() {
+  const today = useQuery({ queryKey: partnerKeys.summary(), queryFn: () => getSummary() });
+  const s = today.data;
+  const common = { loading: today.isPending, unavailable: today.isError, onRetry: () => void today.refetch() };
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(170px,100%),1fr))] gap-3">
+        <WindowTile label="Today" />
+        <WindowTile label="This week" from={istWeekStart()} />
+        <KpiTile label="Available for payout" highlight {...common} value={s ? formatRupeesShort(s.availablePaise) : undefined} sub={s ? `Earnings unlock after ${plural(s.holdDays, 'day')}` : undefined} />
+        <KpiTile label="Balance" {...common} value={s ? formatRupeesShort(s.balancePaise) : undefined} sub="Including earnings on hold" />
+        <KpiTile label="Payout in progress" {...common} value={s ? formatRupeesShort(s.pendingPayoutPaise) : undefined} />
+        <KpiTile label="Paid out so far" {...common} value={s ? formatRupeesShort(s.paidOutPaise) : undefined} />
+      </div>
+      {s ? <p className="text-xs text-fg-3">As of {formatDateTime(s.asOf)} IST. Weeks start Monday. Payouts are made by Thali by bank transfer.</p> : null}
+    </div>
+  );
+}
 
 function LedgerTab() {
   const pages = useCursorPages();
@@ -100,19 +117,29 @@ function PayoutsTab() {
 }
 
 export default function EarningsPage() {
-  const summary = useQuery({ queryKey: partnerKeys.summary, queryFn: getSummary });
+  const [tab, setTab] = useState<'ledger' | 'payouts'>('ledger');
   return (
     <>
-      <PageHeader title="Earnings" description="What you have earned and what Thali has paid out." />
-      <div className="space-y-6">
-        <QueryState query={summary}>{(s) => <Summary s={s} />}</QueryState>
-        <Tabs
-          label="Earnings details"
-          tabs={[
-            { id: 'ledger', label: 'Earnings', content: <LedgerTab /> },
-            { id: 'payouts', label: 'Payouts', content: <PayoutsTab /> },
-          ]}
-        />
+      <PageHeader title="Earnings" documentTitle="Earnings & payouts" description="What you’ve earned and what Thali has paid out." />
+      <div className="flex flex-col gap-6">
+        <SummaryTiles />
+        <section aria-label="Earnings details" className="flex flex-col gap-3">
+          <SegmentedTabs
+            label="Earnings details"
+            semantics="tabs"
+            idPrefix="earn"
+            className="self-start"
+            value={tab}
+            onChange={setTab}
+            options={[
+              { value: 'ledger', label: 'Earnings ledger' },
+              { value: 'payouts', label: 'Payouts' },
+            ]}
+          />
+          <div role="tabpanel" id={`earn-panel-${tab}`} aria-labelledby={`earn-tab-${tab}`}>
+            {tab === 'ledger' ? <LedgerTab /> : <PayoutsTab />}
+          </div>
+        </section>
       </div>
     </>
   );
