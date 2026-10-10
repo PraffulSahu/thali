@@ -3,7 +3,8 @@
  *   GET  /internal/health/details              → healthDetails(...)
  *   GET  /internal/dead-letters?limit&includeReplayed → { items: DeadLetterView[] }
  *   POST /internal/dead-letters/:id/replay     → { id, stream, entryId }
- * All behind `requireInternal(allowed)`. Register the OpenAPI docs with `registerOpsRoutes(openapi)`.
+ * All behind `requireInternal(allowed)` — by default only the gateway (admin health fan-out) and notifications
+ * (dead-letter aggregation + replay) may call them. Register the OpenAPI docs with `registerOpsRoutes(openapi)`.
  */
 import express, { type Router } from 'express';
 import type { Redis } from 'ioredis';
@@ -23,7 +24,10 @@ export interface OpsRouterOptions {
   config: Pick<BaseConfig, 'SERVICE_NAME' | 'APP_MODE' | 'EVENT_STREAM_PREFIX'>;
   /** Logical streams this service consumes (for consumer lag). */
   streams?: string[];
-  /** Services allowed to call (default: any service with a valid token). */
+  /**
+   * Services allowed to call. Default: `DEFAULT_OPS_CALLERS` (gateway + notifications), the only real callers.
+   * Pass an explicit list to widen/narrow it; `[]` keeps the legacy "any service with a valid token" behaviour.
+   */
   allowed?: ServiceName[];
 }
 
@@ -50,10 +54,13 @@ function view(d: DeadLetterRecord) {
   };
 }
 
+/** gateway: `GET /api/v1/admin/health` fan-out; notifications: dead-letter list/replay aggregation. */
+export const DEFAULT_OPS_CALLERS: readonly ServiceName[] = ['gateway', 'notifications'];
+
 export function createOpsRouter(opts: OpsRouterOptions): Router {
   const { conn, redis, config } = opts;
   const r = express.Router();
-  const guard = requireInternal(opts.allowed);
+  const guard = requireInternal(opts.allowed ?? [...DEFAULT_OPS_CALLERS]);
 
   r.get('/internal/health/details', guard, async (_req, res) => {
     res.json(

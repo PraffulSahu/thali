@@ -25,8 +25,10 @@ describe('OpenAPI coverage', () => {
   it('health endpoints respond', async () => {
     expect((await request(h.app).get('/health/live')).status).toBe(200);
     expect((await request(h.app).get('/health/ready')).body.checks).toEqual({ mongo: 'up', redis: 'up' });
-    const details = await request(h.app).get('/internal/health/details').set('authorization', `Bearer ${await internalToken('orders')}`);
+    const details = await request(h.app).get('/internal/health/details').set('authorization', `Bearer ${await internalToken('gateway')}`);
     expect(details.status).toBe(200);
+    // ops routes default to gateway + notifications callers only
+    expect((await request(h.app).get('/internal/health/details').set('authorization', `Bearer ${await internalToken('orders')}`)).status).toBe(403);
     expect(details.body.service).toBe('payments');
   });
 });

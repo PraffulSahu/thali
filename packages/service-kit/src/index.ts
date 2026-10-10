@@ -163,6 +163,7 @@ export {
 } from './health-details.js';
 export {
   createOpsRouter,
+  DEFAULT_OPS_CALLERS,
   registerOpsRoutes,
   HealthDetailsSchema,
   DeadLetterViewSchema,

@@ -1,4 +1,5 @@
 import request from 'supertest';
+import type { ServiceName } from '@thali/contracts';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   auditEvent,
@@ -10,6 +11,7 @@ import {
   healthDetails,
   initEventCollections,
   createOpsRouter,
+  DEFAULT_OPS_CALLERS,
   outboxModel,
   publishRealtime,
   recordProviderError,
@@ -145,6 +147,37 @@ describe('ops routes', () => {
     const list = await request(app).get('/internal/dead-letters').set('authorization', `Bearer ${token}`).expect(200);
     expect(Array.isArray(list.body.items)).toBe(true);
     await request(app).post('/internal/dead-letters/missing/replay').set('authorization', `Bearer ${token}`).expect(404);
+  });
+
+  it('defaults to gateway + notifications callers only; allowed: [] keeps the legacy any-service behaviour', async () => {
+    const config = createTestConfig({ SERVICE_NAME: 'delivery', REDIS_KEY_PREFIX: tr.prefix, EVENT_STREAM_PREFIX: tr.prefix });
+    const mk = (allowed?: ServiceName[]) =>
+      createApp({
+        config,
+        logger: testLogger(),
+        routes(a) {
+          a.use(createOpsRouter({ conn: db.conn, redis: tr.redis, config, streams: ['events.orders'], allowed }));
+        },
+      });
+    const tok = (from: ServiceName) => signServiceToken(from, 'delivery', TEST_INTERNAL_SERVICE_SECRET);
+    const app = mk();
+    expect(DEFAULT_OPS_CALLERS).toEqual(['gateway', 'notifications']);
+    // gateway: admin health fan-out
+    await request(app).get('/internal/health/details').set('authorization', `Bearer ${await tok('gateway')}`).expect(200);
+    // notifications: dead-letter aggregation + replay
+    const n = `Bearer ${await tok('notifications')}`;
+    await request(app).get('/internal/health/details').set('authorization', n).expect(200);
+    await request(app).get('/internal/dead-letters').set('authorization', n).expect(200);
+    await request(app).post('/internal/dead-letters/missing/replay').set('authorization', n).expect(404);
+    // any other service is refused
+    const o = `Bearer ${await tok('orders')}`;
+    const denied = await request(app).get('/internal/dead-letters').set('authorization', o).expect(403);
+    expect(denied.body.error.code).toBe('FORBIDDEN');
+    await request(app).post('/internal/dead-letters/missing/replay').set('authorization', o).expect(403);
+    await request(app).get('/internal/health/details').set('authorization', o).expect(403);
+    // explicit opt-outs
+    await request(mk([])).get('/internal/health/details').set('authorization', o).expect(200);
+    await request(mk(['orders'])).get('/internal/health/details').set('authorization', `Bearer ${await tok('gateway')}`).expect(403);
   });
 });
 

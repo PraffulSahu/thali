@@ -205,7 +205,7 @@ export function oid(): string {
   return new Types.ObjectId().toHexString();
 }
 
-export async function internalToken(from: 'orders' | 'marketplace' | 'identity' = 'orders'): Promise<string> {
+export async function internalToken(from: 'orders' | 'marketplace' | 'identity' | 'gateway' | 'notifications' = 'orders'): Promise<string> {
   return signServiceToken(from, 'payments', TEST_INTERNAL_SERVICE_SECRET);
 }
 
