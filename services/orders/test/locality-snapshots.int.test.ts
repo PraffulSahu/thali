@@ -106,3 +106,17 @@ describe('order.accepted (contract 2)', () => {
     expect(r.body).toMatchObject({ code: checkout.children[0]!.code, checkoutCode: checkout.code });
   });
 });
+
+describe('ORD-4 restaurant point on the customer view', () => {
+  it('GET /orders/:checkoutId children carry restaurant {location, address:{line1, locality, city}} and no phone', async () => {
+    const { r, u, checkout } = await placeOne();
+    const d = await u.get(`/api/v1/orders/${checkout.id}`);
+    expect(d.status).toBe(200);
+    const kid = d.body.checkout.children[0];
+    expect(kid.restaurant).toEqual({
+      location: { lat: r.location.lat, lng: r.location.lng },
+      address: { line1: '100 Feet Rd', locality: 'HAL 2nd Stage', city: 'Bengaluru' },
+    });
+    expect(JSON.stringify(kid)).not.toContain(r.phone);
+  });
+});

@@ -84,10 +84,27 @@ export function ownerOrderView(c: ChildOrder) {
 }
 export type OwnerOrderView = ReturnType<typeof ownerOrderView>;
 
+/**
+ * ORD-4: restaurant point for the customer's tracking map (origin dot) from the placement snapshot.
+ * Public facts only (where the food comes from) — never the restaurant phone.
+ */
+export function restaurantPointView(c: Pick<ChildOrder, 'restaurantLocation' | 'restaurantAddress'>) {
+  const coords = c.restaurantLocation?.coordinates;
+  return {
+    location: coords ? { lat: Number(coords[1]), lng: Number(coords[0]) } : null,
+    address: {
+      line1: c.restaurantAddress?.line1 ?? '',
+      locality: c.restaurantAddress?.locality ?? null,
+      city: c.restaurantAddress?.city ?? '',
+    },
+  };
+}
+
 /** Customer child view = Task 11 `childOrderView` + lifecycle details. */
 export function customerChildView(c: ChildOrder) {
   return {
     ...childOrderView(c),
+    restaurant: restaurantPointView(c),
     prepMinutes: c.prepMinutes ?? null,
     readyEta: iso(c.readyEta),
     rejectionReason: c.rejectionReason ?? null,

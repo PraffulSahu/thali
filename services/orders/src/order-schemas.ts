@@ -167,7 +167,15 @@ export const OwnerOrderView = z
   .meta({ id: 'OwnerOrder' });
 export const OwnerOrderPage = z.object({ items: z.array(OwnerOrderView), nextCursor: z.string().nullable() }).meta({ id: 'OwnerOrderPage' });
 
+const RestaurantPoint = z
+  .object({
+    location: z.object({ lat: z.number(), lng: z.number() }).nullable(),
+    address: z.object({ line1: z.string(), locality: z.string().nullable(), city: z.string() }),
+  })
+  .meta({ id: 'RestaurantPoint', description: 'Where this part of the order is prepared (tracking map origin); no phone' });
+
 export const CustomerChildView = ChildOrderView.extend({
+  restaurant: RestaurantPoint,
   prepMinutes: z.number().int().nullable(),
   readyEta: nullableIso,
   rejectionReason: z.string().nullable(),
