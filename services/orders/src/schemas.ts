@@ -32,6 +32,7 @@ export const AddressView = z
     line1: z.string(),
     line2: z.string().nullable(),
     landmark: z.string().nullable(),
+    locality: z.string().nullable().meta({ description: 'Neighbourhood, e.g. "Indiranagar" (null for addresses saved before it existed)' }),
     city: z.string(),
     pincode: z.string(),
     location: GeoPointSchema,

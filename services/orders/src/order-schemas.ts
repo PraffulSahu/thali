@@ -405,6 +405,8 @@ export const InternalChildOrder = z
     id: z.string(),
     code: z.string(),
     checkoutGroupId: z.string(),
+    /** Parent checkout code (TH-…) — delivery's fallback for `order.accepted.checkoutCode`. */
+    checkoutCode: z.string().nullable(),
     userId: z.string(),
     restaurantId: z.string(),
     restaurantOwnerId: z.string(),

@@ -16,6 +16,8 @@ export interface AddressSnapshot {
   line1: string;
   line2?: string;
   landmark?: string;
+  /** Neighbourhood ("Indiranagar") from the identity address (contract 4); drop area for the partner offer. */
+  locality?: string;
   city: string;
   pincode: string;
   location: GeoJsonPoint;
@@ -28,6 +30,7 @@ export const AddressSnapshotSchema = new Schema<AddressSnapshot>(
     line1: { type: String, required: true },
     line2: String,
     landmark: String,
+    locality: String,
     city: { type: String, required: true },
     pincode: { type: String, required: true },
     location: { type: PointSchema, required: true },

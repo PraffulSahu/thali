@@ -29,6 +29,7 @@ describe('GET /internal/orders/child/:id', () => {
       id: p.a.id,
       code: p.a.code,
       checkoutGroupId: p.checkout.id,
+      checkoutCode: p.checkout.code,
       userId: p.u.userId,
       restaurantId: p.s.a.id,
       restaurantOwnerId: p.s.a.ownerUserId,

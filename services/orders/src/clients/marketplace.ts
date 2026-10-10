@@ -135,7 +135,14 @@ const InternalRestaurantSchema = z.object({
   name: z.string(),
   status: z.string(),
   location: LatLngLike,
-  address: z.object({ line1: z.string(), line2: z.string().optional(), city: z.string(), pincode: z.string() }),
+  address: z.object({
+    line1: z.string(),
+    line2: z.string().optional(),
+    // contract 4 (MKT-5): optional so a pre-redesign marketplace still validates
+    locality: z.string().nullable().optional(),
+    city: z.string(),
+    pincode: z.string(),
+  }),
   phone: z.string().nullable().optional(),
   commissionBps: z.number().int().nonnegative(),
   packagingFeePaise: z.number().int().nonnegative(),

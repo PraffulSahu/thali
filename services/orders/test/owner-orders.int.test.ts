@@ -81,6 +81,8 @@ describe('accept / reject / preparing / ready', () => {
       expect(ev[0]!.payload).toEqual({
         childOrderId: p.a.id,
         checkoutId: p.checkout.id,
+        childOrderCode: p.a.code,
+        checkoutCode: p.checkout.code,
         userId: p.u.userId,
         restaurantId: p.s.a.id,
         prepMinutes: 20,
@@ -88,12 +90,15 @@ describe('accept / reject / preparing / ready', () => {
           name: 'Spice Route',
           address: '1 MG Road, Bengaluru, 560001',
           location: { type: 'Point', coordinates: [77.59, 12.97] },
+          phone: '+919876500000',
         },
         drop: {
           name: 'Asha Rao',
           address: '42 Residency Rd, Bengaluru, 560025',
           location: { type: 'Point', coordinates: [77.5946, 12.9716] },
           phoneMasked: '+91******3210',
+          area: '560025', // no locality on this address → pincode
+          label: 'Home',
         },
         pickupCode: p.a.pickupCode,
         deliveryCode: p.a.deliveryCode,

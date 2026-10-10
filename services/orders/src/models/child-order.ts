@@ -35,6 +35,8 @@ export interface ChildOrderLine {
 export interface RestaurantAddress {
   line1: string;
   line2?: string;
+  /** From marketplace `GET /internal/restaurants/:id` `address.locality` (contract 4). */
+  locality?: string;
   city: string;
   pincode: string;
 }
@@ -148,7 +150,7 @@ export const ChildOrderSchema = new Schema<ChildOrder>(
     restaurantName: { type: String, required: true },
     restaurantLocation: { type: PointSchema, required: true },
     restaurantAddress: {
-      type: new Schema<RestaurantAddress>({ line1: String, line2: String, city: String, pincode: String }, { _id: false }),
+      type: new Schema<RestaurantAddress>({ line1: String, line2: String, locality: String, city: String, pincode: String }, { _id: false }),
       required: true,
     },
     restaurantPhone: { type: String, default: null },

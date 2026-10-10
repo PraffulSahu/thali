@@ -1,6 +1,6 @@
 /**
  * Internal order routes (service tokens; binding shapes in service-context.md):
- *   GET /internal/orders/child/:id → { id, code, checkoutGroupId, userId, restaurantId,
+ *   GET /internal/orders/child/:id → { id, code, checkoutGroupId, checkoutCode, userId, restaurantId,
  *       restaurantOwnerId, status, deliveredAt, totalPaise, committedRefundPaise }
  *       (marketplace ratings, notifications, payments manual-refund caps, …)
  *   GET /internal/orders/stats?restaurantId&from&to → RestaurantStats   (marketplace dashboard)
@@ -26,10 +26,12 @@ function register(app: express.Express, ctx: OrdersContext): void {
     const { id } = vChild.get(req).params;
     const c = Types.ObjectId.isValid(id) && /^[0-9a-f]{24}$/i.test(id) ? await ctx.models.ChildOrder.findById(id).lean<ChildOrder>() : null;
     if (!c) throw new DomainError('NOT_FOUND', 'Child order not found');
+    const g = await ctx.models.CheckoutGroup.findById(c.checkoutGroupId, { code: 1 }).lean<{ code: string }>();
     res.json({
       id: String(c._id),
       code: c.code,
       checkoutGroupId: String(c.checkoutGroupId),
+      checkoutCode: g?.code ?? null,
       userId: c.userId,
       restaurantId: c.restaurantId,
       restaurantOwnerId: c.restaurantOwnerId,

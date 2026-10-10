@@ -50,7 +50,7 @@ export interface FakeRestaurant {
   name: string;
   ownerUserId: string;
   location: { lat: number; lng: number };
-  address: { line1: string; line2?: string; city: string; pincode: string };
+  address: { line1: string; line2?: string; locality?: string; city: string; pincode: string };
   phone: string;
   open: boolean;
   serviceable: boolean;

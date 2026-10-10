@@ -84,15 +84,34 @@ function plainPoint(p: GeoJsonPoint | null | undefined): GeoJsonPoint {
   return { type: 'Point', coordinates: [Number(c[0]), Number(c[1])] };
 }
 
-/** `order.accepted` pickup / drop snapshots (LLD §9; delivery creates the job from these). */
+/**
+ * Drop "area" shown on a partner offer before pickup (contract 2 / DLV-2): the address locality, else
+ * the pincode. (The service-area name step of the contract is skipped: orders does not receive it
+ * from marketplace — the quote / internal restaurant carry no area name.)
+ */
+export function dropAreaOf(a: Partial<AddressSnapshot> | null | undefined): string {
+  return (a?.locality ?? '').trim() || (a?.pincode ?? '').trim();
+}
+
+/**
+ * `order.accepted` pickup / drop snapshots (LLD §9; delivery creates the job from these). Contract 2:
+ * `pickup.phone` (restaurant E.164, omitted when unknown), `drop.area`, `drop.label`.
+ */
 export function pickupDropOf(child: ChildOrder): Pick<EventPayloads['order.accepted'], 'pickup' | 'drop'> {
   return {
-    pickup: { name: child.restaurantName, address: formatAddress(child.restaurantAddress), location: plainPoint(child.restaurantLocation) },
+    pickup: {
+      name: child.restaurantName,
+      address: formatAddress(child.restaurantAddress),
+      location: plainPoint(child.restaurantLocation),
+      ...(child.restaurantPhone ? { phone: child.restaurantPhone } : {}),
+    },
     drop: {
       name: child.customerContact?.name ?? '',
       address: formatAddress(child.dropAddress),
       location: plainPoint(child.dropAddress?.location),
       phoneMasked: child.customerContact?.phoneMasked ?? '',
+      area: dropAreaOf(child.dropAddress),
+      label: child.dropAddress?.label ?? null,
     },
   };
 }
@@ -159,6 +178,8 @@ export async function transitionChild(
         payload: {
           childOrderId: id,
           checkoutId,
+          // contract 2 / DLV-4: codes for the partner header (checkoutCode is filled in below from the group)
+          childOrderCode: child.code,
           userId: child.userId,
           restaurantId: child.restaurantId,
           prepMinutes: prep,
@@ -269,6 +290,7 @@ export async function transitionChild(
 
   await child.save({ session });
   const derived = await recomputeCheckout(ctx, session, child, { reason: `${child.code} ${to}`, at: now });
+  if (emitted.type === 'order.accepted') emitted.payload = { ...emitted.payload, checkoutCode: derived.group.code };
 
   await emitOrdersEvent(ctx, session, emitted.type, emitted.payload as never, id, opts.correlationId);
   const timeline: TimelineEntry[] = [
