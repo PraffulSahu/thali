@@ -73,12 +73,36 @@ All services return the same envelope:
 | 401 | Missing/expired/revoked credentials | `UNAUTHENTICATED`, `INVALID_CREDENTIALS`, `SESSION_REVOKED`, `SESSION_REUSE_DETECTED` |
 | 403 | Authenticated but not allowed | `FORBIDDEN`, `MFA_REQUIRED`, `ACCOUNT_BLOCKED`, `CSRF_CHECK_FAILED`, `PARTNER_NOT_APPROVED` |
 | 404 | Unknown or not yours | `NOT_FOUND` |
-| 409 | Conflict or illegal state change | `*_INVALID_TRANSITION`, `CONFLICT`, `IDEMPOTENCY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS`, `OUT_OF_STOCK`, `ASSIGNMENT_TAKEN`, `OFFER_EXPIRED`, `CAPACITY_EXCEEDED`, `ORDER_ACCEPT_WINDOW_EXPIRED`, `CONCURRENT_MODIFICATION` |
+| 409 | Conflict or illegal state change | `*_INVALID_TRANSITION`, `CONFLICT`, `IDEMPOTENCY_CONFLICT`, `IDEMPOTENCY_IN_PROGRESS`, `OUT_OF_STOCK`, `ASSIGNMENT_TAKEN`, `OFFER_EXPIRED`, `CAPACITY_EXCEEDED`, `ORDER_ACCEPT_WINDOW_EXPIRED`, `CONCURRENT_MODIFICATION`, `PARTNER_HAS_ACTIVE_JOBS` |
 | 413 | Body too large | `PAYLOAD_TOO_LARGE` |
 | 422 | Business rule | `NOT_SERVICEABLE`, `RESTAURANT_CLOSED`, `ITEM_UNAVAILABLE`, `INVALID_SELECTION`, `PRICE_CHANGED`, `COUPON_INVALID`, `COUPON_LIMIT_REACHED`, `CART_EMPTY`, `FILE_INVALID`, `REFUND_EXCEEDS_CAPTURED`, `REFUND_EXCEEDS_REMAINING`, `REFUND_TARGET_MISMATCH`, `PAYOUT_EXCEEDS_AVAILABLE`, `PARTNER_PROFILE_INCOMPLETE` |
 | 423 | Locked | `ACCOUNT_LOCKED`, `DELIVERY_CODE_LOCKED` |
 | 429 | Rate limited (`Retry-After` header) | `RATE_LIMITED`, `OTP_ATTEMPTS_EXCEEDED` |
 | 502/503/504 | Upstream or dependency | `UPSTREAM_UNAVAILABLE`, `UPSTREAM_TIMEOUT`, `PAYMENT_PROVIDER_UNAVAILABLE`, `OTP_DELIVERY_FAILED`, `SERVICE_UNAVAILABLE` |
+
+Codes added late in the build, and where they come from:
+
+| Code | HTTP | Raised by | Meaning |
+|---|---|---|---|
+| `REFUND_TARGET_MISMATCH` | 422 | `POST /admin/finance/refunds` (payments) | The `childOrderId` is not in this payment's checkout, the `restaurantId` is not the child's, or the child is unknown. `details.reason`: `CHILD_NOT_IN_PAYMENT`, `RESTAURANT_MISMATCH`, `CHILD_NOT_FOUND` (ADR-028) |
+| `REFUND_EXCEEDS_REMAINING` | 422 | manual refund (payments); admin cancel/refund on the order (orders) | The amount is more than the child's total minus refunds already committed for it; `details.remainingPaise` says what is left |
+| `REFUND_EXCEEDS_CAPTURED` | 422 | payments | The refund is more than what was captured on the payment |
+| `PAYOUT_EXCEEDS_AVAILABLE` | 422 | `POST /admin/finance/payouts` | The payout is more than the account's available balance |
+| `PARTNER_PROFILE_INCOMPLETE` | 422 | partner submit; admin approve (delivery) | Required profile fields or documents for the vehicle are missing; `details.missing` lists them |
+| `PARTNER_HAS_ACTIVE_JOBS` | 409 | `POST /partner/offline` (delivery) | The partner still holds active deliveries; finish them or ask ops to reassign |
+| `ORDER_ACCEPT_WINDOW_EXPIRED` | 409 | restaurant accept (orders) | The acceptance window has passed |
+| `CONCURRENT_MODIFICATION` | 409 | any service | Optimistic-concurrency conflict; re-read and retry |
+| `PAYLOAD_TOO_LARGE` | 413 | any service | Body over the 1 MB JSON limit |
+
+Not separate codes: `FIRST_ORDER_ONLY`, `MIN_ORDER`, `EXPIRED`, `NOT_STARTED`, `INACTIVE`, `NOT_FOUND`,
+`NO_DISCOUNT` are values of `error.details.reason` on `COUPON_INVALID` (422), and `TOTAL_LIMIT` / `PER_USER_LIMIT`
+on `COUPON_LIMIT_REACHED` (422). `PARTNER_PROFILE_INCOMPLETE` and `PARTNER_HAS_ACTIVE_JOBS` are defined in the
+delivery service (`services/delivery/src/contracts-local.ts`), `PAYOUT_EXCEEDS_AVAILABLE` in payments
+(`domain/payouts.ts`); the rest are in `ErrorCode` in `@thali/contracts`.
+
+Demo-pay (`/api/v1/demo-pay/:intentId`, `.../complete`) requires a bearer token and returns 404 for anyone who is
+not the intent's owner (ADR-030). Ops routes under `/internal/*` accept only the gateway and notifications
+(ADR-031).
 
 In production, 5xx messages are scrubbed. The authoritative list is `ErrorCode` in `packages/contracts`; clients
 must tolerate unknown codes. Cross-service errors are mapped, never leaked: an upstream 401/403 reaching the
@@ -135,7 +159,8 @@ Rules that matter for integrators and proxies:
   that implies an earlier state is `IGNORED_STALE`; mismatched amount/currency/receipt is `REJECTED_MISMATCH`.
 - Return codes drive provider retries: 200 only after the event is durably recorded; an unexpected internal
   error returns 500 on purpose.
-- In demo mode, `POST /api/v1/demo-pay/:intentId/complete {outcome: success|failure}` runs the same webhook
+- In demo mode, `POST /api/v1/demo-pay/:intentId/complete {outcome: success|failure}` (bearer token of the intent's
+  owner required, ADR-030) runs the same webhook
   pipeline in-process with `MOCK_WEBHOOK_SECRET` (route exists only when `PAYMENT_PROVIDER=mock`).
 
 Provider-side configuration (URLs, events, secrets) is in [05-provider-setup.md](05-provider-setup.md).

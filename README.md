@@ -15,7 +15,9 @@ live tracking. It is a MERN-style monorepo of six domain services behind an API 
 
 - Node.js 22 LTS (`.nvmrc` = 22; `engines` is `>=22 <23`) and npm 10
 - Docker with Compose v2 (`docker compose version`)
-- Free host ports: 5173 (web), 8080 (gateway), 8025 (Mailpit), 9000 and 9001 (MinIO)
+- Free host ports: 5173 (web), 8080 (gateway), 8025 (Mailpit), 9000 and 9001 (MinIO); see "Host ports" below if
+  the test infra stack is running
+- For the Playwright e2e suite: Chromium for Playwright (`npx playwright install chromium`)
 
 ## Quick start (full stack in Docker)
 
@@ -26,9 +28,24 @@ npm run stack:up            # docker compose up -d --build --wait (first build t
 npm run seed                # idempotent demo data (refuses to run unless APP_MODE=demo)
 ```
 
+`cp .env.example .env` is for a local demo only: every placeholder secret in it carries the marker `thali-demo-`,
+which `APP_MODE=production` refuses. For any non-demo environment (shared staging, sandbox, production) generate
+a `.env` with fresh random secrets instead:
+
+```bash
+scripts/gen-env.sh            # writes .env from .env.example with openssl-random secrets (mode 600)
+scripts/gen-env.sh .env.staging --force
+```
+
+It replaces only the `thali-demo-` placeholders (`FIELD_ENCRYPTION_KEY` as base64 of 32 bytes, every other secret
+as 32 random bytes in hex), refuses to overwrite an existing file without `--force`, and changes nothing else:
+you still set `APP_MODE`, the real provider credentials, turn `DEMO_OTP_ENABLED` off and empty `DEMO_PHONES`
+(see [docs/06-deployment.md](docs/06-deployment.md)).
+
 `npm run seed` runs each service's own seed inside its container (`docker compose exec <svc> node dist/seed.js`;
 order: identity, marketplace, delivery, payments, notifications, orders), so every service only writes its own
-database. A second run reports 0 inserts. Options: `npm run seed -- identity marketplace` (only some services)
+database. On a fresh stack the first run inserts 168 documents (identity 11, marketplace 63, delivery 18, payments 20,
+notifications 19, orders 37) and a second run reports 0 inserts. Options: `npm run seed -- identity marketplace` (only some services)
 and `npm run seed -- --local` (host mode with tsx against the infra stack and the values in `.env`).
 
 Then open:
@@ -41,6 +58,11 @@ Then open:
 | Mailpit inbox (demo emails) | http://localhost:8025 |
 | MinIO console (images, KYC documents) | http://localhost:9001 (user `MINIO_ROOT_USER`, password `MINIO_ROOT_PASSWORD` from `.env`) |
 
+The web container is a non-root nginx (`nginx-unprivileged`, uid 101): it listens on port **8080 inside the
+container** and compose publishes it as host port **5173** (`WEB_HOST_PORT`); the gateway container also listens
+on 8080 and is published on host 8080 (`GATEWAY_HOST_PORT`). Published ports bind to `127.0.0.1` unless
+`PUBLISH_ADDR` is changed.
+
 Stop with `npm run stack:down` (keeps data). For a clean slate use `docker compose down -v` (drops the Mongo,
 Redis and MinIO volumes).
 
@@ -48,9 +70,20 @@ Mongo, Redis and the six services are not published to the host. To reach them f
 `docker compose --profile debug up -d debug-ports` (services on `localhost:14001..14006`, Mongo on
 `localhost:27019` with `directConnection=true`, Redis on `localhost:16379`).
 
-If a port is taken (for example the test infra stack also binds 8025/9000/9001), override it in `.env`:
-`MAILPIT_HOST_PORT=18025 MINIO_HOST_PORT=19000 MINIO_CONSOLE_HOST_PORT=19001` (also `WEB_HOST_PORT`,
-`GATEWAY_HOST_PORT`, `PUBLISH_ADDR`).
+### Host ports
+
+If a port is taken, override it in `.env` (`WEB_HOST_PORT`, `GATEWAY_HOST_PORT`, `MAILPIT_HOST_PORT`,
+`MINIO_HOST_PORT`, `MINIO_CONSOLE_HOST_PORT`, `PUBLISH_ADDR`). The common case: the test infra stack
+(`npm run infra:up`) also binds Mailpit 8025/1025 and MinIO 9000/9001, so while it is running start the full
+stack with
+
+```bash
+MAILPIT_HOST_PORT=18025 MINIO_HOST_PORT=19000 MINIO_CONSOLE_HOST_PORT=19001
+```
+
+added to `.env` (the Mailpit inbox is then http://localhost:18025 and MinIO http://localhost:19000 / 19001).
+`S3_PUBLIC_ENDPOINT` follows `MINIO_HOST_PORT` automatically, so browser uploads keep working. The infra stack's
+Mongo is on 27018 and Redis on 6379; the full stack does not publish them, so there is no clash there.
 
 ## Demo credentials (demo mode only)
 
@@ -61,8 +94,12 @@ If a port is taken (for example the test infra stack also binds 8025/9000/9001),
 | Delivery partners | `+919200000001` (approved, online), `+919200000002` (approved, offline) | OTP `123456` |
 | Admin | `admin@thali.demo` at `/admin` | password `ThaliDemo#2026`, TOTP secret `THALIDEMOTOTPSECRETKEY234567ABCD`; the seed prints both, the otpauth URI and the current 6-digit code. Override with `SEED_ADMIN_PASSWORD` / `SEED_ADMIN_TOTP_SECRET` |
 
-The fixed OTP works only for the numbers in `DEMO_PHONES` while `APP_MODE=demo` and
-`DEMO_OTP_ENABLED=true`. OTP requests are rate limited per phone (5 per hour), so vary the phone when you
+The admin password and TOTP secret are constants in `services/identity/src/seed.ts`; `npm run seed` (the identity
+step) prints the email, password, TOTP secret, the `otpauth://` URI and the current 6-digit code, so you can also
+copy them from the seed output. They exist only in demo data and are never created in production.
+
+The fixed OTP `123456` works only for the numbers in `DEMO_PHONES` while `APP_MODE=demo` and
+`DEMO_OTP_ENABLED=true` (demo phones and the fixed OTP exist in demo mode only; production refuses both). OTP requests are rate limited per phone (5 per hour), so vary the phone when you
 script flows. In production there is no fixed OTP and no demo admin: create admins with the bootstrap CLI
 ([docs/06-deployment.md](docs/06-deployment.md)).
 
@@ -91,14 +128,19 @@ npm run typecheck
 npm test                    # all unit + integration tests (vitest, real Mongo + Redis, parallel-safe)
 npm run test:unit           # no infrastructure needed
 npm run test:int            # only *.int.test.ts
-npm run smoke               # scripted API walk through the running full stack
-npm run e2e                 # stack:up + seed + Playwright against http://localhost:5173
+npm run smoke               # scripted API walk (26 steps) through the running, seeded full stack
+npm run e2e                 # stack:up + seed + Playwright (12 flows + 8 failure scenarios) against http://localhost:5173
 ```
 
+Run `smoke` and `e2e` **sequentially**, never together: they share the demo phones, the demo partners and the
+seeded restaurants' order boards. The e2e suite clears the demo phones' OTP rate-limit counters in the demo Redis
+before it signs in (demo-only, refuses unless `/api/v1/meta` says `demo`; set `E2E_RESET_RATE_LIMITS=0` to
+disable), so repeated runs do not lock the demo numbers.
 Integration tests use `mongodb://localhost:27018/?replicaSet=rs0&directConnection=true` and
 `redis://localhost:6379` with unique database names and Redis prefixes per test file. Running the infra stack
 and the full stack together needs the port overrides above. How to run each suite, and the recorded results,
-are in [docs/10-testing.md](docs/10-testing.md).
+are in [docs/10-testing.md](docs/10-testing.md) (last verified run: build exit 0, 169 test files / 1 375 tests
+passed, seed idempotent, smoke 26/26).
 
 ## Repository layout
 
@@ -116,7 +158,7 @@ services/notifications  SMS / email / in-app with retries, SSE hub
 apps/web                React SPA: consumer, restaurant, partner and admin areas
 e2e/                    Playwright end-to-end and failure-scenario tests
 infra/                  mongo init + keyfile scripts, nginx config
-scripts/                dev.sh, wait-for-health.sh, seed.ts, smoke.ts
+scripts/                dev.sh, gen-env.sh, wait-for-health.sh, seed.ts, smoke.ts
 docs/                   PRD, HLD, LLD, ADRs, provider setup, deployment, runbook, checklist, diagrams
 ```
 
@@ -139,7 +181,7 @@ docs/                   PRD, HLD, LLD, ADRs, provider setup, deployment, runbook
 `.env.example` documents every variable, grouped per service, with `# SECRET` markers. Compose fixes the
 container topology (per-service Mongo user and URI, `http://<svc>:<port>` peers, JWKS, MinIO endpoints), so
 the localhost values in `.env` only apply to `npm run dev`. Regenerate every `# SECRET` value for anything
-other than a local demo:
+other than a local demo with `scripts/gen-env.sh` (see Quick start); by hand that is:
 
 ```bash
 openssl rand -base64 32     # FIELD_ENCRYPTION_KEY (base64 of exactly 32 bytes)
@@ -147,14 +189,17 @@ openssl rand -hex 32        # INTERNAL_SERVICE_SECRET, peppers, webhook secrets,
 ```
 
 `APP_MODE=production` refuses to start with any mock provider, Mailpit, the demo geo provider, any truthy
-`DEMO_*` variable, an `INTERNAL_SERVICE_SECRET` shorter than 32 characters or no `JWT_PRIVATE_KEY_PEM`.
+`DEMO_*` variable, any value containing the `thali-demo-` placeholder marker (raw, inside a URI or
+base64-encoded), `COOKIE_SECURE=false`, an `INTERNAL_SERVICE_SECRET` shorter than 32 characters or no
+`JWT_PRIVATE_KEY_PEM`.
 
 ## Common problems
 
 | Symptom | Fix |
 |---|---|
 | `stack:up` fails with `set X in .env` | `cp .env.example .env` (compose requires the secrets) |
-| Port already allocated | Override the `*_HOST_PORT` variable in `.env` (see above) |
+| Port already allocated | Override the `*_HOST_PORT` variable in `.env` (see "Host ports") |
+| Production start refused: "demo placeholder" | A `thali-demo-` value from `.env.example` is still in use: run `scripts/gen-env.sh` |
 | Browser upload fails with a DNS error for `minio` | `S3_PUBLIC_ENDPOINT` must be reachable by the browser (compose sets `http://localhost:${MINIO_HOST_PORT}`) |
 | `Too many open files` from Mongo | compose sets `nofile 64000`; on Docker Desktop/Colima raise the VM limit |
 | Tests fail with `ECONNREFUSED ::1:27018` | `npm run infra:up`; the infra Mongo uses `restart: unless-stopped` |

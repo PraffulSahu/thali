@@ -214,3 +214,84 @@ shorter than 32 characters and a missing `JWT_PRIVATE_KEY_PEM`. `sandbox` may ru
 credentials or mocks; the gateway `/api/v1/meta` labels every provider `demo`, `sandbox` or `live` so the
 UI banner is honest. The gateway reports whatever `*_PROVIDER` values it is given, so they must mirror the
 services' values.
+
+## ADR-028 Admin manual refunds are validated per child order through orders
+Context: `POST /api/v1/admin/finance/refunds` could name any `childOrderId`/`restaurantId`; the per-child cap
+was assumed to be enforced by orders, but orders only sees the refunds it requests itself. A manual refund
+could therefore be attributed to the wrong checkout or restaurant, or exceed what the child had left.
+Decision: when the request carries a `childOrderId`, payments calls orders `GET /internal/orders/child/:id`
+(which returns the child's `checkoutGroupId`, `restaurantId`, `totalPaise` and `committedRefundPaise`) inside
+the refund transaction and refuses with 422 `REFUND_TARGET_MISMATCH` (details `reason`: `CHILD_NOT_IN_PAYMENT`,
+`RESTAURANT_MISMATCH` or `CHILD_NOT_FOUND`) a child outside the payment's checkout, a restaurant that is not the
+child's, or an unknown child. The amount must be at most `child total - max(payments non-FAILED refunds for the
+child, orders committedRefundPaise)`, else 422 `REFUND_EXCEEDS_REMAINING` (details carry the remaining paise).
+The intent reservation write makes concurrent refunds on one payment conflict and retry, so the per-child sum is
+re-read before a second refund commits. In the other direction orders ignores (and logs the alert
+`REFUND_CHECKOUT_MISMATCH` for) a refund event whose checkout is not the child's. Admin cancel through the order
+screen has its own `REFUND_EXCEEDS_REMAINING` check against `remainingRefundable(child)`.
+Consequence: one extra synchronous call to orders on child-scoped manual refunds (payments depends on orders
+being reachable for those); refunds without a `childOrderId` keep the payment-level cap only
+(`REFUND_EXCEEDS_CAPTURED`). Supersedes the earlier assumption that orders enforces the per-child cap.
+
+## ADR-029 Admin "Delivery failed" ends the delivery job through `order.delivery_failed`
+Context: an admin can mark a child order `DELIVERY_FAILED` from the order screen. Delivery did not hear about it,
+so the job stayed live (the partner kept it, capacity stayed consumed) while the order was terminal.
+Decision: delivery consumes `order.delivery_failed`: a `PICKED_UP`/`OUT_FOR_DELIVERY` job moves to `FAILED`
+(actor `ADMIN`, which the delivery transition table allows; `SYSTEM` is not), a pre-pickup job moves to
+`CANCELLED` with its offers cancelled, partner capacity is released, a terminal job is a no-op, and an order with
+no job is logged and ignored. Delivery emits `delivery.failed` only for the `FAILED` case. Orders treats a
+`delivery.failed` for a child that is already `DELIVERY_FAILED` as already applied (mirror update only, no second
+transition and no second `order.delivery_failed`), which prevents a loop. The admin's free-text reason stays on
+the order; the event reason sent to payments is the `DELIVERY_FAILED` enum.
+Consequence: two paths can fail a delivery (admin order screen and admin TMS `POST .../jobs/:id/fail`); both end
+in the same terminal job state. Known residual (see launch checklist): a retried event for a tombstoned order with
+no job can throw `NOT_FOUND` and reach the dead-letter queue (noise; visible in the admin dead-letter view).
+
+## ADR-030 Demo payment routes require sign-in and the intent owner
+Context: the demo pay page and its `complete` call run the real webhook pipeline for any intent id, so in a shared
+sandbox anyone who learned an intent id could pay or fail another customer's checkout.
+Decision: `GET /api/v1/demo-pay/:intentId` and `POST /api/v1/demo-pay/:intentId/complete` require a bearer token
+and serve only the intent's owner (`intent.userId`); anyone else gets 404 (existence is not revealed). The routes
+still exist only while `PAYMENT_PROVIDER=mock` and never in production. The web demo-pay page, `scripts/smoke.ts`
+and the e2e helpers send the customer's bearer token.
+Consequence: scripting a demo payment needs the customer's access token (not just the intent id); this applies
+in `demo` and `sandbox` alike. Amends ADR-011.
+
+## ADR-031 Ops routes accept only the gateway and notifications
+Context: every service mounts the service-kit ops routes (`/internal/health/details`, dead-letter list and replay). They were callable by any service holding a valid service token, so a compromised peer (for example
+delivery) could read or replay another service's dead letters.
+Decision: `registerOpsRoutes` defaults `allowed` to `DEFAULT_OPS_CALLERS = ['gateway', 'notifications']`: the
+gateway (`GET /api/v1/admin/health` fan-out) and notifications (dead-letter aggregation and replay for the admin
+console) are the only real callers. A service may pass an explicit list to widen or narrow it; an empty list keeps
+the legacy "any service with a valid token" behaviour (used only in tests). The gateway itself has no
+`/internal/health/details` (it has no Mongo or outbox) and never routes `/internal/*` to the public.
+Consequence: the runbook's service-token helper must mint a token with `iss` equal to `gateway` or `notifications`
+(its default is `gateway`).
+
+## ADR-032 Placeholder secrets are rejected in production; `scripts/gen-env.sh` creates real ones
+Context: `.env.example` has to boot out of the box, so it ships placeholder secrets. Nothing stopped a production
+deployment from copying `.env.example` and running with those public values.
+Decision: every placeholder secret in `.env.example` carries the marker `thali-demo-` (`FIELD_ENCRYPTION_KEY` is a
+base64 value that decodes to bytes beginning with it). `loadConfig` in service-kit refuses to start with
+`APP_MODE=production` if any environment value contains the marker (raw, inside a connection URI such as a Mongo
+URL, or base64-encoded), naming the variable but never echoing the value. `scripts/gen-env.sh [file] [--force]`
+writes a `.env` from `.env.example` with every marked placeholder replaced by `openssl rand` output (base64 of 32
+bytes for `FIELD_ENCRYPTION_KEY`, 32 hex bytes otherwise so passwords stay URL-safe), mode 600, no overwrite
+without `--force`, and aborts if any marker survives. It changes nothing else. The same pass made identity refuse
+`COOKIE_SECURE=false` in production.
+Consequence: the guard scans all variables, so a literal `thali-demo-` inside an unrelated production value
+(for example a URL) is also refused. Pre-existing seeded databases need `docker compose down -v` to pick up
+`isDemo` flags added at the same time (demo only).
+
+## ADR-033 Membership `payment.failed` is mirror-only as well
+Context: ADR-014 made orders mirror-only for `payment.failed` on checkouts because Razorpay lets the customer
+retry on the same provider order. Marketplace initially cancelled a membership on the first failure, so a
+successful retry would arrive for a cancelled membership and be treated as a late payment.
+Decision: for `purpose=MEMBERSHIP`, marketplace only records `lastPaymentFailure` (reason, intent id, time) and
+keeps the membership `PENDING_PAYMENT`. A repeated purchase reuses the same membership and payment intent
+(`lastAttemptAt` is refreshed). A sweeper (`MEMBERSHIP_PENDING_TTL_SEC`, default 900 s) takes pending memberships
+idle past the TTL, asks payments for the intent by reference and reconciles it with the provider: `CAPTURED`
+activates (the same path as `payment.captured`), anything else (or no intent) cancels; a later capture still
+activates a cancelled membership. If payments is unreachable the row is backed off (`RESERVATION_RECHECK_SEC`).
+Consequence: an abandoned membership purchase stays `PENDING_PAYMENT` for up to the TTL plus one sweep interval;
+a tracked `AMOUNT_MISMATCH` row is not backed off (known minor, see launch checklist).

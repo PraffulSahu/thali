@@ -4,9 +4,9 @@ How the automated tests are organised, how to run each layer, and where the reco
 requirements behind the tests are the "minimum tests" of the brief; the mapping from requirement to test file is
 in section 4.
 
-> **Status of this document.** Sections 1 to 5 are final. **Section 6 (results) is intentionally empty until the
-> final verification run** (`npm run build && npm test && npm run smoke && npm run e2e` from a clean
-> `docker compose down -v`). No result numbers are claimed anywhere else in the documentation.
+> **Status of this document.** Sections 1 to 5 describe how the suites work. Section 6 records the controller-verified
+> results of the final run on a fresh stack built from committed code (build, 169 test files / 1 375 tests, seed,
+> smoke 26/26, Playwright e2e 29/29). Nothing else in the documentation claims result numbers.
 
 ## 1. Layers
 
@@ -54,12 +54,39 @@ npm run test -w @thali/web
 Full stack suites (demo mode):
 
 ```bash
-cp .env.example .env
-npm run stack:up         # docker compose up -d --build --wait
-npm run seed             # idempotent demo data
-npm run smoke            # scripted API walk (prints PASS/FAIL per step, non-zero exit on failure)
-npm run e2e              # stack:up + seed + Playwright (npm run test -w @thali/e2e)
+cp .env.example .env                 # demo placeholders; use scripts/gen-env.sh for anything that is not a local demo
+npm run stack:up                     # docker compose up -d --build --wait
+npm run seed                         # idempotent demo data: 168 documents on a fresh stack, 0 on the second run
+npm run smoke                        # scripted API walk (26 steps, PASS/FAIL per step, non-zero exit on the first failure)
+npm run e2e                          # stack:up + seed + Playwright (12 completion flows + 8 system failure scenarios)
+npm run test -w @thali/e2e           # Playwright only, against an already running and seeded stack
+cd e2e && npx playwright test tests/08-partial-rejection.spec.ts    # one spec
 ```
+
+Each command in one line:
+
+| Command | What it does | Needs |
+|---|---|---|
+| `npm run build` | `tsc -b` for the three packages and six services, then the Vite web build | nothing |
+| `npx vitest run` (same as `npm test`) | all unit + integration tests, every workspace project | `npm run infra:up` |
+| `npm run seed` | runs each service's own seed inside its container (identity, marketplace, delivery, payments, notifications, orders); refuses unless `APP_MODE=demo`; `-- --local` runs with tsx against the infra stack | the full stack |
+| `npm run smoke` | `scripts/smoke.ts`: multi-restaurant checkout through the public API (env: `SMOKE_BASE_URL`, `SMOKE_ORIGIN`, `SMOKE_TIMEOUT_SEC`) | the full stack, seeded |
+| `npm run e2e` | Playwright in `e2e/` (config `e2e/playwright.config.ts`: Chromium, one worker, serial, no retries, 240 s per test, HTML report in `e2e/playwright-report`, traces/screenshots/video kept on failure in `e2e/test-results`) | Docker, Playwright browsers (`npx playwright install chromium`) |
+
+**Run smoke and e2e sequentially, never in parallel.** They share the demo phones (OTP cooldowns and hourly
+limits), the demo partners and the seeded restaurants' order boards; two concurrent drivers would compete for the
+same partner offers.
+
+**E2E rate-limit reset (demo only).** The e2e suite signs in about 20 times per run from one IP, while identity
+allows 20 OTP requests per IP per hour, 5 per phone per hour and a 30 s resend cooldown. Before the flows that
+sign in, `e2e/fixtures/stack.ts` (`resetAuthRateLimits`) deletes exactly these Redis keys in the demo Redis through
+`docker compose exec redis redis-cli DEL`: the demo phones' OTP cooldown/hour counters, the OTP and admin-login
+counters of the test client's IP (the compose network gateway, as the services see it) and the demo admin's
+login counter. It refuses to run unless `GET /api/v1/meta` reports `mode=demo`. Set `E2E_RESET_RATE_LIMITS=0`
+to disable it (then re-runs within the hour hit 429); `E2E_REDIS_KEY_PREFIX` (default `thali:`) must match
+the stack's `REDIS_KEY_PREFIX`. Rate limiting itself is covered by the identity and gateway tests, not by the
+e2e flows. Smoke does not reset anything; it rotates through the three demo consumer phones and caches owner and
+partner refresh sessions in the OS temp dir.
 
 Notes
 
@@ -81,7 +108,7 @@ Notes
 | `npm run build` | Production build of every package, service and the SPA |
 | `npm test` | All unit and integration tests, including OpenAPI coverage tests per service |
 | `npm run smoke` | Happy path through the real stack |
-| `npm run e2e` | The 12 completion criteria and the failure scenarios |
+| `npm run e2e` | The 12 completion criteria and the 8 system failure scenarios |
 | `npm audit` (manual, not a script) | Dependencies are exact-pinned; advisory-driven replacements are recorded in ADR-017/018; record the output in section 6 if run |
 
 ## 4. Requirement to test mapping
@@ -121,15 +148,35 @@ Notes
 | SSE through the gateway proxy, heartbeat, polling fallback | `services/gateway/test/sse-proxy.test.ts`; `services/notifications/test/sse.int.test.ts`; `apps/web/test/useRealtime.test.ts` |
 | Same item, different customizations | `services/orders/test/cart.int.test.ts`, `services/marketplace/test/quote.int.test.ts` |
 
-### 4.3 End-to-end and system scenarios (`e2e/`, Playwright against the demo stack)
+### 4.3 End-to-end and system scenarios (`e2e/tests`, Playwright against the demo stack)
 
-Tasks 21 and 22 own these specs; the list below is the intended coverage and is reconciled with the real files
-in the final pass.
+Twelve completion flows (10 spec files, 20 test definitions: flow 11 has one test per service plus the Swagger
+check, flow 12 has three) and eight system failure scenarios (8 spec files, 9 test definitions), so 29 Playwright
+tests in 18 files:
 
-| Spec group | Covers |
+| Spec | Covers |
 |---|---|
-| 12 completion flows | guest discovery by address; cart survives OTP sign-in; server totals and payment start; verified payment places children once; restaurant isolation; partner accept/pickup/deliver; consumer sees accurate progress; partial rejection and refund; business email plus admin approval; unauthorized and invalid transitions; OpenAPI coverage; startup from the README with all containers healthy |
-| Failure scenarios | duplicate webhooks (5x, and failed-after-captured), payment recovery with `docker compose stop orders`, stock race (parallel checkouts for a stock-1 item), coupon race (`FLAT100`, limit 1), assignment race (3 partners, 1 winner), notification retry with the demo fail-mode toggle, duplicate checkout (same key in parallel), split delivery outcome |
+| `01-guest-discovery` | flow 1: guest discovery by address; outside every service area gives the "we do not deliver here" state |
+| `02-cart-login-preserve` | flow 2: two-restaurant guest cart survives OTP sign-in |
+| `03-04-checkout-payment` | flows 3 and 4: server totals re-derived from first principles, demo payment, child orders placed exactly once |
+| `05-restaurant-isolation` | flow 5: each owner sees and acts on only their own child order; cross-restaurant actions refused |
+| `06-07-delivery-tracking` | flows 6 and 7: partner online, offer, accept, arrive, pickup code, start, delivery code; the customer follows every step |
+| `08-partial-rejection` | flow 8: A accepted, B rejected with reason, refund SUCCEEDED for exactly B, payment PARTIALLY_REFUNDED |
+| `09-restaurant-activation` | flow 9: business email verification (real Mailpit mail) plus admin approval gate activation |
+| `10-unauthorized` | flow 10: 401/403/404/409 with the standard envelope and no state change; UI no-access states |
+| `11-openapi-coverage` | flow 11: every registered route of every service is in its OpenAPI spec and in the gateway's public spec; Swagger UI loads |
+| `12-startup` | flow 12: all containers healthy, gateway ready, `/meta` demo, web served, README lists the start commands |
+| `system/duplicate-webhooks` | 5x replay and out-of-order webhooks; failed attempt then successful retry on the same provider order |
+| `system/payment-recovery` | `docker compose stop orders` during capture: PLACED within 60 s of restart, exactly once |
+| `system/stock-race` | 5 parallel checkouts for the last unit: exactly one succeeds |
+| `system/coupon-race` | 3 parallel checkouts with a limit-1 coupon: exactly one gets it |
+| `system/assignment-race` | 3 partners accept the same job concurrently: exactly one wins |
+| `system/notification-retry` | SMS outage (demo fail mode): FAILED with retries, SENT after recovery |
+| `system/duplicate-checkout` | same Idempotency-Key three times in parallel: one checkout |
+| `system/delivery-split-outcome` | one part delivered, one failed: IN_PROGRESS, admin cancel with refund, PARTIALLY_COMPLETED |
+
+The 12 flows and the system scenarios deliberately run serially in one worker. The failure scenarios stop and
+start containers (`orders`) and toggle demo failure modes, so they must not run against a stack that someone else is using.
 
 ## 5. Interpreting failures
 
@@ -143,34 +190,37 @@ in the final pass.
 
 ## 6. Recorded results
 
-**RESULTS PENDING.** To be filled in after the final clean run. Do not edit the numbers by hand: paste the real
-command output summaries.
+Controller-verified on 2026-10-10/11 on a fresh `docker compose down -v` stack built from committed code (branch
+`build/platform`, `.env` copied from `.env.example` plus the `MAILPIT_HOST_PORT=18025 MINIO_HOST_PORT=19000
+MINIO_CONSOLE_HOST_PORT=19001` overrides because the infra stack was running; compose build and `up --wait`
+exit 0, all 12 long-running containers healthy, `/api/v1/meta` mode `demo`, web 200). Unit and integration tests ran against the
+infra stack (Mongo replica set, Redis, MinIO).
 
-| Command | Date / commit | Environment | Result summary | Duration | Notes |
-|---|---|---|---|---|---|
-| `npm run build` | _pending_ | _pending_ | _pending_ | _pending_ | |
-| `npm run typecheck` | _pending_ | _pending_ | _pending_ | _pending_ | |
-| `npm test` | _pending_ | _pending_ | _pending_ | _pending_ | per-project file/test counts |
-| `npm run smoke` | _pending_ | _pending_ | _pending_ | _pending_ | step-by-step PASS/FAIL list |
-| `npm run e2e` | _pending_ | _pending_ | _pending_ | _pending_ | spec counts, HTML report path |
-
-Per-project `npm test` counts:
-
-| Project | Files | Tests | Result |
+| Command | Result | Duration | Notes |
 |---|---|---|---|
-| `@thali/contracts` | _pending_ | _pending_ | _pending_ |
-| `@thali/pricing` | _pending_ | _pending_ | _pending_ |
-| `@thali/service-kit` | _pending_ | _pending_ | _pending_ |
-| `@thali/gateway` | _pending_ | _pending_ | _pending_ |
-| `@thali/identity` | _pending_ | _pending_ | _pending_ |
-| `@thali/marketplace` | _pending_ | _pending_ | _pending_ |
-| `@thali/orders` | _pending_ | _pending_ | _pending_ |
-| `@thali/payments` | _pending_ | _pending_ | _pending_ |
-| `@thali/delivery` | _pending_ | _pending_ | _pending_ |
-| `@thali/notifications` | _pending_ | _pending_ | _pending_ |
-| `@thali/web` | _pending_ | _pending_ | _pending_ |
+| `npm run build` | **exit 0** | n/a | `tsc -b` for all packages and services, then the web Vite build |
+| `npx vitest run` | **169 test files, 1 375 tests passed, 0 failed** | about 134 s | unit + integration; some logged error noise in the consumer `PaymentStep` component test, no failures |
+| `npm run seed` (first run) | **168 documents inserted**: identity 11, marketplace 63, delivery 18, payments 20, notifications 19, orders 37 | n/a | |
+| `npm run seed` (second run) | **0 inserted** | n/a | idempotent |
+| `npm run smoke` | **26/26 steps PASS** | n/a | multi-restaurant checkout `TH-...`: A accepted and delivered, B rejected, B refund SUCCEEDED, payment PARTIALLY_REFUNDED, checkout PARTIALLY_COMPLETED |
+| `npm run test -w @thali/e2e` (Playwright, Chromium, 1 worker: 12 completion flows + 8 system failure scenarios) | **29 passed, 0 failed** | 3.9 min | completion flows 01-12 = 20 tests (including OpenAPI coverage for all 7 services plus the Swagger UI listing, and startup/health); system failure scenarios = 9 tests (assignment-race, coupon-race, delivery-split-outcome, duplicate-checkout, duplicate-webhooks x2 including failed-then-captured retry, notification-retry: SMS outage then FAILED with retries then SENT, payment-recovery: orders down during capture then PLACED once after restart, stock-race) |
 
-Known failures, skips and flakes at the time of the run (with reason and owner): _pending_.
+Smoke steps (all PASS): platform meta (demo mode); discovery lists both demo restaurants; menus with customizations;
+guest cart token; guest cart with 2 restaurants; demo OTP login with guest cart merge; merged cart belongs to the
+user; checkout preview; create checkout (Idempotency-Key); demo pay success; both child orders PLACED after
+capture; owner A, owner B and partner sign in; partner online with a location ping; restaurant A accepts;
+restaurant B rejects; B refund SUCCEEDED with the full B share, payment PARTIALLY_REFUNDED and adjusted totals;
+A preparing and ready for pickup; dispatch offers the job; partner accepts; arrived and pickup with the restaurant
+code; start delivery; deliver with the customer code; child A DELIVERED and checkout PARTIALLY_COMPLETED; partner
+goes offline.
+
+Not recorded in this verification run (so not claimed): `npm run typecheck` as a separate gate (the build runs
+`tsc -b` for packages and services; e2e specs are type-checked only by `npm run typecheck`), `npm audit` output,
+and per-project test counts (only the totals above were reported).
+
+Known failures, skips and flakes at the time of the run: none in the build, vitest, seed, smoke and e2e results. One
+earlier machine-load flake class is documented: integration hooks use a 120 s timeout because of parallel
+Mongo load, and Mongo restarts under extreme parallel load (`restart: unless-stopped` recovers it).
 
 Things the automated suites do **not** prove (carried to the launch checklist): live Razorpay/Twilio/Resend/
 Google/S3 behaviour, load and soak behaviour, backup restore, mobile-browser GPS quality, accessibility with a

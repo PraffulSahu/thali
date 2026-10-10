@@ -66,7 +66,8 @@ console.log(r.status, await r.text());"
 ### 0.3 Call an internal endpoint (service token)
 
 Internal routes (`/internal/*`) are never exposed at the gateway. Mint a 60 s token with the target's secret
-inside any backend container; `from` must be a service the route allows.
+inside any backend container; `from` must be a service the route allows. The ops routes (`/internal/health/details`, `/internal/dead-letters*`) accept only `gateway` and
+`notifications` as `from` (ADR-031).
 
 ```bash
 internal() {  # usage: internal <svc-container> <port> <from> <METHOD> <path>

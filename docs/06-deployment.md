@@ -41,8 +41,9 @@ docker build -f apps/web/Dockerfile -t <registry>/thali/web:<git-sha> .
   `/health/live`. The install and shared-package stages are byte-identical across services, so BuildKit caches
   them once.
 - Tag with the git SHA (not `latest`); promote the same digest from staging to production.
-- The web image is nginx serving the built SPA and proxying `/api` to `gateway:8080`
-  (`infra/nginx/web.conf`; SSE location unbuffered). You can instead host the static build on S3 + CloudFront
+- The web image is non-root nginx (`nginxinc/nginx-unprivileged`, uid 101) listening on **8080** (no privileged
+  port), serving the built SPA and proxying `/api` to `gateway:8080` (`infra/nginx/web.conf`; SSE location
+  unbuffered). In compose host port 5173 maps to the container's 8080; on ECS the target group port is 8080. You can instead host the static build on S3 + CloudFront
   and route `/api/*` to the gateway at the load balancer (section 4).
 
 ## 3. Topology on ECS Fargate
@@ -166,7 +167,8 @@ Store secrets in AWS Secrets Manager (or SSM Parameter Store SecureString) and i
 `secrets`; plain tunables go in task `environment`. Never bake secrets into images. `.env` is for local use
 only and is git-ignored.
 
-Generate with:
+Generate with `scripts/gen-env.sh` (writes a `.env` from `.env.example` with every `thali-demo-` placeholder
+replaced by `openssl rand` output, mode 600; it does not touch providers or modes), or by hand:
 
 ```bash
 openssl rand -hex 32       # INTERNAL_SERVICE_SECRET (>= 32 chars required in production), OTP_PEPPER, mongo/other passwords
@@ -199,14 +201,20 @@ PAYMENT_PROVIDER=razorpay   SMS_PROVIDER=twilio   EMAIL_PROVIDER=resend   GEO_PR
 # unset MAILPIT_URL; no MOCK_WEBHOOK_SECRET needed
 ```
 
+Also refused in production (fail fast at startup, without echoing the value): any environment value containing the
+`.env.example` placeholder marker `thali-demo-` (raw, inside a connection URI, or base64-encoded; ADR-032), and
+`COOKIE_SECURE=false` on identity (leave it empty). Generate real secrets with `scripts/gen-env.sh`.
+
 The images contain the demo seeds (`dist/seed.js`); every seed refuses to run unless `APP_MODE=demo`. Never seed
 staging or production, and never run `npm run seed` against them.
 
 Everything else (timeouts, windows, limits) has a safe default in code; the full list with descriptions is
-`.env.example`. A few optional tunables exist in code but not in `.env.example`:
-`ACCEPT_TIMEOUT_INTERVAL_MS` (orders, 15 000), `RESERVATION_GRACE_SEC` (300), `RESERVATION_EXTEND_SEC` (300),
-`RESERVATION_SWEEP_INTERVAL_MS` (60 000), `RESERVATION_RECHECK_SEC` (60), `MEMBERSHIP_PENDING_TTL_SEC` (900)
-(all marketplace) and `S3_PUBLIC_ENDPOINT` (marketplace, delivery; leave empty on AWS).
+`.env.example`, which includes the sweeper and timeout tunables: `ACCEPT_TIMEOUT_INTERVAL_MS` (orders, 15 000),
+`RESERVATION_GRACE_SEC` (300), `RESERVATION_EXTEND_SEC` (300), `RESERVATION_SWEEP_INTERVAL_MS` (60 000),
+`RESERVATION_RECHECK_SEC` (60), `MEMBERSHIP_PENDING_TTL_SEC` (900) (all marketplace), `S3_PUBLIC_ENDPOINT`
+(marketplace, delivery; leave empty on AWS) and `PAYMENTS_HTTP_TIMEOUT_MS` (orders and marketplace to payments,
+12 000). The timeout budget chain is `PAYMENT_PROVIDER_TIMEOUT_MS` (8 000) < `PAYMENTS_HTTP_TIMEOUT_MS`
+(12 000) < gateway `UPSTREAM_TIMEOUT_MS` (15 000); raise them together.
 
 ## 8. First deployment, step by step
 
