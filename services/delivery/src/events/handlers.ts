@@ -20,6 +20,7 @@ import type { EventHandlers } from '@thali/service-kit';
 import type { DeliveryContext } from '../context.js';
 import { hashCode } from '../domain/codes.js';
 import { toLatLng } from '../domain/geo.js';
+import { areaFromAddress } from '../domain/views.js';
 import { cancelOpenOffers, emit, historyEntry, releasePartnerCapacity, transitionJob } from '../domain/job-state.js';
 import { TERMINAL_JOB_STATUSES, type JobLean } from '../models/delivery-job.js';
 
@@ -43,7 +44,14 @@ export function createEventHandlers(ctx: DeliveryContext): EventHandlers {
           restaurantId: p.restaurantId,
           customerUserId: p.userId,
           pickup: { name: p.pickup.name, address: p.pickup.address, location: p.pickup.location },
-          drop: { name: p.drop.name, address: p.drop.address, location: p.drop.location, phoneMasked: p.drop.phoneMasked },
+          drop: {
+            name: p.drop.name,
+            address: p.drop.address,
+            location: p.drop.location,
+            phoneMasked: p.drop.phoneMasked,
+            area: p.drop.area?.trim() || areaFromAddress(p.drop.address),
+            label: p.drop.label?.trim() || null,
+          },
           status: 'PENDING_ASSIGNMENT',
           dispatchRound: 0,
           nextDispatchAt: now,

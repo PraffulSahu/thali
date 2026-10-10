@@ -25,6 +25,10 @@ const dropSchema = new Schema(
     address: { type: String, required: true },
     location: { type: pointSchema, required: true },
     phoneMasked: { type: String, default: '' },
+    /** DLV-2: locality shown on offers instead of the address (fallback: pincode parsed from `address`). */
+    area: { type: String, default: null },
+    /** DLV-2: address label (Home / Work / …), shown only after assignment. */
+    label: { type: String, default: null },
   },
   { _id: false },
 );

@@ -64,6 +64,24 @@ const LatLng = GeoPointSchema;
 const iso = z.string().nullable();
 const Place = z.object({ name: z.string(), address: z.string(), location: LatLng });
 const Drop = Place.extend({ phoneMasked: z.string() });
+const area = z.string().nullable().describe('Drop locality (falls back to the pincode for older jobs)');
+const AdminDrop = Drop.extend({ area, label: z.string().nullable() });
+/** DLV-2: address + coordinates are null until the food is picked up (`addressRevealed`). */
+const PartnerDrop = z
+  .object({
+    name: z.string(),
+    area,
+    label: z.string().nullable().describe('Address label (Home / Work …)'),
+    address: z.string().nullable(),
+    location: LatLng.nullable(),
+    addressRevealed: z.boolean().describe('false before PICKED_UP: only area + label are shared'),
+    phoneMasked: z.string(),
+  })
+  .meta({ id: 'PartnerJobDrop' });
+/** DLV-2: an offered (not yet assigned) partner sees only the drop area and its distance from pickup. */
+const OfferDrop = z
+  .object({ area, distanceFromPickupKm: z.number().describe('pickup → drop distance, rounded to 0.1 km') })
+  .meta({ id: 'OfferDrop', example: { area: 'HAL 2nd Stage', distanceFromPickupKm: 3.2 } });
 
 export const PartnerView = z
   .object({
@@ -98,7 +116,7 @@ export const PartnerJobView = z
     childOrderId: z.string(),
     status: z.enum(enumValues(DeliveryStatus)),
     pickup: Place,
-    drop: Drop,
+    drop: PartnerDrop,
     distanceKm: z.number(),
     estimatedMinutes: z.number(),
     estimateSource: z.enum(enumValues(EstimateSource)),
@@ -106,7 +124,7 @@ export const PartnerJobView = z
     readyEta: iso,
     readyAt: iso,
     codeAttemptsRemaining: z.number().int(),
-    navigation: z.object({ pickupUrl: z.string(), dropUrl: z.string() }),
+    navigation: z.object({ pickupUrl: z.string(), dropUrl: z.string().nullable().describe('null until pickup (DLV-2)') }),
     assignedAt: iso,
     pickedUpAt: iso,
     deliveredAt: iso,
@@ -127,7 +145,7 @@ export const AdminJobView = z
     partnerId: z.string().nullable(),
     partnerUserId: z.string().nullable(),
     pickup: Place,
-    drop: Drop,
+    drop: AdminDrop,
     dispatchRound: z.number().int(),
     exception: z.boolean(),
     exceptionReason: z.string().nullable(),
@@ -162,7 +180,7 @@ export const OfferView = z
     distanceToPickupKm: z.number(),
     batchEvaluation: BatchEvaluationSchema,
     job: z
-      .object({ childOrderId: z.string(), pickup: Place, drop: Place, distanceKm: z.number(), estimatedMinutes: z.number(), estimateSource: z.enum(enumValues(EstimateSource)), readyEta: iso })
+      .object({ childOrderId: z.string(), pickup: Place, drop: OfferDrop, distanceKm: z.number(), estimatedMinutes: z.number(), estimateSource: z.enum(enumValues(EstimateSource)), readyEta: iso })
       .nullable(),
   })
   .meta({ id: 'DeliveryOffer' });
