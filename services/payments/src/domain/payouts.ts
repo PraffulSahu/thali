@@ -182,6 +182,7 @@ export function payoutView(p: PayoutAttrs) {
     confirmedAt: p.confirmedAt ? new Date(p.confirmedAt).toISOString() : null,
     failureReason: p.failureReason ?? null,
     notes: p.notes ?? null,
+    isDemo: p.isDemo ?? false,
     createdAt: new Date(p.createdAt).toISOString(),
     updatedAt: new Date(p.updatedAt).toISOString(),
   };

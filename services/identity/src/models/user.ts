@@ -37,6 +37,8 @@ export interface UserDoc {
   addresses: Types.DocumentArray<AddressDoc & Types.Subdocument>;
   notificationPrefs: NotificationPrefs;
   deletedAt?: Date | null;
+  /** Demo seed account (APP_MODE=demo). */
+  isDemo: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -81,6 +83,7 @@ const UserSchema = new Schema<UserDoc>(
       marketingEmail: { type: Boolean, default: DEFAULT_NOTIFICATION_PREFS.marketingEmail },
     },
     deletedAt: { type: Date, default: null },
+    isDemo: { type: Boolean, default: false },
   },
   { collection: 'users', timestamps: true },
 );

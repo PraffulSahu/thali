@@ -30,6 +30,8 @@ export const menuItemSchema = new Schema(
     reservedQty: { type: Number, default: 0, min: 0 },
     customizationGroups: { type: [groupSchema], default: [] },
     tags: { type: [String], default: [] },
+    /** Demo seed data (APP_MODE=demo). */
+    isDemo: { type: Boolean, default: false },
   },
   { timestamps: true, optimisticConcurrency: true, collection: 'menu_items' },
 );

@@ -107,6 +107,15 @@ describe('refunds from order events', () => {
     expect((await intentDoc(intent.id)).status).toBe('CAPTURED'); // not refunded until provider confirms
   });
 
+  it('a refund inherits isDemo from its payment intent', async () => {
+    const { intent, checkoutId } = await capturedIntent();
+    await h.ctx.models.PaymentIntent.updateOne({ _id: intent._id }, { $set: { isDemo: true } });
+    const childOrderId = oid();
+    await runHandler(envelope('order.rejected', { childOrderId, checkoutId, userId: intent.userId, restaurantId: oid(), reason: 'x', refundPaise: 100 }));
+    const [refund] = await refundsFor(childOrderId);
+    expect(refund).toMatchObject({ isDemo: true, amountPaise: 100 });
+  });
+
   it('RESTAURANT_TIMEOUT rejection and customer cancellation map to their refund reasons; zero refunds are skipped', async () => {
     const { intent, checkoutId } = await capturedIntent();
     const c1 = oid();

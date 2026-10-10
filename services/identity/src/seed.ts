@@ -41,6 +41,7 @@ const user = (key: string, phone: string, name: string, roles: string[], extra: 
   roles,
   adminRoles: [],
   status: 'ACTIVE',
+  isDemo: true,
   ...extra,
 });
 
@@ -88,6 +89,7 @@ export async function seedIdentity(conn: Connection, opts: IdentitySeedOptions):
       roles: ['CONSUMER', 'ADMIN'],
       adminRoles: ['SUPER_ADMIN'],
       status: 'ACTIVE',
+      isDemo: true,
     },
   ], report);
 

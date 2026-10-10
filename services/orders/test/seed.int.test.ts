@@ -56,6 +56,9 @@ describe('seedOrders', () => {
     const view = customerOrderDetail(g, kids) as { explanations?: { kind: string }[] };
     expect(view.explanations?.map((e) => e.kind)).toEqual(['REJECTED']);
 
+    expect(await getModels(db.conn).RestaurantProjection.countDocuments({ isDemo: { $ne: true } })).toBe(0);
+    expect(await ChildOrder.countDocuments({ isDemo: { $ne: true } })).toBe(0);
+
     const second = await seedOrders(db.conn);
     expect(Object.values(second).every((t) => t.inserted === 0)).toBe(true);
   });

@@ -19,6 +19,8 @@ export interface LedgerEntryAttrs {
   dedupeKey: string;
   memo: string;
   createdBy: string;
+  /** Demo seed data (APP_MODE=demo) — lets finance views tell demo money apart. */
+  isDemo: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -36,6 +38,7 @@ const schema = new Schema<LedgerEntryAttrs>(
     dedupeKey: { type: String, required: true },
     memo: { type: String, default: '' },
     createdBy: { type: String, required: true },
+    isDemo: { type: Boolean, default: false },
   },
   { collection: 'ledger_entries', timestamps: true, versionKey: false },
 );

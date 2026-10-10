@@ -104,6 +104,7 @@ function refundDocs(co: DemoCheckout, c: DemoChild) {
       requestedBy: c.outcome.kind === 'REJECTED' ? 'event:order.rejected' : 'event:order.cancelled',
       chargeRestaurantPaise: 0,
       reserved: true,
+      isDemo: true,
       statusHistory: [
         { from: null, to: 'REQUESTED', at: t.refundRequestedAt, source: `event:order.${c.outcome.kind === 'REJECTED' ? 'rejected' : 'cancelled'}` },
         { from: 'REQUESTED', to: 'PROCESSING', at: processing, source: 'worker' },
@@ -132,7 +133,7 @@ function ledgerDocs(co: DemoCheckout, c: DemoChild, cfg: PaymentsSeedConfig) {
   const b = c.breakdown;
   const commission = bpsOf(b.itemsSubtotalPaise, c.restaurant.commissionBps);
   const jobId = ids.job(co, c);
-  const base = { childOrderId, createdBy: 'system:order.delivered', createdAt: at, updatedAt: at };
+  const base = { childOrderId, createdBy: 'system:order.delivered', isDemo: true, createdAt: at, updatedAt: at };
   return [
     { _id: seedId(`ledger:earning:${co.key}:${c.key}`), ...base, accountType: 'RESTAURANT', accountId: restaurantId, entryType: 'ORDER_EARNING', amountPaise: b.itemsSubtotalPaise + b.packagingFeePaise, dedupeKey: `earning:${childOrderId}`, memo: `Order earning (items ${b.itemsSubtotalPaise} + packaging ${b.packagingFeePaise}; discounts platform-funded)` },
     { _id: seedId(`ledger:commission:${co.key}:${c.key}`), ...base, accountType: 'RESTAURANT', accountId: restaurantId, entryType: 'COMMISSION', amountPaise: -commission, dedupeKey: `commission:${childOrderId}`, memo: `Platform commission ${c.restaurant.commissionBps} bps of ${b.itemsSubtotalPaise}` },
@@ -185,6 +186,7 @@ export async function seedPayments(conn: Connection, cfg: PaymentsSeedConfig = {
         confirmedBy: admin,
         confirmedAt: PAYOUT.at,
         notes: 'Demo settlement (recorded manual bank transfer)',
+        isDemo: true,
         statusHistory: [
           { from: null, to: 'REQUESTED', at: requestedAt, source: `admin:${admin}` },
           { from: 'REQUESTED', to: 'PAID', at: PAYOUT.at, source: `admin:${admin}` },
@@ -208,6 +210,7 @@ export async function seedPayments(conn: Connection, cfg: PaymentsSeedConfig = {
         memo: `Manual bank transfer UTR ${PAYOUT.utr}`,
         createdBy: admin,
         payoutId,
+        isDemo: true,
         createdAt: PAYOUT.at,
         updatedAt: PAYOUT.at,
       },

@@ -7,6 +7,8 @@ export const menuCategorySchema = new Schema(
     name: { type: String, required: true },
     sortOrder: { type: Number, default: 0 },
     active: { type: Boolean, default: true },
+    /** Demo seed data (APP_MODE=demo). */
+    isDemo: { type: Boolean, default: false },
   },
   { timestamps: true, collection: 'menu_categories' },
 );

@@ -17,6 +17,8 @@ export interface PayoutAttrs {
   failureReason?: string | null;
   notes?: string | null;
   statusHistory: StatusHistoryEntry<PayoutStatus>[];
+  /** Demo seed data (APP_MODE=demo). */
+  isDemo: boolean;
   createdAt: Date;
   updatedAt: Date;
   version: number;
@@ -42,6 +44,7 @@ const schema = new Schema<PayoutAttrs>(
     failureReason: { type: String, default: null },
     notes: { type: String, default: null },
     statusHistory: { type: [historySchema], default: [] },
+    isDemo: { type: Boolean, default: false },
   },
   { collection: 'payouts', timestamps: true, versionKey: 'version', optimisticConcurrency: true },
 );

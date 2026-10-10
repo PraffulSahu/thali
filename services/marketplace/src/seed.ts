@@ -4,7 +4,7 @@
  *   container:  docker compose exec marketplace node dist/seed.js
  *   local:      npm run seed -w @thali/marketplace
  *
- * Content (all restaurants/banners flagged isDemo):
+ * Content (every document flagged isDemo):
  *  - service area `service-area:blr-koramangala` (Koramangala / HSR, Bengaluru) + cuisines
  *  - restaurants (`restaurant:<slug>`):
  *      spice-route   APPROVED, non-veg, owner user:owner1   (menu with customization groups, add-ons and
@@ -13,6 +13,7 @@
  *      tandoor-tales APPROVAL_PENDING (email verified, KYC uploaded), owner user:owner1
  *      coastal-curry VERIFICATION_PENDING (business email not verified yet), owner user:owner2
  *  - coupons WELCOME50 (50% up to ₹100) and FLAT100 (₹100 off, total limit 1); membership plan "Thali Plus"
+ *  - one labelled demo banner ("DEMO · …", links to WELCOME50)
  * Menu ids: `category:<rest>:<slug>`, `item:<rest>:<slug>`, `group:<rest>:<item>:<slug>`, `option:<rest>:<item>:<group>:<slug>`.
  */
 import type { Connection } from 'mongoose';
@@ -146,7 +147,7 @@ const TANDOOR_TALES_ITEMS: ItemSpec[] = [
 
 function menuDocs(rest: string, categories: readonly (readonly [string, string])[], items: ItemSpec[]) {
   const restaurantId = seedId(`restaurant:${rest}`);
-  const cats = categories.map(([slug, name], i) => ({ _id: seedId(`category:${rest}:${slug}`), restaurantId, name, sortOrder: i, active: true }));
+  const cats = categories.map(([slug, name], i) => ({ _id: seedId(`category:${rest}:${slug}`), restaurantId, name, sortOrder: i, active: true, isDemo: true }));
   const docs = items.map((it) => ({
     _id: seedId(`item:${rest}:${it.slug}`),
     restaurantId,
@@ -160,6 +161,7 @@ function menuDocs(rest: string, categories: readonly (readonly [string, string])
     stockQty: it.stockQty ?? 0,
     reservedQty: 0,
     tags: it.tags ?? [],
+    isDemo: true,
     customizationGroups: (it.groups ?? []).map((g) => ({
       _id: seedId(`group:${rest}:${it.slug}:${g.slug}`),
       name: g.name,
@@ -181,6 +183,7 @@ function menuDocs(rest: string, categories: readonly (readonly [string, string])
 const DOC_TYPES = ['FSSAI', 'GST', 'PAN'] as const;
 const docKey = (rest: string, type: string) => `documents/demo/${rest}/${type.toLowerCase()}.pdf`;
 const imageKey = (rest: string, kind: 'cover' | 'logo') => `images/demo/${rest}/${kind}.svg`;
+const BANNER_IMAGE_KEY = 'images/demo/banners/welcome50.svg';
 
 interface RestaurantSpec {
   slug: string;
@@ -299,6 +302,17 @@ function logoSvg(r: RestaurantSpec): Buffer {
   );
 }
 
+function bannerSvg(): Buffer {
+  return Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400">` +
+      `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b91c1c"/><stop offset="1" stop-color="#f59e0b"/></linearGradient></defs>` +
+      `<rect width="1200" height="400" fill="url(#g)"/>` +
+      `<text x="60" y="190" font-family="Georgia,serif" font-size="84" fill="#fff">50% off with WELCOME50</text>` +
+      `<text x="60" y="270" font-family="sans-serif" font-size="36" fill="#fff" fill-opacity="0.9">Up to ₹100 on orders above ₹199</text>` +
+      `<text x="1140" y="60" text-anchor="end" font-family="sans-serif" font-size="28" fill="#fff" fill-opacity="0.85">DEMO</text></svg>`,
+  );
+}
+
 // ---------------------------------------------------------------------------------------- seed -----
 export async function seedMarketplace(conn: Connection, cfg: MarketplaceSeedConfig): Promise<SeedReport> {
   const m = getModels(conn);
@@ -315,7 +329,7 @@ export async function seedMarketplace(conn: Connection, cfg: MarketplaceSeedConf
       ['chinese', 'Chinese'],
       ['desserts', 'Desserts'],
       ['beverages', 'Beverages'],
-    ].map(([slug, name], i) => ({ _id: seedId(`cuisine:${slug}`), slug, name, sortOrder: i, active: true })),
+    ].map(([slug, name], i) => ({ _id: seedId(`cuisine:${slug}`), slug, name, sortOrder: i, active: true, isDemo: true })),
     report,
   );
 
@@ -332,6 +346,7 @@ export async function seedMarketplace(conn: Connection, cfg: MarketplaceSeedConf
         active: true,
         deliveryFee: { basePaise: 2500, baseKm: 2, perKmPaise: 800, maxPaise: 8000 },
         minOrderPaise: 9900,
+        isDemo: true,
         createdAt: SEEDED_AT,
         updatedAt: SEEDED_AT,
       },
@@ -370,6 +385,7 @@ export async function seedMarketplace(conn: Connection, cfg: MarketplaceSeedConf
         perUserLimit: 1,
         active: true,
         firstOrderOnly: false,
+        isDemo: true,
       },
       {
         _id: seedId('coupon:FLAT100'),
@@ -384,6 +400,7 @@ export async function seedMarketplace(conn: Connection, cfg: MarketplaceSeedConf
         perUserLimit: 1,
         active: true,
         firstOrderOnly: false,
+        isDemo: true,
       },
     ],
     report,
@@ -401,6 +418,26 @@ export async function seedMarketplace(conn: Connection, cfg: MarketplaceSeedConf
         terms:
           '**Thali Plus (demo plan)**\n\n- Free delivery on up to 10 orders above ₹199 for 30 days\n- Extra 5% off (up to ₹50) per order\n- Prepaid, non-refundable once a benefit has been used\n- Demo mode: payment is simulated',
         active: true,
+        isDemo: true,
+      },
+    ],
+    report,
+  );
+
+  // One labelled demo banner (links to the WELCOME50 coupon).
+  await ensureDocs(
+    m.Banner,
+    [
+      {
+        _id: seedId('banner:welcome50'),
+        title: 'DEMO · 50% off your first Thali order — WELCOME50',
+        imageKey: BANNER_IMAGE_KEY,
+        linkType: 'COUPON',
+        linkValue: 'WELCOME50',
+        activeFrom: validFrom,
+        activeTo: validTo,
+        active: true,
+        isDemo: true,
       },
     ],
     report,
@@ -408,7 +445,7 @@ export async function seedMarketplace(conn: Connection, cfg: MarketplaceSeedConf
 
   // Demo files: KYC placeholders (private bucket) and cover/logo images (public bucket).
   if (cfg.S3_ENDPOINT || cfg.S3_ACCESS_KEY_ID) {
-    const objects: SeedObject[] = [];
+    const objects: SeedObject[] = [{ bucket: cfg.S3_PUBLIC_BUCKET, key: BANNER_IMAGE_KEY, contentType: 'image/svg+xml', body: bannerSvg() }];
     for (const r of RESTAURANTS) {
       objects.push({ bucket: cfg.S3_PUBLIC_BUCKET, key: imageKey(r.slug, 'cover'), contentType: 'image/svg+xml', body: coverSvg(r) });
       objects.push({ bucket: cfg.S3_PUBLIC_BUCKET, key: imageKey(r.slug, 'logo'), contentType: 'image/svg+xml', body: logoSvg(r) });

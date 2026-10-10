@@ -24,6 +24,8 @@ export const couponSchema = new Schema(
     heldCount: { type: Number, default: 0 },
     active: { type: Boolean, default: true },
     firstOrderOnly: { type: Boolean, default: false },
+    /** Demo seed data (APP_MODE=demo). */
+    isDemo: { type: Boolean, default: false },
   },
   { timestamps: true, optimisticConcurrency: true, collection: 'coupons' },
 );

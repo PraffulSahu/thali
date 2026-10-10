@@ -19,6 +19,8 @@ export const membershipPlanSchema = new Schema(
     benefits: { type: planBenefitsSchema, required: true },
     terms: { type: String, default: '' },
     active: { type: Boolean, default: true },
+    /** Demo seed data (APP_MODE=demo). */
+    isDemo: { type: Boolean, default: false },
   },
   { timestamps: true, collection: 'membership_plans' },
 );

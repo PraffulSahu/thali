@@ -276,6 +276,7 @@ export async function seedOrders(conn: Connection): Promise<SeedReport> {
       status,
       location: pt(lat as number, lng as number),
       eventAt: new Date('2026-09-01T06:30:00.000Z'),
+      isDemo: true,
     })),
     report,
     'restaurant_projection',

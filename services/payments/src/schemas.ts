@@ -131,6 +131,7 @@ export const LedgerEntryViewSchema = z
     payoutId: z.string().nullable(),
     refundId: z.string().nullable(),
     memo: z.string(),
+    isDemo: z.boolean(),
     createdAt: Iso,
   })
   .meta({ id: 'LedgerEntry' });
@@ -149,6 +150,7 @@ export const PayoutViewSchema = z
     confirmedAt: Iso.nullable(),
     failureReason: z.string().nullable(),
     notes: z.string().nullable(),
+    isDemo: z.boolean(),
     createdAt: Iso,
     updatedAt: Iso,
   })
@@ -172,6 +174,7 @@ export const RefundViewSchema = z
     requestedBy: z.string(),
     note: z.string().nullable(),
     chargeRestaurantPaise: Paise,
+    isDemo: z.boolean(),
     statusHistory: z.array(z.object({ from: z.string().nullable(), to: z.string(), at: Iso, source: z.string().optional() })),
     createdAt: Iso,
     updatedAt: Iso,

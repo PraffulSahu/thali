@@ -31,6 +31,8 @@ export interface RefundAttrs {
   /** True while `amountPaise` is reserved against the intent's `refundReservedPaise`. */
   reserved: boolean;
   statusHistory: StatusHistoryEntry<RefundStatus>[];
+  /** Demo data: seeded, or refunding a demo payment intent. */
+  isDemo: boolean;
   createdAt: Date;
   updatedAt: Date;
   version: number;
@@ -66,6 +68,7 @@ const schema = new Schema<RefundAttrs>(
     chargeRestaurantPaise: { type: Number, default: 0 },
     reserved: { type: Boolean, default: false },
     statusHistory: { type: [historySchema], default: [] },
+    isDemo: { type: Boolean, default: false },
   },
   { collection: 'refunds', timestamps: true, versionKey: 'version', optimisticConcurrency: true },
 );

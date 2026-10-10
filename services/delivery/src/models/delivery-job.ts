@@ -78,6 +78,8 @@ export const deliveryJobSchema = new Schema(
     pickedUpAt: { type: Date, default: null },
     deliveredAt: { type: Date, default: null },
     cancelledAt: { type: Date, default: null },
+    /** Demo seed data (APP_MODE=demo). */
+    isDemo: { type: Boolean, default: false },
   },
   { collection: 'delivery_jobs', timestamps: true, optimisticConcurrency: true, versionKey: 'version' },
 );

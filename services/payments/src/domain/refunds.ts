@@ -130,6 +130,8 @@ export async function requestRefund(ctx: PaymentsContext, session: ClientSession
     note: input.note ?? null,
     chargeRestaurantPaise: input.chargeRestaurantPaise ?? 0,
     maxAttempts: ctx.config.REFUND_MAX_ATTEMPTS,
+    // A refund of a demo payment is demo money too (finance views tell them apart).
+    isDemo: intent.isDemo ?? false,
   };
   if (!reserved) {
     const lastError = `REFUND_EXCEEDS_CAPTURED: requested ${input.amountPaise}, remaining ${remaining} (payment ${intent.status})`;
@@ -486,6 +488,7 @@ export function refundView(r: RefundDoc | (Record<string, unknown> & { _id: unkn
     requestedBy: d.requestedBy,
     note: d.note ?? null,
     chargeRestaurantPaise: d.chargeRestaurantPaise ?? 0,
+    isDemo: d.isDemo ?? false,
     statusHistory: (d.statusHistory ?? []).map((h) => ({ from: h.from, to: h.to, at: new Date(h.at).toISOString(), source: h.source })),
     createdAt: new Date(d.createdAt).toISOString(),
     updatedAt: new Date(d.updatedAt).toISOString(),

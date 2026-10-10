@@ -42,6 +42,12 @@ describe('seedPayments', () => {
     const fetched = await h.ctx.provider.fetchOrderPayments(demoOrderIds.providerOrderId(multi));
     expect(fetched).toEqual([expect.objectContaining({ id: demoOrderIds.providerPaymentId(multi), captured: true, amountPaise: multi.totals.totalPaise })]);
 
+    // every seeded money record is flagged demo
+    expect(await h.ctx.models.LedgerEntry.countDocuments({ isDemo: { $ne: true } })).toBe(0);
+    expect(await h.ctx.models.Refund.countDocuments({ isDemo: { $ne: true } })).toBe(0);
+    expect(await h.ctx.models.Payout.countDocuments({ isDemo: { $ne: true } })).toBe(0);
+    expect(await h.ctx.models.PaymentIntent.countDocuments({ isDemo: { $ne: true } })).toBe(0);
+
     const second = await seedPayments(h.ctx.conn);
     expect(Object.values(second).every((t) => t.inserted === 0)).toBe(true);
   });

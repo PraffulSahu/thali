@@ -235,6 +235,7 @@ export function ledgerEntryView(e: LedgerEntryAttrs) {
     payoutId: e.payoutId ?? null,
     refundId: e.refundId ?? null,
     memo: e.memo,
+    isDemo: e.isDemo ?? false,
     createdAt: new Date(e.createdAt).toISOString(),
   };
 }

@@ -128,6 +128,7 @@ function deliveredJobDoc(co: DemoCheckout, c: DemoChild) {
     lastLocation: { type: 'Point', coordinates: [drop.lng, drop.lat] },
     lastLocationAt: t.deliveredAt,
     locationSimulated: true,
+    isDemo: true,
     assignedAt: t.assignedAt,
     pickedUpAt: t.pickedUpAt,
     deliveredAt: t.deliveredAt,
