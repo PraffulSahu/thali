@@ -3,7 +3,9 @@
  * Money is integer paise. Paths are relative to /api/v1 (see lib/api.ts).
  */
 import type { GeoPoint, Paginated } from '@thali/contracts';
+import { queryOptions } from '@tanstack/react-query';
 import { api } from '../../lib/api';
+import { isNotFound } from '../../lib/errors';
 
 export type { GeoPoint, Paginated };
 
@@ -167,6 +169,13 @@ export const partnerKeys = {
 
 // ---- onboarding
 export const getProfile = (signal?: AbortSignal) => api<PartnerProfile>('/partner/profile', { signal });
+/** Shared by the area layout, home and onboarding. A 404 means "no profile yet" and is not retried. */
+export const profileQueryOptions = () =>
+  queryOptions({
+    queryKey: partnerKeys.profile,
+    queryFn: ({ signal }) => getProfile(signal),
+    retry: (n: number, e: unknown) => !isNotFound(e) && n < 2,
+  });
 export const createProfile = (body: { name?: string; vehicle?: { type: VehicleTypeValue; registrationNumber: string } }) =>
   api<PartnerProfile>('/partner/profile', { method: 'POST', body });
 export const updateProfile = (body: { name?: string; vehicle?: { type: VehicleTypeValue; registrationNumber: string } }) =>
@@ -191,8 +200,6 @@ export const goOnline = (at: GeoPoint) => api<PartnerProfile>('/partner/online',
 export const goOffline = () => api<PartnerProfile>('/partner/offline', { method: 'POST' });
 export const postPartnerLocation = (p: GeoPoint & { accuracyM?: number }) =>
   api<{ at: string; jobsUpdated: number }>('/partner/location', { method: 'POST', body: p });
-export const postJobLocation = (jobId: string, p: GeoPoint & { accuracyM?: number }) =>
-  api<{ at: string; jobsUpdated: number }>(`/deliveries/${jobId}/location`, { method: 'POST', body: p });
 
 // ---- offers + deliveries
 export const listOffers = () => api<{ items: Offer[] }>('/partner/offers');

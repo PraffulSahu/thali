@@ -26,9 +26,11 @@ export interface OfferCardProps {
   /** Disable accepting for a reason shown to the partner (e.g. at capacity). */
   acceptDisabledReason?: string | null;
   onExpire?: () => void;
+  /** The batching verdict is only meaningful when the partner already has a delivery in hand. */
+  hasActiveJobs?: boolean;
 }
 
-export function OfferCard({ offer, onAccept, onReject, busy = null, acceptDisabledReason, onExpire }: OfferCardProps) {
+export function OfferCard({ offer, onAccept, onReject, busy = null, acceptDisabledReason, onExpire, hasActiveJobs = false }: OfferCardProps) {
   const left = useCountdown(offer.expiresAt);
   const expired = left === 0;
   const { job, batchEvaluation: batch } = offer;
@@ -77,7 +79,7 @@ export function OfferCard({ offer, onAccept, onReject, busy = null, acceptDisabl
         <h4 id={reasonsId} className="flex items-center gap-2 text-sm font-semibold text-slate-800">
           <Icon name="list" size={16} />
           Batching check
-          <Badge tone={batch.eligible ? 'success' : 'warn'}>{batch.eligible ? 'Can batch with your current run' : 'Not batchable'}</Badge>
+          {hasActiveJobs ? <Badge tone={batch.eligible ? 'success' : 'warn'}>{batch.eligible ? 'Can batch with your current run' : 'Not batchable'}</Badge> : null}
         </h4>
         <ul className="mt-2 space-y-1 text-sm text-slate-700">
           {batch.reasons.map((r) => (

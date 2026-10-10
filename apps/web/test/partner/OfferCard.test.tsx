@@ -56,4 +56,12 @@ describe('OfferCard', () => {
     expect(screen.getByRole('button', { name: /accept/i })).toBeDisabled();
     expect(screen.getAllByText(/offer expired/i).length).toBeGreaterThan(0);
   });
+
+  it('shows the batching verdict badge only when the partner has an active delivery', () => {
+    const { unmount } = renderWithProviders(<OfferCard offer={offer()} onAccept={vi.fn()} onReject={vi.fn()} />);
+    expect(screen.queryByText(/can batch with your current run/i)).not.toBeInTheDocument();
+    unmount();
+    renderWithProviders(<OfferCard offer={offer()} hasActiveJobs onAccept={vi.fn()} onReject={vi.fn()} />);
+    expect(screen.getByText(/can batch with your current run/i)).toBeInTheDocument();
+  });
 });

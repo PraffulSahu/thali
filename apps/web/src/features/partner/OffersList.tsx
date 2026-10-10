@@ -18,9 +18,11 @@ export interface OffersListProps {
   enabled: boolean;
   /** Active deliveries vs maxActive: shows why accept is unavailable. */
   atCapacity?: boolean;
+  /** Partner currently holds at least one delivery (enables the batching verdict badge). */
+  hasActiveJobs?: boolean;
 }
 
-export function OffersList({ enabled, atCapacity = false }: OffersListProps) {
+export function OffersList({ enabled, atCapacity = false, hasActiveJobs = false }: OffersListProps) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [pending, setPending] = useState<{ id: string; action: 'accept' | 'reject' } | null>(null);
@@ -49,7 +51,9 @@ export function OffersList({ enabled, atCapacity = false }: OffersListProps) {
       refreshAll();
     },
     onError: (e) => {
-      if (e instanceof ApiError && e.status === 409 && e.code !== 'CAPACITY_EXCEEDED') {
+      if (e instanceof ApiError && e.code === 'OFFER_EXPIRED') {
+        toast({ title: 'Offer expired', description: 'This offer ran out or was withdrawn, possibly because another partner accepted it.', tone: 'warn' });
+      } else if (e instanceof ApiError && e.status === 409 && e.code !== 'CAPACITY_EXCEEDED') {
         toast({ title: 'Taken by another partner', description: 'That offer is no longer available. Fresh offers appear here automatically.', tone: 'warn' });
       } else {
         toast({ title: "Couldn't accept the offer", description: errorMessage(e), tone: 'danger' });
@@ -92,6 +96,7 @@ export function OffersList({ enabled, atCapacity = false }: OffersListProps) {
               <OfferCard
                 key={o.id}
                 offer={o}
+                hasActiveJobs={hasActiveJobs}
                 busy={pending?.id === o.id ? pending.action : null}
                 acceptDisabledReason={atCapacity ? 'You are at your active delivery limit. Finish a delivery to accept more.' : null}
                 onExpire={() => void offers.refetch()}

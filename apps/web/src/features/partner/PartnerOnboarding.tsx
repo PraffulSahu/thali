@@ -24,7 +24,7 @@ import { useAuth } from '../../lib/auth';
 import { ApiError, errorMessage, fieldErrors, isNotFound } from '../../lib/errors';
 import { formatDateTime } from '../../lib/format';
 import {
-  attachDocument, createProfile, DOC_CONTENT_TYPES, DOC_LABELS, DOC_MAX_BYTES, getProfile, partnerKeys, presignDocument, putToStorage,
+  attachDocument, createProfile, DOC_CONTENT_TYPES, DOC_LABELS, DOC_MAX_BYTES, partnerKeys, profileQueryOptions, presignDocument, putToStorage,
   requiredDocs, submitProfile, updateProfile, VEHICLE_OPTIONS, type DocType, type PartnerProfile, type VehicleTypeValue,
 } from './api';
 
@@ -39,11 +39,18 @@ function DetailsForm({ profile }: { profile: PartnerProfile | null }) {
   const [reg, setReg] = useState(profile?.vehicle?.registrationNumber ?? '');
   const [errors, setErrors] = useState<Record<string, string>>({});
   const locked = profile ? !EDITABLE.includes(profile.status) : false;
+  // The server refuses vehicle changes while the application is under review.
+  const vehicleLocked = locked || profile?.status === 'APPROVAL_PENDING';
+  const vehicle = { type: vehicleType as VehicleTypeValue, registrationNumber: reg.trim().toUpperCase() };
+  const nameChanged = !profile || name.trim() !== profile.name;
+  const vehicleChanged = !profile || vehicle.type !== profile.vehicle?.type || vehicle.registrationNumber !== profile.vehicle?.registrationNumber;
+  const dirty = !profile || nameChanged || (vehicleChanged && !vehicleLocked);
 
   const save = useMutation({
     mutationFn: async () => {
-      const body = { name: name.trim(), vehicle: { type: vehicleType as VehicleTypeValue, registrationNumber: reg.trim().toUpperCase() } };
-      return profile ? updateProfile(body) : createProfile(body);
+      if (!profile) return createProfile({ name: name.trim(), vehicle });
+      // Send only what changed.
+      return updateProfile({ ...(nameChanged ? { name: name.trim() } : {}), ...(vehicleChanged && !vehicleLocked ? { vehicle } : {}) });
     },
     onSuccess: async (p) => {
       qc.setQueryData(partnerKeys.profile, p);
@@ -77,15 +84,17 @@ function DetailsForm({ profile }: { profile: PartnerProfile | null }) {
         <Input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" disabled={locked} maxLength={80} />
       </Field>
       <Field label="Vehicle type" required error={errors['vehicle.type'] ?? errors.vehicle}>
-        <Select value={vehicleType} onChange={(e) => setVehicleType(e.target.value)} options={VEHICLE_OPTIONS} placeholder="Choose vehicle" disabled={locked} />
+        <Select value={vehicleType} onChange={(e) => setVehicleType(e.target.value)} options={VEHICLE_OPTIONS} placeholder="Choose vehicle" disabled={vehicleLocked} />
       </Field>
       <Field label="Registration number" required error={errors['vehicle.registrationNumber']} hint={vehicleType === 'BICYCLE' ? 'For a bicycle enter any identifier you can show, e.g. frame number.' : 'For example KA05MN4321.'}>
-        <Input value={reg} onChange={(e) => setReg(e.target.value)} autoCapitalize="characters" autoComplete="off" disabled={locked} maxLength={20} />
+        <Input value={reg} onChange={(e) => setReg(e.target.value)} autoCapitalize="characters" autoComplete="off" disabled={vehicleLocked} maxLength={20} />
       </Field>
       {locked ? <p className="text-sm text-slate-600">Details can't be changed after approval. Contact support to update them.</p> : null}
+      {!locked && vehicleLocked ? <p className="text-sm text-slate-600">Vehicle details are locked while your application is under review. Contact support to change them.</p> : null}
+      {profile && !locked && !dirty ? <p className="text-sm text-slate-600">No changes to save.</p> : null}
       <InlineError error={save.error && Object.keys(errors).length === 0 ? save.error : null} />
       <FormActions>
-        <Button type="submit" loading={save.isPending} disabled={locked}>
+        <Button type="submit" loading={save.isPending} disabled={locked || !dirty}>
           {profile ? 'Save details' : 'Create profile'}
         </Button>
       </FormActions>
@@ -263,11 +272,7 @@ function Content({ profile }: { profile: PartnerProfile | null }) {
 }
 
 export default function PartnerOnboarding() {
-  const profile = useQuery({
-    queryKey: partnerKeys.profile,
-    queryFn: ({ signal }) => getProfile(signal),
-    retry: (n, e) => !isNotFound(e) && n < 2,
-  });
+  const profile = useQuery(profileQueryOptions());
   const noProfile = profile.isError && isNotFound(profile.error);
 
   return (

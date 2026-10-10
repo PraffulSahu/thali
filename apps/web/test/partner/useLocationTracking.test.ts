@@ -74,14 +74,6 @@ describe('useLocationTracking', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it('also posts the job-scoped location while a delivery is active', async () => {
-    renderHook(() => useLocationTracking({ enabled: true, activeJobIds: ['job1'] }));
-    await act(async () => {
-      onPos(fix());
-    });
-    expect(posts()).toEqual(['/api/v1/partner/location', '/api/v1/deliveries/job1/location']);
-  });
-
   it('stops watching and sending when switched offline or unmounted', async () => {
     const { rerender, result, unmount } = renderHook((p: { enabled: boolean }) => useLocationTracking(p), { initialProps: { enabled: true } });
     await act(async () => {

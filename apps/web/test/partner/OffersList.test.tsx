@@ -31,6 +31,17 @@ describe('OffersList', () => {
     await waitFor(() => expect(fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/partner/offers')).length).toBeGreaterThan(1));
   });
 
+  it('titles an OFFER_EXPIRED accept failure "Offer expired"', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (String(url).endsWith('/accept')) return json(409, { error: { code: 'OFFER_EXPIRED', message: 'This offer has expired or is no longer available', requestId: 'r' } });
+      if (String(url).endsWith('/partner/offers')) return json(200, { items: [offer] });
+      return json(200, {});
+    });
+    renderWithProviders(<OffersList enabled />);
+    await userEvent.click(await screen.findByRole('button', { name: /accept delivery/i }));
+    expect(await screen.findByText('Offer expired', { selector: '[role=status] *, [role=alert] *, div, p, span' })).toBeInTheDocument();
+  });
+
   it('shows an empty state when there are no offers', async () => {
     fetchMock.mockResolvedValue(json(200, { items: [] }));
     renderWithProviders(<OffersList enabled />);

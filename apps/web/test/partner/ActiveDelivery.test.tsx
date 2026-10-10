@@ -60,6 +60,25 @@ describe('ActiveDelivery', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
+  it('keeps the remaining attempts after close/reopen and refreshes the active jobs', async () => {
+    fetchMock.mockResolvedValue(json(400, { error: { code: 'DELIVERY_CODE_INVALID', message: 'Wrong pickup code', details: { attemptsRemaining: 2 }, requestId: 'r1' } }));
+    const { queryClient } = renderWithProviders(<ActiveDelivery job={job()} />);
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    await userEvent.click(screen.getByRole('button', { name: /enter pickup code/i }));
+    let dialog = await screen.findByRole('dialog');
+    await userEvent.type(within(dialog).getByLabelText(/pickup code/i), '1234');
+    await userEvent.click(within(dialog).getByRole('button', { name: /confirm pickup/i }));
+    expect(await within(dialog).findByText(/2 attempts remaining/i)).toBeInTheDocument();
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['partner', 'active'] });
+
+    await userEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /enter pickup code/i }));
+    dialog = await screen.findByRole('dialog');
+    // job prop still says 5, but the server told us 2
+    expect(within(dialog).getByText(/2 attempts remaining/i)).toBeInTheDocument();
+  });
+
   it('locks code entry when the server answers 423', async () => {
     fetchMock.mockResolvedValue(json(423, { error: { code: 'DELIVERY_CODE_LOCKED', message: 'Too many wrong codes. Contact support to continue.', details: { attemptsRemaining: 0 }, requestId: 'r2' } }));
     renderWithProviders(<ActiveDelivery job={job({ status: 'OUT_FOR_DELIVERY' })} />);

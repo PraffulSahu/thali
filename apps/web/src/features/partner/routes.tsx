@@ -14,9 +14,15 @@ export const nav: NavItem[] = [
 ];
 
 export const routes: RouteObject[] = [
-  { index: true, ...page(() => import('./PartnerHome')) },
-  { path: 'onboarding', ...page(() => import('./PartnerOnboarding')) },
-  { path: 'history', ...page(() => import('./HistoryPage')) },
-  { path: 'earnings', ...page(() => import('./EarningsPage')) },
-  { path: '*', element: <NotFoundPage home="/partner" /> },
+  {
+    // Layout route: owns the location watch so it survives navigation inside /partner.
+    ...page(() => import('./PartnerLayout')),
+    children: [
+      { index: true, ...page(() => import('./PartnerHome')) },
+      { path: 'onboarding', ...page(() => import('./PartnerOnboarding')) },
+      { path: 'history', ...page(() => import('./HistoryPage')) },
+      { path: 'earnings', ...page(() => import('./EarningsPage')) },
+      { path: '*', element: <NotFoundPage home="/partner" /> },
+    ],
+  },
 ];

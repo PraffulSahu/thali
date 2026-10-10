@@ -59,4 +59,23 @@ describe('PartnerOnboarding', () => {
     const presign = fetchMock.mock.calls.find((c) => String(c[0]).endsWith('/partner/uploads'))!;
     expect(JSON.parse(String((presign[1] as RequestInit).body))).toEqual({ type: 'ID_PROOF', contentType: 'image/png', sizeBytes: 3 });
   });
+
+  it('locks vehicle fields while under review and PATCHes only the changed name', async () => {
+    const pending = { ...created, status: 'APPROVAL_PENDING' };
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'PATCH') return json(200, { ...pending, name: 'Ravi K' });
+      return json(200, pending);
+    });
+    renderWithProviders(<PartnerOnboarding />, { auth: makeAuth({ roles: ['DELIVERY_PARTNER'] }) });
+    const nameInput = await screen.findByLabelText(/full name/i);
+    expect(screen.getByLabelText(/vehicle type/i)).toBeDisabled();
+    expect(screen.getByLabelText(/registration number/i)).toBeDisabled();
+    expect(screen.getByRole('button', { name: /save details/i })).toBeDisabled();
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, 'Ravi K');
+    await userEvent.click(screen.getByRole('button', { name: /save details/i }));
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => (c[1] as RequestInit | undefined)?.method === 'PATCH')).toBe(true));
+    const patch = fetchMock.mock.calls.find((c) => (c[1] as RequestInit | undefined)?.method === 'PATCH')!;
+    expect(JSON.parse(String((patch[1] as RequestInit).body))).toEqual({ name: 'Ravi K' });
+  });
 });

@@ -7,12 +7,12 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Badge } from '../../components/ui/Badge';
 import { Card } from '../../components/ui/Card';
-import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { InlineError } from '../../components/ui/ErrorState';
 import { Switch } from '../../components/ui/Checkbox';
 import { RelativeTime } from '../../components/ui/RelativeTime';
 import { useToast } from '../../components/ui/Toast';
-import { useGeolocation, GEO_MESSAGES } from '../../hooks/useGeolocation';
+import { useGeolocation } from '../../hooks/useGeolocation';
+import { ApiError } from '../../lib/errors';
 import { goOffline, goOnline, partnerKeys, type PartnerProfile } from './api';
 import type { LocationTracking } from './useLocationTracking';
 
@@ -21,6 +21,14 @@ export interface OnlineToggleProps {
   tracking: LocationTracking;
   activeCount: number;
 }
+
+/** Partner-specific copy: unlike customers, partners cannot "drop a pin" instead of sharing location. */
+const GEO_COPY: Record<string, string> = {
+  denied: 'Location is blocked for this site. Allow location in your browser settings, then try again.',
+  unavailable: "Your device can't find a location right now. Turn on location services (GPS) and try again.",
+  timeout: 'Finding your location took too long. Move to an open area, check GPS, and try again.',
+  unsupported: "This browser can't share your location, so it can't be used for deliveries. Try Chrome or Safari over HTTPS.",
+};
 
 const PAUSE_COPY: Record<string, string> = {
   hidden: 'The tab is in the background or the screen is locked, so your browser has paused location.',
@@ -33,7 +41,6 @@ export function OnlineToggle({ partner, tracking, activeCount }: OnlineTogglePro
   const { toast } = useToast();
   const geo = useGeolocation({ highAccuracy: true, timeoutMs: 15_000, maximumAgeMs: 0 });
   const [blocked, setBlocked] = useState<string | null>(null);
-  const [confirmOffline, setConfirmOffline] = useState(false);
 
   const setProfile = (p: PartnerProfile) => qc.setQueryData(partnerKeys.profile, p);
 
@@ -59,10 +66,18 @@ export function OnlineToggle({ partner, tracking, activeCount }: OnlineTogglePro
       setProfile(p);
       toast({ title: "You're offline", description: 'Location sharing has stopped.', tone: 'info' });
     },
+    onError: (e) => {
+      if (e instanceof ApiError && e.code === 'PARTNER_HAS_ACTIVE_JOBS') {
+        void qc.invalidateQueries({ queryKey: partnerKeys.active });
+        void qc.invalidateQueries({ queryKey: partnerKeys.profile });
+      }
+    },
   });
+  const hasActiveError = offline.error instanceof ApiError && offline.error.code === 'PARTNER_HAS_ACTIVE_JOBS';
+  const mustFinish = partner.online && (activeCount > 0 || hasActiveError);
 
   const busy = online.isPending || offline.isPending;
-  const geoProblem = blocked === 'geo' ? (geo.message ?? GEO_MESSAGES.unavailable) : null;
+  const geoProblem = blocked === 'geo' ? (GEO_COPY[geo.status] ?? GEO_COPY.unavailable) : null;
   const trackingLabel =
     tracking.status === 'active' ? 'Location sharing active'
     : tracking.status === 'paused' ? 'Location sharing paused'
@@ -79,12 +94,17 @@ export function OnlineToggle({ partner, tracking, activeCount }: OnlineTogglePro
       <div className="flex items-center justify-between gap-3">
         <Switch
           label={partner.online ? 'You are online' : 'You are offline'}
-          description={partner.online ? 'Switch off to stop receiving offers.' : 'Switch on to receive delivery offers. We will ask to use your location.'}
+          description={
+            mustFinish
+              ? 'You have an active delivery. Complete it, or ask Thali ops to reassign it, before going offline.'
+              : partner.online
+                ? 'Switch off to stop receiving offers.'
+                : 'Switch on to receive delivery offers. We will ask to use your location.'
+          }
           checked={partner.online}
-          disabled={busy}
+          disabled={busy || mustFinish}
           onChange={(e) => {
             if (e.target.checked) online.mutate();
-            else if (activeCount > 0) setConfirmOffline(true);
             else offline.mutate();
           }}
           className="grow"
@@ -102,7 +122,7 @@ export function OnlineToggle({ partner, tracking, activeCount }: OnlineTogglePro
           </p>
         </div>
       ) : null}
-      <InlineError error={online.error ?? offline.error} className="mt-3" />
+      <InlineError error={online.error ?? (hasActiveError ? null : offline.error)} className="mt-3" />
 
       {partner.online && trackingLabel ? (
         <div className="mt-3 text-sm" aria-live="polite" data-testid="tracking-status">
@@ -122,22 +142,11 @@ export function OnlineToggle({ partner, tracking, activeCount }: OnlineTogglePro
           {tracking.status === 'denied' ? (
             <p className="mt-1 text-danger-700">Location is blocked for this site. Allow it in your browser settings, otherwise customers cannot see you and offers may stop.</p>
           ) : null}
-          {tracking.status === 'unsupported' ? <p className="mt-1 text-danger-700">{GEO_MESSAGES.unsupported}</p> : null}
+          {tracking.status === 'unsupported' ? <p className="mt-1 text-danger-700">{GEO_COPY.unsupported}</p> : null}
           {tracking.sendError ? <p className="mt-1 text-warn-800">Last update did not reach Thali: {tracking.sendError} Retrying with your next position.</p> : null}
         </div>
       ) : null}
 
-      <ConfirmDialog
-        open={confirmOffline}
-        onClose={() => setConfirmOffline(false)}
-        title="Go offline during a delivery?"
-        description="You have an active delivery. Going offline stops location sharing, so the customer can no longer follow you. You can still complete the delivery."
-        confirmLabel="Go offline"
-        tone="danger"
-        onConfirm={async () => {
-          await offline.mutateAsync();
-        }}
-      />
     </Card>
   );
 }

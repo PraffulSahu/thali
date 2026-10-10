@@ -23,6 +23,8 @@ export interface CodeEntryDialogProps {
   attemptsRemaining: number;
   /** Resolve on success; throw the ApiError otherwise. */
   onSubmit: (code: string) => Promise<unknown>;
+  /** Reports the attempts left after a wrong code (0 = locked) so the parent can keep it across close/reopen. */
+  onAttemptsChange?: (left: number) => void;
 }
 
 const COPY: Record<CodeKind, { title: string; label: string; hint: string; confirm: string }> = {
@@ -46,7 +48,7 @@ function attemptsFrom(e: unknown): number | null {
   return typeof d?.attemptsRemaining === 'number' ? d.attemptsRemaining : null;
 }
 
-export function CodeEntryDialog({ open, onClose, kind, attemptsRemaining, onSubmit }: CodeEntryDialogProps) {
+export function CodeEntryDialog({ open, onClose, kind, attemptsRemaining, onSubmit, onAttemptsChange }: CodeEntryDialogProps) {
   const copy = COPY[kind];
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
@@ -83,9 +85,12 @@ export function CodeEntryDialog({ open, onClose, kind, attemptsRemaining, onSubm
       if (e instanceof ApiError && e.code === 'DELIVERY_CODE_LOCKED') {
         setLocked(true);
         setLeft(0);
+        onAttemptsChange?.(0);
       } else if (e instanceof ApiError && e.code === 'DELIVERY_CODE_INVALID') {
         setWrong(true);
-        setLeft(attemptsFrom(e) ?? Math.max(0, left - 1));
+        const next = attemptsFrom(e) ?? Math.max(0, left - 1);
+        setLeft(next);
+        onAttemptsChange?.(next);
         setCode('');
         inputRef.current?.focus();
       } else {

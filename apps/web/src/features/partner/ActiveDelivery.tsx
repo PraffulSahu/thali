@@ -5,7 +5,7 @@
  * Every action is a real API call; the server owns the state machine and the code attempt counter.
  */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { buttonClasses, Button } from '../../components/ui/Button';
 import { Card } from '../../components/ui/Card';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
@@ -13,6 +13,7 @@ import { InlineError } from '../../components/ui/ErrorState';
 import { Icon } from '../../components/ui/Icon';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { useToast } from '../../components/ui/Toast';
+import { ApiError } from '../../lib/errors';
 import { formatDistanceKm, formatMinutes, formatTime } from '../../lib/format';
 import {
   confirmDelivered, confirmPickup, failDelivery, markArrived, navigationUrl, partnerKeys, startDelivery,
@@ -63,6 +64,11 @@ export function ActiveDelivery({ job, onChanged }: ActiveDeliveryProps) {
   const [codeKind, setCodeKind] = useState<CodeKind | null>(null);
   const [failing, setFailing] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
+  // Attempts reported by the last wrong-code response; kept across dialog close/reopen until the refetched job catches up.
+  const [knownLeft, setKnownLeft] = useState<number | null>(null);
+  useEffect(() => {
+    setKnownLeft(null);
+  }, [job.codeAttemptsRemaining, job.status]);
 
   const done = (next: PartnerJob, message?: string) => {
     setActionError(null);
@@ -138,9 +144,17 @@ export function ActiveDelivery({ job, onChanged }: ActiveDeliveryProps) {
         open={codeKind !== null}
         onClose={() => setCodeKind(null)}
         kind={codeKind ?? 'pickup'}
-        attemptsRemaining={job.codeAttemptsRemaining}
+        attemptsRemaining={knownLeft ?? job.codeAttemptsRemaining}
+        onAttemptsChange={setKnownLeft}
         onSubmit={async (code) => {
-          const next = codeKind === 'delivery' ? await confirmDelivered(job.id, code) : await confirmPickup(job.id, code);
+          let next: PartnerJob;
+          try {
+            next = codeKind === 'delivery' ? await confirmDelivered(job.id, code) : await confirmPickup(job.id, code);
+          } catch (e) {
+            // A wrong (400) or locked (423) code changed the server-side attempt counter: refresh the job.
+            if (e instanceof ApiError && (e.status === 400 || e.status === 423)) void qc.invalidateQueries({ queryKey: partnerKeys.active });
+            throw e;
+          }
           done(next, codeKind === 'delivery' ? 'Delivered. Nice work!' : 'Pickup confirmed');
         }}
       />

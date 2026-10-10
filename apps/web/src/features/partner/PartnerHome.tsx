@@ -12,11 +12,11 @@ import { QueryState } from '../../components/ui/QueryState';
 import { StatusPill } from '../../components/ui/StatusPill';
 import { isNotFound } from '../../lib/errors';
 import { ActiveDelivery } from './ActiveDelivery';
-import { getProfile, listActive, partnerKeys, type PartnerProfile } from './api';
+import { listActive, partnerKeys, profileQueryOptions, type PartnerProfile } from './api';
 import { OffersList } from './OffersList';
 import { OnlineToggle } from './OnlineToggle';
 import { TrackingLimitations } from './TrackingLimitations';
-import { useLocationTracking } from './useLocationTracking';
+import { usePartnerTracking } from './PartnerLayout';
 
 function NotApprovedPanel({ partner }: { partner: PartnerProfile }) {
   const copy: Record<string, { title: string; body: string; cta?: string }> = {
@@ -45,7 +45,7 @@ function NotApprovedPanel({ partner }: { partner: PartnerProfile }) {
 function ApprovedHome({ partner }: { partner: PartnerProfile }) {
   const active = useQuery({ queryKey: partnerKeys.active, queryFn: listActive, refetchInterval: 30_000 });
   const jobs = active.data?.items ?? [];
-  const tracking = useLocationTracking({ enabled: partner.online, activeJobIds: jobs.map((j) => j.id) });
+  const tracking = usePartnerTracking();
   const atCapacity = jobs.length >= partner.maxActive;
 
   return (
@@ -77,7 +77,7 @@ function ApprovedHome({ partner }: { partner: PartnerProfile }) {
       </section>
 
       {partner.online ? (
-        <OffersList enabled atCapacity={atCapacity} />
+        <OffersList enabled atCapacity={atCapacity} hasActiveJobs={jobs.length > 0} />
       ) : (
         <Card tone="muted">
           <p className="text-sm text-slate-700">You are offline, so you won't receive offers. Switch on availability above to start.</p>
@@ -90,12 +90,7 @@ function ApprovedHome({ partner }: { partner: PartnerProfile }) {
 }
 
 export default function PartnerHome() {
-  const profile = useQuery({
-    queryKey: partnerKeys.profile,
-    queryFn: ({ signal }) => getProfile(signal),
-    // 404 = no profile yet: not an error worth retrying
-    retry: (n, e) => !isNotFound(e) && n < 2,
-  });
+  const profile = useQuery(profileQueryOptions());
 
   return (
     <>

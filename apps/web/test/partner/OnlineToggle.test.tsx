@@ -30,6 +30,8 @@ describe('OnlineToggle', () => {
     renderWithProviders(<OnlineToggle partner={partner()} tracking={tracking} activeCount={0} />);
     await userEvent.click(screen.getByRole('switch'));
     expect(await screen.findByText(/can't go online without sharing your location/i)).toBeInTheDocument();
+    expect(screen.getByText(/allow location in your browser settings/i)).toBeInTheDocument();
+    expect(screen.queryByText(/pin/i)).not.toBeInTheDocument();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -51,5 +53,19 @@ describe('OnlineToggle', () => {
     renderWithProviders(<OnlineToggle partner={partner({ online: true })} tracking={{ status: 'paused', lastSentAt: null, sendError: null, pausedReason: 'hidden' }} activeCount={0} />);
     expect(screen.getByText('Location sharing paused')).toBeInTheDocument();
     expect(screen.getByText(/background or the screen is locked/i)).toBeInTheDocument();
+  });
+
+  it('does not offer going offline during an active delivery and explains why', async () => {
+    renderWithProviders(<OnlineToggle partner={partner({ online: true })} tracking={tracking} activeCount={1} />);
+    expect(screen.getByRole('switch')).toBeDisabled();
+    expect(screen.getByText(/complete it, or ask thali ops to reassign it/i)).toBeInTheDocument();
+  });
+
+  it('maps 409 PARTNER_HAS_ACTIVE_JOBS from /partner/offline to the same explanation', async () => {
+    fetchMock.mockResolvedValue(json(409, { error: { code: 'PARTNER_HAS_ACTIVE_JOBS', message: 'x', requestId: 'r' } }));
+    renderWithProviders(<OnlineToggle partner={partner({ online: true })} tracking={tracking} activeCount={0} />);
+    await userEvent.click(screen.getByRole('switch'));
+    expect(await screen.findByText(/complete it, or ask thali ops to reassign it/i)).toBeInTheDocument();
+    expect(screen.getByRole('switch')).toBeDisabled();
   });
 });
