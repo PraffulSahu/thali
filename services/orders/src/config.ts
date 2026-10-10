@@ -28,8 +28,14 @@ export const ordersConfigShape = {
   IDENTITY_URL: z.url().default('http://localhost:4001'),
   MARKETPLACE_URL: z.url().default('http://localhost:4002'),
   PAYMENTS_URL: z.url().default('http://localhost:4004'),
-  /** Timeout for calls to other services. */
+  /** Timeout for calls to other services (identity, marketplace). */
   INTERNAL_HTTP_TIMEOUT_MS: int(5000, 100),
+  /**
+   * Timeout for calls to payments. payments itself waits up to PAYMENT_PROVIDER_TIMEOUT_MS (default 8000) on the
+   * provider inside createIntent / reconcile, so this must exceed it plus a margin, or orders gives up (and may
+   * retry) while payments is still talking to the provider. Keep it below the gateway's UPSTREAM_TIMEOUT_MS (15000).
+   */
+  PAYMENTS_HTTP_TIMEOUT_MS: int(12_000, 100),
 };
 
 type Shape = typeof ordersConfigShape;

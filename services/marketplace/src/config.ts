@@ -62,6 +62,11 @@ export const MarketplaceConfigShape = {
   /** A PENDING_PAYMENT membership idle this long is reconciled with payments (CANCELLED unless captured). */
   MEMBERSHIP_PENDING_TTL_SEC: z.coerce.number().int().min(60).default(900),
   INTERNAL_HTTP_TIMEOUT_MS: z.coerce.number().int().min(100).default(3000),
+  /**
+   * Timeout for calls to payments (membership intents / reconcile). Must exceed payments' PAYMENT_PROVIDER_TIMEOUT_MS
+   * (default 8000) plus a margin; below the gateway's UPSTREAM_TIMEOUT_MS (15000).
+   */
+  PAYMENTS_HTTP_TIMEOUT_MS: z.coerce.number().int().min(100).default(12_000),
 };
 
 export type MarketplaceConfig = BaseConfig & {

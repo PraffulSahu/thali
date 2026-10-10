@@ -41,7 +41,7 @@ async function main() {
     storage: createStorageProvider(config),
     identity: createIdentityClient({ baseUrl: config.IDENTITY_URL, secret: config.INTERNAL_SERVICE_SECRET }),
     orders: createOrdersClient({ baseUrl: config.ORDERS_URL, secret: config.INTERNAL_SERVICE_SECRET, timeoutMs: config.INTERNAL_HTTP_TIMEOUT_MS }),
-    payments: createPaymentsClient({ baseUrl: config.PAYMENTS_URL, secret: config.INTERNAL_SERVICE_SECRET, timeoutMs: config.INTERNAL_HTTP_TIMEOUT_MS }),
+    payments: createPaymentsClient({ baseUrl: config.PAYMENTS_URL, secret: config.INTERNAL_SERVICE_SECRET, timeoutMs: config.PAYMENTS_HTTP_TIMEOUT_MS }),
   };
   const app = buildApp(deps);
 

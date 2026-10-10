@@ -49,7 +49,8 @@ export function createPaymentsClient(config: OrdersConfig): PaymentsClient {
   const http = internalClient('payments', config.PAYMENTS_URL, {
     from: 'orders',
     secret: config.INTERNAL_SERVICE_SECRET,
-    timeoutMs: config.INTERNAL_HTTP_TIMEOUT_MS,
+    // payments may itself wait PAYMENT_PROVIDER_TIMEOUT_MS on the provider: use the longer payments budget
+    timeoutMs: config.PAYMENTS_HTTP_TIMEOUT_MS,
   });
   return {
     createIntent: (req) => http.post('/internal/payment-intents', req, { schema: PaymentIntentViewSchema }),
