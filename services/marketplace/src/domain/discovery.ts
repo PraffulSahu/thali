@@ -18,7 +18,7 @@
 import { createHash } from 'node:crypto';
 import { DomainError } from '@thali/contracts';
 import { computeDeliveryFee } from '@thali/pricing';
-import { roadEstimate, type LatLng } from '@thali/service-kit';
+import { redisKey, roadEstimate, type LatLng } from '@thali/service-kit';
 import { Types } from 'mongoose';
 import type { AppContext } from '../context.js';
 import type { MenuItemDoc } from '../models/menu-item.js';
@@ -314,7 +314,7 @@ async function getListing(ctx: AppContext, query: DiscoveryQuery, area: ServiceA
   if (!ttl) return computeListing(ctx, query, area);
   let key: string | null = null;
   try {
-    key = cacheKey(query, area, await discoveryEpoch(ctx.redis));
+    key = redisKey(ctx.redis, cacheKey(query, area, await discoveryEpoch(ctx.redis)));
     const hit = await ctx.redis.get(key);
     if (hit) return JSON.parse(hit) as Listing;
   } catch (err) {

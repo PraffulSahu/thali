@@ -16,6 +16,7 @@ import { couponRedemptionModel } from './coupon-redemption.js';
 import { membershipPlanModel } from './membership-plan.js';
 import { membershipModel } from './membership.js';
 import { ratingModel } from './rating.js';
+import { localityModel } from './locality.js';
 
 export function getModels(conn: Connection) {
   return {
@@ -32,6 +33,8 @@ export function getModels(conn: Connection) {
     MembershipPlan: membershipPlanModel(conn),
     Membership: membershipModel(conn),
     Rating: ratingModel(conn),
+    // UI redesign (MKT-1)
+    Locality: localityModel(conn),
   };
 }
 export type Models = ReturnType<typeof getModels>;

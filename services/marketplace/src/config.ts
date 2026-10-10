@@ -48,6 +48,8 @@ export const MarketplaceConfigShape = {
   DISCOVERY_CACHE_TTL_SEC: z.coerce.number().int().min(0).max(3600).default(60),
   /** MKT-10: hosts whose absolute https image URLs are served as-is (CSV, `*.example.com` = subdomains, 'none' = no external images). */
   EXTERNAL_IMAGE_HOSTS: z.string().optional(),
+  /** MKT-1: directory holding localities.json (demo gazetteer lazy-load). Default <repo>/scripts/seed-data. */
+  SEED_DATA_DIR: z.string().optional(),
   /** Upper bound on any restaurant's delivery radius (candidate pre-filter for discovery). */
   MAX_DELIVERY_RADIUS_KM: z.coerce.number().positive().default(15),
 

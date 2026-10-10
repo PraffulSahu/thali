@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { rateLimit, validate } from '@thali/service-kit';
 import type { RouteModule } from '../context.js';
 import { DISCOVERY_SORTS, discoverRestaurants, searchCatalog, serviceability } from '../domain/discovery.js';
+import { autocompletePlaces, placeDetails, reverseGeocode } from '../domain/places.js';
 import { API, boolQuery, json, splitCsv, LatLngQuery, RatingView } from './common.js';
 
 const DiscoveryQuery = LatLngQuery.extend({
@@ -16,6 +17,28 @@ const DiscoveryQuery = LatLngQuery.extend({
   limit: z.coerce.number().int().min(1).max(50).default(20),
 });
 const SearchQuery = LatLngQuery.extend({ q: z.string().trim().min(1).max(100) });
+const SessionToken = z.string().trim().min(1).max(100).optional().describe('Places session token (Google billing session: autocomplete calls + one details call)');
+const PlacesQuery = z.object({
+  q: z.string().trim().min(2).max(100),
+  lat: z.coerce.number().min(-90).max(90).optional().describe('Bias point (optional, with lng)'),
+  lng: z.coerce.number().min(-180).max(180).optional(),
+  limit: z.coerce.number().int().min(1).max(10).default(8),
+  sessionToken: SessionToken,
+});
+const PlaceParams = z.object({ placeId: z.string().trim().min(1).max(300) });
+const PlaceSource = z.enum(['GOOGLE', 'DEMO_GAZETTEER', 'FALLBACK']).describe('DEMO_GAZETTEER/FALLBACK = our own locality list (label it in the UI)');
+const PlaceSuggestionView = z
+  .object({
+    id: z.string().describe('Pass to /discovery/places/:placeId'),
+    primary: z.string(),
+    secondary: z.string(),
+    locality: z.string().nullable(),
+    city: z.string().nullable(),
+    pincode: z.string().nullable(),
+    location: z.object({ lat: z.number(), lng: z.number() }).nullable().describe('Null for Google suggestions (resolve with details)'),
+    source: PlaceSource,
+  })
+  .meta({ id: 'PlaceSuggestion' });
 
 const MatchedItem = z.object({ id: z.string(), name: z.string(), pricePaise: z.number(), isVeg: z.boolean(), imageUrl: z.string().nullable() });
 export const DiscoveryItemView = z
@@ -51,6 +74,32 @@ const Facets = z
   .object({ cuisines: z.array(z.object({ slug: z.string(), count: z.number().int() })) })
   .describe('MKT-11: restaurants per cuisine slug after q/veg/price filters (cuisine and openNow filters not applied)');
 
+const AreaRef = z.object({ id: z.string(), name: z.string(), minOrderPaise: z.number().int() });
+const PlaceDetailsView = z
+  .object({
+    id: z.string(),
+    formattedAddress: z.string(),
+    locality: z.string().nullable(),
+    city: z.string().nullable(),
+    pincode: z.string().nullable(),
+    location: z.object({ lat: z.number(), lng: z.number() }),
+    serviceable: z.boolean(),
+    serviceArea: AreaRef.nullable(),
+    source: PlaceSource,
+  })
+  .meta({ id: 'PlaceDetails' });
+const ReverseView = z
+  .object({
+    label: z.string().describe('"12th Main Rd, Indiranagar" (Google) / "Indiranagar, Bengaluru" (gazetteer) / "lat, lng" when nothing is near'),
+    locality: z.string().nullable(),
+    city: z.string().nullable(),
+    pincode: z.string().nullable(),
+    serviceable: z.boolean(),
+    serviceArea: AreaRef.nullable(),
+    source: PlaceSource,
+  })
+  .meta({ id: 'ReverseGeocode' });
+
 const D = `${API}/discovery`;
 
 export const discoveryRoutes: RouteModule = {
@@ -70,6 +119,20 @@ export const discoveryRoutes: RouteModule = {
     const vPoint = validate({ query: LatLngQuery });
     r.get(`${D}/serviceability`, limiter, vPoint, async (req, res) => {
       res.json(await serviceability(ctx, vPoint.get(req).query));
+    });
+
+    // MKT-1: address search / place lookup / reverse geocoding
+    const vPlaces = validate({ query: PlacesQuery });
+    r.get(`${D}/places`, limiter, vPlaces, async (req, res) => {
+      res.json(await autocompletePlaces(ctx, vPlaces.get(req).query));
+    });
+    const vPlace = validate({ params: PlaceParams, query: z.object({ sessionToken: SessionToken }) });
+    r.get(`${D}/places/:placeId`, limiter, vPlace, async (req, res) => {
+      const { params, query } = vPlace.get(req);
+      res.json(await placeDetails(ctx, params.placeId, query.sessionToken));
+    });
+    r.get(`${D}/reverse`, limiter, vPoint, async (req, res) => {
+      res.json(await reverseGeocode(ctx, vPoint.get(req).query));
     });
   },
   openapi(api) {
@@ -99,6 +162,25 @@ export const discoveryRoutes: RouteModule = {
       method: 'get', path: `${D}/serviceability`, tags, rateLimited: true, summary: 'Is this point inside an active service area?',
       request: { query: LatLngQuery },
       responses: { 200: { description: 'Serviceability', content: json(z.object({ serviceable: z.boolean(), area: AreaView.nullable() })) } },
+    });
+    api.route({
+      method: 'get', path: `${D}/places`, tags, rateLimited: true,
+      summary: 'Address autocomplete (Google Places when configured, else / on failure the locality gazetteer)',
+      request: { query: PlacesQuery },
+      responses: { 200: { description: 'Suggestions', content: json(z.object({ items: z.array(PlaceSuggestionView), source: PlaceSource })) } },
+    });
+    api.route({
+      method: 'get', path: `${D}/places/:placeId`, tags, rateLimited: true,
+      summary: 'Resolve a suggestion to coordinates + serviceability. 502 UPSTREAM_UNAVAILABLE only for a Google id while Google is down.',
+      request: { params: PlaceParams, query: z.object({ sessionToken: SessionToken }) },
+      responses: { 200: { description: 'Place', content: json(PlaceDetailsView) } },
+      errors: ['NOT_FOUND', 'UPSTREAM_UNAVAILABLE'],
+    });
+    api.route({
+      method: 'get', path: `${D}/reverse`, tags, rateLimited: true,
+      summary: 'Label a point ("Use my location") + serviceability. Never fails on a provider outage (gazetteer fallback, 3 km).',
+      request: { query: LatLngQuery },
+      responses: { 200: { description: 'Reverse geocode', content: json(ReverseView) } },
     });
   },
 };

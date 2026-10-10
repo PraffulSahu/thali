@@ -327,6 +327,7 @@ describe('discovery listing cache (MKT-13)', () => {
 
   it('the ordered id list is reused within the TTL (same geohash-7 cell + filters) and rebuilt after an epoch bump', async () => {
     expect(await names()).toEqual(['First', 'Second']);
+    expect(await h.tr.redis.keys(`${h.tr.prefix}disc:list:*`)).toHaveLength(1); // REDIS_KEY_PREFIX applied
     const third = await seedRestaurant(h.models, { name: 'Third', location: northOf(drop, 0.5) });
     expect(await names()).toEqual(['First', 'Second']); // cached order
     expect(await names({ lat: drop.lat + 0.0001, lng: drop.lng + 0.0001 })).toEqual(['First', 'Second']); // ~15 m away: same cell
