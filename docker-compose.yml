@@ -60,6 +60,8 @@ x-common-env: &common-env
   EMAIL_PROVIDER: ${EMAIL_PROVIDER:-mailpit}
   GEO_PROVIDER: ${GEO_PROVIDER:-demo}
   STORAGE_PROVIDER: ${STORAGE_PROVIDER:-s3}
+  # Absolute image URLs (seed data, admin catalog) are rendered only from these hosts.
+  EXTERNAL_IMAGE_HOSTS: ${EXTERNAL_IMAGE_HOSTS:-live.staticflickr.com,upload.wikimedia.org,randomuser.me}
 
 x-geo-env: &geo-env
   GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
@@ -232,7 +234,7 @@ services:
     image: thali/identity:local
     depends_on: *backend-depends
     environment:
-      <<: *common-env
+      <<: [*common-env, *storage-env]
       SERVICE_NAME: identity
       PORT: "4001"
       MONGO_URI: mongodb://thali_identity:${MONGO_IDENTITY_PASSWORD}@mongo:27017/?replicaSet=rs0&authSource=admin
