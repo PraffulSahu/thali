@@ -97,3 +97,110 @@ export {
   type CreateOpenApiOptions,
 } from './openapi.js';
 export { gracefulShutdown, type GracefulShutdownOptions } from './shutdown.js';
+
+// ---- events & runtime (Task 5) ----
+export {
+  createEnvelope,
+  eventStreamName,
+  streamKey,
+  entryField,
+  parseEnvelope,
+  type CreateEnvelopeOptions,
+} from './events/envelope.js';
+export {
+  outboxModel,
+  inboxModel,
+  deadLetterModel,
+  initEventCollections,
+  OUTBOX_COLLECTION,
+  INBOX_COLLECTION,
+  DEAD_LETTERS_COLLECTION,
+  OUTBOX_PUBLISHED_TTL_SEC,
+  INBOX_TTL_SEC,
+  type OutboxRecord,
+  type InboxRecord,
+  type DeadLetterRecord,
+} from './events/models.js';
+export { enqueueEvent, emitEvent } from './events/outbox.js';
+export { startRelay, DEFAULT_STREAM_MAXLEN, type StartRelayOptions, type RelayHandle } from './events/relay.js';
+export {
+  startConsumer,
+  type StartConsumerOptions,
+  type ConsumerHandle,
+  type EventHandler,
+  type EventHandlers,
+} from './events/consumer.js';
+export {
+  listDeadLetters,
+  replayDeadLetter,
+  writeDeadLetter,
+  type ListDeadLettersOptions,
+  type ReplayResult,
+  type WriteDeadLetterInput,
+} from './events/dead-letters.js';
+export { createLeaderLock, type LeaderLock, type LeaderLockOptions } from './leader-lock.js';
+export {
+  startScheduler,
+  type StartSchedulerOptions,
+  type SchedulerHandle,
+  type SchedulerRunContext,
+} from './scheduler.js';
+export { auditEvent, type AuditInput } from './audit.js';
+export {
+  publishRealtime,
+  subscribeRealtime,
+  realtimeChannel,
+  type RealtimeMessage,
+  type RealtimeSubscription,
+} from './realtime.js';
+export {
+  healthDetails,
+  recordProviderError,
+  providerErrorStats,
+  type HealthDetails,
+  type HealthDetailsOptions,
+} from './health-details.js';
+export {
+  createOpsRouter,
+  registerOpsRoutes,
+  HealthDetailsSchema,
+  DeadLetterViewSchema,
+  type OpsRouterOptions,
+} from './ops-routes.js';
+
+// ---- providers ----
+export { ProviderError, fetchJson, type ProviderFetchOptions } from './providers/http.js';
+export {
+  verifyUpload,
+  SNIFF_BYTES,
+  type StorageProvider,
+  type PresignPutInput,
+  type PresignedPut,
+  type PresignedGet,
+  type ObjectHead,
+  type VerifyUploadInput,
+  type VerifyUploadResult,
+} from './providers/storage.js';
+export { createS3Storage, createStorageProvider, type S3StorageOptions, type StorageConfig } from './providers/s3-storage.js';
+export {
+  haversineKm,
+  roadEstimate,
+  createGeoProvider,
+  ROAD_FACTOR,
+  AVG_SPEED_KMPH,
+  type LatLng,
+  type DistanceEta,
+  type GeocodeResult,
+  type GeoProvider,
+  type GeoProviderConfig,
+  type RoadEstimateOptions,
+} from './providers/geo.js';
+export { createDemoGeo } from './providers/demo-geo.js';
+export {
+  createGoogleGeo,
+  GOOGLE_ROUTES_URL,
+  GOOGLE_ROUTES_FIELD_MASK,
+  GOOGLE_GEOCODE_URL,
+  type GoogleGeoOptions,
+  type GoogleTravelMode,
+} from './providers/google-geo.js';
