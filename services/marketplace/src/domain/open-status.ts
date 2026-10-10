@@ -66,7 +66,20 @@ interface LocalParts {
   dow: number;
 }
 
+/** Memo per (tz, UTC minute): listings evaluate hundreds of restaurants at the same few instants. */
+const partsCache = new Map<string, LocalParts>();
+
 function localParts(date: Date, tz: string): LocalParts {
+  const key = `${tz}|${Math.floor(date.getTime() / 60_000)}`;
+  const hit = partsCache.get(key);
+  if (hit) return hit;
+  const p = computeLocalParts(date, tz);
+  if (partsCache.size >= 4096) partsCache.clear();
+  partsCache.set(key, p);
+  return p;
+}
+
+function computeLocalParts(date: Date, tz: string): LocalParts {
   const parts = Object.fromEntries(formatter(tz).formatToParts(date).map((p) => [p.type, p.value]));
   const y = Number(parts.year);
   const mo = Number(parts.month);
