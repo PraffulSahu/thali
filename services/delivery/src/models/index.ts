@@ -1,4 +1,5 @@
 import type { Connection } from 'mongoose';
+import { cancelledOrderModel, type CancelledOrderModel } from './cancelled-order.js';
 import { jobModel, type JobModel } from './delivery-job.js';
 import { offerModel, type OfferModel } from './delivery-offer.js';
 import { locationPingModel, type LocationPingModel } from './location-ping.js';
@@ -9,10 +10,17 @@ export interface DeliveryModels {
   Job: JobModel;
   Offer: OfferModel;
   LocationPing: LocationPingModel;
+  CancelledOrder: CancelledOrderModel;
 }
 
 export function getModels(conn: Connection): DeliveryModels {
-  return { Partner: partnerModel(conn), Job: jobModel(conn), Offer: offerModel(conn), LocationPing: locationPingModel(conn) };
+  return {
+    Partner: partnerModel(conn),
+    Job: jobModel(conn),
+    Offer: offerModel(conn),
+    LocationPing: locationPingModel(conn),
+    CancelledOrder: cancelledOrderModel(conn),
+  };
 }
 
 /**

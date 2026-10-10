@@ -84,6 +84,26 @@ describe('consumed order events', () => {
     ).resolves.toBeUndefined();
   });
 
+  it('cancel-before-accept race: order.cancelled with no job leaves a tombstone, so a retried order.accepted creates/dispatches nothing', async () => {
+    const payload = acceptedPayload();
+    const cancelled = { childOrderId: payload.childOrderId, checkoutId: payload.checkoutId, userId: payload.userId, restaurantId: payload.restaurantId, actor: 'CUSTOMER' as const, reason: 'changed mind', refundPaise: 0 };
+    await deliverEvent(h, envelope('order.cancelled', cancelled, payload.childOrderId));
+    await deliverEvent(h, envelope('order.cancelled', cancelled, payload.childOrderId)); // replay: still one tombstone
+    expect(await h.ctx.models.CancelledOrder.countDocuments({ childOrderId: payload.childOrderId })).toBe(1);
+
+    await deliverEvent(h, envelope('order.accepted', payload, payload.childOrderId)); // late / retried
+    expect(await h.ctx.models.Job.countDocuments({ childOrderId: payload.childOrderId })).toBe(0);
+    expect(await outboxEvents(h, 'delivery.job_created', { childOrderId: payload.childOrderId })).toHaveLength(0);
+    await createPartner(h, { location: at(0.1, 0) });
+    await runDispatchTick(h.ctx);
+    expect(await h.ctx.models.Job.countDocuments({ childOrderId: payload.childOrderId })).toBe(0);
+
+    // other orders are unaffected
+    const other = acceptedPayload();
+    await deliverEvent(h, envelope('order.accepted', other, other.childOrderId));
+    expect(await h.ctx.models.Job.countDocuments({ childOrderId: other.childOrderId })).toBe(1);
+  });
+
   describe('order.delivery_failed (admin "Delivery failed" in orders)', () => {
     const failed = (childOrderId: string) => envelope('order.delivery_failed', { childOrderId, reason: 'Customer unreachable' }, childOrderId);
 

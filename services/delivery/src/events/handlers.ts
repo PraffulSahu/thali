@@ -2,7 +2,8 @@
  * Consumed events (LLD 9) on `events.orders`, consumer group `cg.delivery`:
  *  - order.accepted  → create the delivery job (idempotent per childOrderId; codes stored as hashes)
  *  - order.ready     → set readyAt
- *  - order.cancelled → cancel the job, cancel live offers, release partner capacity
+ *  - order.cancelled → cancel the job, cancel live offers, release partner capacity; with no job yet, record a
+ *    `cancelled_orders` tombstone so a late / retried order.accepted never creates or dispatches one
  *  - order.delivery_failed → (admin marked the order "Delivery failed" in orders) end the job: PICKED_UP /
  *    OUT_FOR_DELIVERY → FAILED (actor ADMIN — the decision is an admin's; SYSTEM may not fail a job), a
  *    pre-pickup job → CANCELLED; release partner capacity. Emits `delivery.failed` only for the FAILED case,
@@ -27,6 +28,10 @@ export function createEventHandlers(ctx: DeliveryContext): EventHandlers {
     const p = e.payload;
     const existing = await ctx.models.Job.exists({ childOrderId: p.childOrderId }).session(session);
     if (existing) return; // business-level idempotency (inbox handles same event id)
+    if (await ctx.models.CancelledOrder.exists({ childOrderId: p.childOrderId }).session(session)) {
+      ctx.logger.info({ childOrderId: p.childOrderId, eventId: e.id }, 'order.accepted for an order already cancelled; no delivery job created');
+      return;
+    }
     const est = await ctx.geo.distanceAndEta(toLatLng(p.pickup.location), toLatLng(p.drop.location));
     const now = ctx.now();
     const acceptedAt = new Date(e.occurredAt);
@@ -67,7 +72,16 @@ export function createEventHandlers(ctx: DeliveryContext): EventHandlers {
 
   async function onCancelled(e: EventEnvelope<'order.cancelled'>, session: ClientSession) {
     const job = await ctx.models.Job.findOne({ childOrderId: e.payload.childOrderId }, null, { session }).lean<JobLean>();
-    if (!job) return; // cancelled before acceptance: no job was ever created
+    if (!job) {
+      // Cancelled before a job exists (never accepted, or order.accepted not processed yet / being retried):
+      // leave a tombstone so that order.accepted can't create a live job afterwards.
+      await ctx.models.CancelledOrder.updateOne(
+        { childOrderId: e.payload.childOrderId },
+        { $setOnInsert: { childOrderId: e.payload.childOrderId, actor: e.payload.actor, reason: e.payload.reason, cancelledAt: ctx.now() } },
+        { upsert: true, session },
+      );
+      return;
+    }
     if ((TERMINAL_JOB_STATUSES as readonly string[]).includes(job.status)) return;
     await transitionJob(ctx, session, job, 'CANCELLED', 'SYSTEM', {
       reason: `order cancelled (${e.payload.actor}): ${e.payload.reason}`,
