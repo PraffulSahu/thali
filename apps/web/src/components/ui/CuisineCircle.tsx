@@ -11,7 +11,7 @@
  * Disc colour = color-mix(<cuisine hue> pct%, var(--card)) — works in both themes. Art = the extracted
  * illustration for known slugs; `imageUrl` (if given) wins; unknown slugs use the "all" art.
  */
-import { useRef, type ReactNode } from 'react';
+import { useRef, type MouseEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { cn } from '../../lib/cn';
 import { CuisineArt, cuisineMeta } from '../illustrations';
@@ -22,7 +22,7 @@ export interface CuisineCircleProps {
   label: string;
   imageUrl?: string | null;
   selected?: boolean;
-  onClick?: () => void;
+  onClick?: (e: MouseEvent<HTMLElement>) => void;
   to?: string;
   variant?: 'app' | 'marketing' | 'small';
   index?: number;
@@ -67,7 +67,7 @@ export function CuisineCircle({ slug, label, imageUrl, selected, onClick, to, va
   const style = index !== undefined ? { animationDelay: `${index * 0.04}s` } : undefined;
   if (to) {
     return (
-      <Link to={to} className={cls} style={style} aria-current={selected ? 'true' : undefined}>
+      <Link to={to} onClick={onClick} className={cls} style={style} aria-current={selected ? 'true' : undefined}>
         {inner}
       </Link>
     );

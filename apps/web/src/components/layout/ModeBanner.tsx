@@ -1,35 +1,58 @@
 /**
- * Persistent environment banner from `GET /meta` (PRD §6): "DEMO MODE" or "SANDBOX". Hidden in production,
- * while loading, and if /meta fails (never guess the mode). Not dismissible by design.
+ * Environment banners from `GET /meta` (design-spec §3.12). Hidden in production, while loading, and if
+ * /meta fails (never guess the mode). Not dismissible.
+ *
+ *   <ModeBanner />   // app strip: 32px, ink background, mono turmeric text (sandbox: sky text)
+ *   <DemoPill />     // public utility-bar pill: "DEMO MODE · no real money, SMS or deliveries"
  */
 import { useMeta } from '../../hooks/useMeta';
+import { cn } from '../../lib/cn';
 
-export function ModeBanner() {
+function providersTitle(providers: Record<string, string> | undefined): string | undefined {
+  if (!providers) return undefined;
+  const list = Object.entries(providers).map(([k, v]) => `${k}: ${v}`);
+  return list.length ? `Providers — ${list.join(', ')}` : undefined;
+}
+
+export function ModeBanner({ className }: { className?: string }) {
   const { mode, meta } = useMeta();
   if (mode !== 'demo' && mode !== 'sandbox') return null;
   const demo = mode === 'demo';
-  const mocked = meta?.providers
-    ? Object.entries(meta.providers)
-        .filter(([, v]) => v === 'demo')
-        .map(([k]) => k)
-    : [];
   return (
     <div
-      role="note"
+      role="status"
       aria-label={demo ? 'Demo mode' : 'Sandbox mode'}
-      className={demo ? 'bg-slate-900 text-slate-100' : 'bg-info-800 text-white'}
+      title={providersTitle(meta?.providers as Record<string, string> | undefined)}
+      className={cn(
+        'on-color flex min-h-8 items-center justify-center bg-strip px-4 py-1.5 text-center font-mono text-xs font-medium leading-tight tracking-[.04em]',
+        demo ? 'text-strip-fg' : 'text-[#7aa7ff]',
+        className,
+      )}
     >
-      <div className="mx-auto flex max-w-content flex-wrap items-center justify-center gap-x-3 gap-y-0.5 px-4 py-1.5 text-center text-xs sm:text-[0.8125rem]">
-        <span className="inline-flex items-center gap-1.5 font-bold tracking-wider">
-          <span aria-hidden="true" className={demo ? 'size-2 rounded-full bg-warn-600' : 'size-2 rounded-full bg-info-100'} />
-          {demo ? 'DEMO MODE' : 'SANDBOX'}
-        </span>
-        <span className={demo ? 'text-slate-300' : 'text-info-100'}>
-          {demo
-            ? `Seeded data and simulated providers${mocked.length ? ` (${mocked.join(', ')})` : ''}. No real money moves.`
-            : 'Real providers in test mode. No real charges.'}
-        </span>
-      </div>
+      {demo ? 'DEMO MODE — no real money, SMS or deliveries' : 'SANDBOX — real providers in test mode, no real charges'}
     </div>
+  );
+}
+
+/** Same as ModeBanner (alias with the design-system name). */
+export const DemoBanner = ModeBanner;
+
+export function DemoPill({ className }: { className?: string }) {
+  const { mode, meta } = useMeta();
+  if (mode !== 'demo' && mode !== 'sandbox') return null;
+  const demo = mode === 'demo';
+  return (
+    <span
+      role="status"
+      title={providersTitle(meta?.providers as Record<string, string> | undefined)}
+      className={cn(
+        'inline-flex h-6 items-center gap-[7px] rounded-xs px-[9px] font-mono text-[11px] font-semibold tracking-[.03em]',
+        demo ? 'bg-sun-soft text-sun-ink' : 'bg-info-bg text-info',
+        className,
+      )}
+    >
+      <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
+      {demo ? 'DEMO MODE · no real money, SMS or deliveries' : 'SANDBOX · test mode, no real charges'}
+    </span>
   );
 }

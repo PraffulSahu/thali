@@ -53,9 +53,11 @@ describe('area pages render under the app router', SUITE, () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Earnings' }, slow)).toBeInTheDocument();
   });
 
-  it('admin (route lazy, public): /admin/login', async () => {
-    renderApp('/admin/login', makeAuth());
-    expect(await screen.findByRole('heading', { level: 1, name: 'Admin sign in' }, slow)).toBeInTheDocument();
+  it('legacy /admin/login redirects to the unified sign-in (Admin tab, next kept)', async () => {
+    const router = renderApp('/admin/login?next=%2Fadmin%2Faudit', makeAuth());
+    expect(await screen.findByRole('heading', { level: 1, name: 'Operations sign in' }, slow)).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/signin');
+    expect(router.state.location.search).toBe('?role=admin&next=%2Fadmin%2Faudit');
   });
 
   it('admin (route lazy, guarded): /admin/audit', async () => {
@@ -68,8 +70,8 @@ describe('area pages render under the app router', SUITE, () => {
     expect(await screen.findByRole('heading', { level: 1, name: 'Search' }, slow)).toBeInTheDocument();
     await act(() => router.navigate('/partner/earnings'));
     expect(await screen.findByRole('heading', { level: 1, name: 'Earnings' }, slow)).toBeInTheDocument();
-    await act(() => router.navigate('/admin/login'));
-    expect(await screen.findByRole('heading', { level: 1, name: 'Admin sign in' }, slow)).toBeInTheDocument();
+    await act(() => router.navigate('/admin/audit'));
+    expect(await screen.findByRole('heading', { name: /you don.t have access/i }, slow)).toBeInTheDocument();
     await act(() => router.navigate('/search'));
     expect(await screen.findByRole('heading', { level: 1, name: 'Search' }, slow)).toBeInTheDocument();
   });
@@ -77,6 +79,6 @@ describe('area pages render under the app router', SUITE, () => {
   it('unknown paths render the area NotFound inside the shell', async () => {
     renderApp('/restaurant/definitely/not/here', makeAuth({ roles: ['CONSUMER', 'RESTAURANT_OWNER'] }));
     expect(await screen.findByRole('heading', { name: /couldn.t find that page/i }, slow)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Thali for Restaurants, home/ })).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: /Thali for Restaurants, home/ }).length).toBeGreaterThan(0);
   });
 });

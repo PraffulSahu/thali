@@ -1,6 +1,6 @@
 import './setup';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -40,21 +40,54 @@ beforeEach(() => {
 // These assert only foundation behaviour (shell + guards). Area content is owned by the area tasks and changes.
 const guardHeadings = /sign in to continue|verify to continue|you don.t have access|no restaurant on this account|not a delivery partner/i;
 async function expectAreaShell(logoName: RegExp) {
-  expect(await screen.findByRole('link', { name: logoName }, slow)).toBeInTheDocument();
+  expect((await screen.findAllByRole('link', { name: logoName }, slow)).length).toBeGreaterThan(0);
   expect(screen.getByRole('link', { name: 'Skip to main content' })).toBeInTheDocument();
 }
 
 describe('route tree', SUITE, () => {
   it('consumer area is public', async () => {
-    renderApp('/', makeAuth());
+    renderApp('/search', makeAuth());
     await expectAreaShell(/^Thali, home$/);
     expect(screen.queryByRole('heading', { name: guardHeadings })).not.toBeInTheDocument();
+  });
+
+  it('/ shows the public landing until a delivery location is chosen, then the consumer index', async () => {
+    localStorage.removeItem('thali.location');
+    renderApp('/', makeAuth());
+    expect(await screen.findByRole('heading', { level: 1, name: /two kitchens/i }, slow)).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /delivery address/i })).toBeInTheDocument();
+  });
+
+  it('/ with a chosen location renders the consumer index, not the landing', async () => {
+    localStorage.setItem('thali.location', JSON.stringify({ lat: 12.97, lng: 77.64, label: 'Home', source: 'pin' }));
+    renderApp('/', makeAuth());
+    await expectAreaShell(/^Thali, home$/);
+    expect(screen.queryByRole('heading', { level: 1, name: /two kitchens/i })).not.toBeInTheDocument();
+    localStorage.removeItem('thali.location');
+  });
+
+  it('/welcome always shows the landing; static pages render in the public shell', async () => {
+    localStorage.setItem('thali.location', JSON.stringify({ lat: 12.97, lng: 77.64, label: 'Home', source: 'pin' }));
+    const router = renderApp('/welcome', makeAuth());
+    expect(await screen.findByRole('heading', { level: 1, name: /two kitchens/i }, slow)).toBeInTheDocument();
+    for (const [path, h1] of [
+      ['/terms', /terms of use/i],
+      ['/privacy', /privacy policy/i],
+      ['/refunds', /refunds, to the rupee/i],
+      ['/help', /how can we help/i],
+      ['/partner-with-us', /counter screen built for/i],
+      ['/ride-with-thali', /clear offers/i],
+    ] as const) {
+      await act(() => router.navigate(path));
+      expect(await screen.findByRole('heading', { level: 1, name: h1 }, slow)).toBeInTheDocument();
+    }
+    localStorage.removeItem('thali.location');
   });
 
   it('restaurant area asks guests to sign in and keeps the route', async () => {
     renderApp('/restaurant', makeAuth());
     expect(await screen.findByRole('heading', { name: /sign in to continue/i }, slow)).toBeInTheDocument();
-    expect(screen.getAllByRole('link', { name: /^sign in$/i })[0]).toHaveAttribute('href', '/signin?next=%2Frestaurant');
+    expect(within(screen.getByRole('main')).getByRole('link', { name: /^sign in$/i })).toHaveAttribute('href', '/signin?next=%2Frestaurant');
   });
 
   it('restaurant area shows a forbidden state with an onboarding link for plain consumers', async () => {
@@ -103,16 +136,25 @@ describe('route tree', SUITE, () => {
     expect(screen.queryByRole('heading', { name: guardHeadings })).not.toBeInTheDocument();
   });
 
-  it('/admin/login is public', async () => {
+  it('/admin/login is public (redirects to the Admin tab of the unified sign-in)', async () => {
     renderApp('/admin/login', makeAuth());
-    await expectAreaShell(/Thali Admin, home/);
+    expect(await screen.findByRole('heading', { level: 1, name: 'Operations sign in' }, slow)).toBeInTheDocument();
+    expect(screen.getByLabelText(/work email/i)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: guardHeadings })).not.toBeInTheDocument();
   });
 
-  it('/signin renders the OTP form', async () => {
+  it('/signin renders the OTP form (customer tab by default)', async () => {
     renderApp('/signin?next=%2Forders', makeAuth());
-    expect(await screen.findByRole('heading', { name: 'Sign in to Thali' }, slow)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Welcome back' }, slow)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Customer' })).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByLabelText(/mobile number/i)).toBeInTheDocument();
+  });
+
+  it('/admin/forgot and /admin/reset-password are public', async () => {
+    const router = renderApp('/admin/forgot', makeAuth());
+    expect(await screen.findByRole('heading', { level: 1, name: 'Reset your password' }, slow)).toBeInTheDocument();
+    await act(() => router.navigate('/admin/reset-password?token=abc'));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Choose a new password' }, slow)).toBeInTheDocument();
   });
 });
 

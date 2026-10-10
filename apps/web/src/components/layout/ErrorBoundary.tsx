@@ -20,12 +20,12 @@ function isChunkError(e: unknown): boolean {
 export function CrashView({ error, home = '/' }: { error: unknown; home?: string }) {
   const chunk = isChunkError(error);
   return (
-    <div role="alert" className="flex flex-col items-center gap-3 px-6 py-20 text-center">
-      <span className="grid size-14 place-items-center rounded-full bg-danger-50 text-danger-700">
-        <Icon name="alert" size={26} />
+    <div role="alert" className="mx-auto my-10 flex max-w-xl flex-col items-center gap-3 rounded-card border border-line bg-card px-6 py-10 text-center">
+      <span className="grid size-9 place-items-center rounded-item bg-bad-bg text-bad">
+        <Icon name="alert" size={18} />
       </span>
-      <h1 className="text-xl font-semibold text-slate-900">{chunk ? 'A new version is available' : 'Something went wrong'}</h1>
-      <p className="max-w-prose text-[0.9375rem] text-slate-600">
+      <h1 className="text-2xl text-fg">{chunk ? 'A new version is available' : 'Something went wrong'}</h1>
+      <p className="max-w-prose text-sm text-fg-3">
         {chunk
           ? 'Thali was updated while this tab was open. Reload to get the latest version.'
           : 'This page hit an unexpected error. Reloading usually fixes it; your cart and orders are safe.'}
@@ -34,7 +34,7 @@ export function CrashView({ error, home = '/' }: { error: unknown; home?: string
         <Button icon="refresh" onClick={() => window.location.reload()}>
           Reload
         </Button>
-        <ButtonLink to={home} variant="secondary">
+        <ButtonLink to={home} variant="ghost">
           Go to home
         </ButtonLink>
       </div>

@@ -84,7 +84,7 @@ export function ForbiddenState({
 /** Builds `/signin?next=<current path+search>` (or another sign-in path). */
 export function useSignInHref(signInPath = '/signin'): string {
   const loc = useLocation();
-  return `${signInPath}?next=${encodeURIComponent(loc.pathname + loc.search)}`;
+  return `${signInPath}${signInPath.includes('?') ? '&' : '?'}next=${encodeURIComponent(loc.pathname + loc.search)}`;
 }
 
 export function SessionExpiredState({ signInPath = '/signin', className }: { signInPath?: string; className?: string }) {

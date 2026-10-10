@@ -33,7 +33,7 @@ export interface RequireRoleProps {
 
 export function SessionLoading() {
   return (
-    <div role="status" className="flex items-center justify-center gap-3 py-24 text-slate-600">
+    <div role="status" className="flex items-center justify-center gap-3 py-24 text-fg-3">
       <Spinner label={null} size={22} />
       <span>Checking your session…</span>
     </div>
@@ -53,13 +53,13 @@ export function SignInPrompt({
 }) {
   const href = useSignInHref(signInPath);
   return (
-    <div className="flex flex-col items-center gap-3 px-6 py-16 text-center">
-      <span className="grid size-14 place-items-center rounded-full bg-brand-50 text-brand-700">
-        <Icon name="user" size={26} />
+    <div className="mx-auto my-6 flex max-w-xl flex-col items-center gap-3 rounded-card border border-line bg-card px-6 py-10 text-center">
+      <span className="grid size-9 place-items-center rounded-item bg-acc-soft text-acc-fg">
+        <Icon name="user" size={18} />
       </span>
-      <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-      <p className="max-w-prose text-[0.9375rem] text-slate-600">{message}</p>
-      <ButtonLink to={href} className="mt-2">
+      <h2 className="font-sans text-[17px] font-semibold tracking-normal text-fg">{title}</h2>
+      <p className="max-w-prose text-sm text-fg-3">{message}</p>
+      <ButtonLink to={href} className="mt-1">
         {cta}
       </ButtonLink>
     </div>

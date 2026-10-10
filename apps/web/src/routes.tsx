@@ -5,7 +5,11 @@
  * modules stay code-split, and their routes are real data-router children, so route `lazy`,
  * `errorElement`/`ErrorBoundary`, loaders and React.lazy elements all work.
  *
- *   /signin              shared OTP sign-in (?next=)
+ *   /signin              unified sign-in (?role=customer|restaurant|partner|admin&next=)
+ *   /admin/login         → redirects to /signin?role=admin (keeps next)
+ *   /admin/forgot, /admin/reset-password?token=   admin password reset (IDN-1), public
+ *   /welcome, /terms, /privacy, /refunds, /help, /partner-with-us, /ride-with-thali   public site (PublicShell)
+ *   /                    landing until a delivery location is chosen, then the consumer index (RoleArea gate)
  *   /restaurant/*        restaurant area (RESTAURANT_OWNER; /restaurant/onboarding needs sign-in only)
  *   /partner/*           delivery partner area (DELIVERY_PARTNER; /partner/onboarding needs sign-in only)
  *   /admin/*             admin area (ADMIN + MFA; /admin/login public)
@@ -14,7 +18,9 @@
  * Usage: `createAppRouter()` in App; tests: `const cfg = createAppRouterConfig();
  * createMemoryRouter(cfg.routes, { initialEntries, patchRoutesOnNavigation: cfg.patchRoutesOnNavigation })`.
  */
-import { createBrowserRouter, type PatchRoutesOnNavigationFunction, type RouteObject } from 'react-router';
+import { createBrowserRouter, Navigate, useLocation, type PatchRoutesOnNavigationFunction, type RouteObject } from 'react-router';
+import { PublicShell } from './components/layout/PublicShell';
+import { publicRoutes } from './features/public/routes';
 import type { AreaKey } from './components/layout/AppShell';
 import { RouteErrorPage } from './components/layout/ErrorBoundary';
 import { SessionLoading } from './components/layout/RequireRole';
@@ -42,6 +48,14 @@ function areaChildren(area: AreaKey, module: AreaModule): RouteObject[] {
   return area === 'consumer' ? module.routes : [{ path: area, children: module.routes }];
 }
 
+/** Legacy `/admin/login?next=` → the unified sign-in with the Admin tab. */
+export function AdminLoginRedirect() {
+  const { search } = useLocation();
+  const params = new URLSearchParams(search);
+  const next = params.get('next');
+  return <Navigate to={`/signin?role=admin${next ? `&next=${encodeURIComponent(next)}` : ''}`} replace />;
+}
+
 export const appRoutes: RouteObject[] = [
   {
     id: 'root',
@@ -51,6 +65,11 @@ export const appRoutes: RouteObject[] = [
     HydrateFallback: SessionLoading,
     children: [
       { path: 'signin', lazy: () => import('./components/auth/SignInPage').then((m) => ({ Component: m.default })) },
+      { path: 'admin/login', element: <AdminLoginRedirect /> },
+      { path: 'admin/login/*', element: <AdminLoginRedirect /> },
+      { path: 'admin/forgot', lazy: () => import('./components/auth/AdminPasswordPages').then((m) => ({ Component: m.AdminForgotPage })) },
+      { path: 'admin/reset-password', lazy: () => import('./components/auth/AdminPasswordPages').then((m) => ({ Component: m.AdminResetPasswordPage })) },
+      { id: 'public', element: <PublicShell />, children: publicRoutes },
       // Pathless + no children = matches nothing until its routes are patched in.
       ...AREAS.map(
         (area): RouteObject => ({

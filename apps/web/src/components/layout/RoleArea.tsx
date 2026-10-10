@@ -8,8 +8,13 @@
  *   export const routes: RouteObject[];          // required; paths RELATIVE to the area root, index = area home,
  *                                                // keep a '*' NotFound
  *   export const nav?: NavItem[];                // shell navigation (absolute `to` paths)
- *   export const HeaderActions?: ComponentType;  // extra header controls (consumer: location + cart)
+ *   export const HeaderActions?: ComponentType;  // legacy extra header controls (consumer: location + cart)
  *   export const wide?: boolean;                 // full-bleed main column
+ *   export const shell?: ConsumerShellConfig | RoleShellConfig;   // shell slots (location chip, context card…)
+ *   export const chrome?: 'auto' | 'none';       // 'none' = the area mounts its own shells as layout routes
+ *
+ * Consumer index gate: `/` renders the public landing (PublicShell + LandingPage) until a delivery location
+ * is chosen (lib/location), then the consumer area's index route (Discover).
  *
  * <AreaLayout> = AppShell (area nav) + path-based guard + Suspense (for React.lazy pages) + <Outlet/>.
  * Guards (by path):
@@ -18,10 +23,14 @@
  *   partner    DELIVERY_PARTNER, except /partner/onboarding* which only needs sign-in
  *   admin      ADMIN + MFA (amr has 'mfa'), except /admin/login* which is public
  */
-import { Suspense, type ComponentType, type ReactNode } from 'react';
+import { lazy, Suspense, type ComponentType, type ReactNode } from 'react';
 import { isRouteErrorResponse, Outlet, useLocation, useRouteError, type RouteObject } from 'react-router';
 import { useAuth } from '../../lib/auth';
+import { useChosenLocation } from '../../lib/location';
 import { AppShell, type AreaKey } from './AppShell';
+import type { ConsumerShellConfig } from './ConsumerShell';
+import { PublicShell } from './PublicShell';
+import type { RoleShellConfig } from './RoleSidebarShell';
 import { CrashView, NotFoundPage } from './ErrorBoundary';
 import { RequireAuth, RequireRole } from './RequireRole';
 import type { NavItem } from './RoleNav';
@@ -32,7 +41,11 @@ export interface AreaModule {
   nav?: NavItem[];
   HeaderActions?: ComponentType;
   wide?: boolean;
+  shell?: ConsumerShellConfig | RoleShellConfig;
+  chrome?: 'auto' | 'none';
 }
+
+const LandingPage = lazy(() => import('../../features/public/LandingPage'));
 
 /* ------------------------------------------------------------------ area module registry */
 
@@ -124,25 +137,55 @@ function useNavVisible(area: AreaKey): boolean {
 /** Shown while a React.lazy page inside an area suspends (route `lazy` keeps the previous page instead). */
 export function PageLoading() {
   return (
-    <div role="status" className="flex items-center justify-center gap-3 py-24 text-slate-600">
+    <div role="status" className="flex items-center justify-center gap-3 py-24 text-fg-3">
       <Spinner label={null} size={22} />
       <span>Loading…</span>
     </div>
   );
 }
 
-function AreaChrome({ area, children }: { area: AreaKey; children: ReactNode }) {
+function AreaChrome({ area, children, force }: { area: AreaKey; children: ReactNode; force?: boolean }) {
   const module = getAreaModule(area);
   const showNav = useNavVisible(area);
+  if (module?.chrome === 'none' && !force) return <>{children}</>;
   return (
-    <AppShell variant={area} nav={module?.nav} HeaderActions={module?.HeaderActions} showNav={showNav} wide={module?.wide}>
+    <AppShell variant={area} nav={module?.nav} HeaderActions={module?.HeaderActions} showNav={showNav} wide={module?.wide} shell={module?.shell}>
       {children}
     </AppShell>
   );
 }
 
+/** `/` with no chosen delivery location → public landing (design-spec §5.00 routing ruling). */
+function ConsumerIndexGate({ children }: { children: ReactNode }) {
+  const { pathname } = useLocation();
+  const loc = useChosenLocation();
+  if (pathname === '/' && !loc) {
+    return (
+      <PublicShell>
+        <Suspense fallback={<PageLoading />}>
+          <LandingPage />
+        </Suspense>
+      </PublicShell>
+    );
+  }
+  return <>{children}</>;
+}
+
 /** Layout route element for an area: shell + guard + Suspense + child routes. */
 export function AreaLayout({ area }: { area: AreaKey }) {
+  if (area === 'consumer') {
+    return (
+      <ConsumerIndexGate>
+        <AreaChrome area={area}>
+          <AreaGuard area={area}>
+            <Suspense fallback={<PageLoading />}>
+              <Outlet />
+            </Suspense>
+          </AreaGuard>
+        </AreaChrome>
+      </ConsumerIndexGate>
+    );
+  }
   return (
     <AreaChrome area={area}>
       <AreaGuard area={area}>
@@ -159,7 +202,7 @@ export function AreaRouteError({ area }: { area: AreaKey }) {
   const error = useRouteError();
   const home = area === 'consumer' ? '/' : `/${area}`;
   return (
-    <AreaChrome area={area}>
+    <AreaChrome area={area} force>
       {isRouteErrorResponse(error) && error.status === 404 ? <NotFoundPage home={home} /> : <CrashView error={error} home={home} />}
     </AreaChrome>
   );
