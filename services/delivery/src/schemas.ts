@@ -1,0 +1,200 @@
+/** Request + response schemas (shared by routes and OpenAPI). */
+import { z } from 'zod';
+import {
+  DeliveryStatus,
+  EstimateSource,
+  OfferStatus,
+  PartnerStatus,
+  enumValues,
+  GeoPointSchema,
+  HandoverCodeSchema,
+  LocationPingSchema,
+  ObjectIdSchema,
+  PaginationQuerySchema,
+  VehicleSchema,
+  VehicleTypeSchema,
+} from '@thali/contracts';
+import { PARTNER_DOC_TYPES } from './models/partner.js';
+import { DOC_CONTENT_TYPES } from './domain/onboarding.js';
+
+// ---------------------------------------------------------------- requests
+export const IdParams = z.object({ id: ObjectIdSchema });
+export const JobIdParams = z.object({ jobId: ObjectIdSchema });
+export const OfferIdParams = z.object({ offerId: ObjectIdSchema });
+export const ChildOrderParams = z.object({ childOrderId: z.string().min(1).max(64) });
+export const DocParams = z.object({ id: ObjectIdSchema, docId: ObjectIdSchema });
+
+export const DocTypeSchema = z.enum(PARTNER_DOC_TYPES).meta({ id: 'PartnerDocumentType' });
+export const CreateProfileBody = z
+  .object({ name: z.string().trim().min(2).max(80).optional(), vehicle: VehicleSchema.optional() })
+  .meta({ id: 'CreatePartnerProfile', example: { vehicle: { type: 'SCOOTER', registrationNumber: 'KA05MN4321' } } });
+export const UpdateProfileBody = z
+  .object({ name: z.string().trim().min(2).max(80).optional(), vehicle: VehicleSchema.optional() })
+  .refine((v) => v.name !== undefined || v.vehicle !== undefined, { message: 'Nothing to update' })
+  .meta({ id: 'UpdatePartnerProfile' });
+export const presignBody = (maxBytes: number) =>
+  z
+    .object({
+      type: DocTypeSchema,
+      contentType: z.enum(DOC_CONTENT_TYPES),
+      /** Client-declared file size; signed into the presigned PUT as Content-Length. */
+      sizeBytes: z.number().int().min(1).max(maxBytes),
+    })
+    .meta({ id: 'PartnerUploadRequest', example: { type: 'ID_PROOF', contentType: 'image/jpeg', sizeBytes: 245_000 } });
+export const AttachDocumentBody = z.object({ type: DocTypeSchema, key: z.string().min(10).max(300) }).meta({ id: 'AttachPartnerDocument' });
+export const OnlineBody = GeoPointSchema;
+export const PingBody = LocationPingSchema;
+export const CodeBody = z.object({ code: HandoverCodeSchema }).meta({ id: 'HandoverCode', example: { code: '4821' } });
+export const FailBody = z.object({ reason: z.string().trim().min(3).max(500) }).meta({ id: 'FailReason' });
+export const ReasonBody = z.object({ reason: z.string().trim().min(3).max(500) }).meta({ id: 'AdminReason' });
+export const OptionalReasonBody = z.object({ reason: z.string().trim().min(3).max(500).optional() }).meta({ id: 'OptionalReason' });
+export const AssignBody = z.object({ partnerId: ObjectIdSchema }).meta({ id: 'AssignPartner' });
+export const PartnersQuery = PaginationQuerySchema.extend({ status: z.enum(enumValues(PartnerStatus)).optional() });
+export const JobsQuery = PaginationQuerySchema.extend({
+  status: z.enum(enumValues(DeliveryStatus)).optional(),
+  exception: z
+    .enum(['true', 'false'])
+    .transform((v) => v === 'true')
+    .optional(),
+});
+export const HistoryQuery = PaginationQuerySchema;
+
+// ---------------------------------------------------------------- responses
+const LatLng = GeoPointSchema;
+const iso = z.string().nullable();
+const Place = z.object({ name: z.string(), address: z.string(), location: LatLng });
+const Drop = Place.extend({ phoneMasked: z.string() });
+
+export const PartnerView = z
+  .object({
+    id: z.string(),
+    userId: z.string(),
+    name: z.string(),
+    phone: z.string().nullable(),
+    vehicle: z.object({ type: VehicleTypeSchema, registrationNumber: z.string() }).nullable(),
+    status: z.enum(enumValues(PartnerStatus)),
+    statusReason: z.string().nullable(),
+    documents: z.array(z.object({ id: z.string(), type: DocTypeSchema, demoVerified: z.boolean().describe('Demo-mode dummy verification label; never implies approval'), uploadedAt: iso })),
+    online: z.boolean(),
+    lastLocation: LatLng.nullable(),
+    lastLocationAt: iso,
+    activeJobIds: z.array(z.string()),
+    maxActive: z.number().int(),
+    isDemo: z.boolean(),
+    createdAt: iso,
+  })
+  .meta({ id: 'Partner' });
+
+export const PresignResponse = z
+  .object({
+    key: z.string(),
+    upload: z.object({ url: z.string(), method: z.literal('PUT'), headers: z.record(z.string(), z.string()), expiresAt: z.string(), maxBytes: z.number() }),
+  })
+  .meta({ id: 'PartnerUploadTicket' });
+
+export const PartnerJobView = z
+  .object({
+    id: z.string(),
+    childOrderId: z.string(),
+    status: z.enum(enumValues(DeliveryStatus)),
+    pickup: Place,
+    drop: Drop,
+    distanceKm: z.number(),
+    estimatedMinutes: z.number(),
+    estimateSource: z.enum(enumValues(EstimateSource)),
+    prepMinutes: z.number().nullable(),
+    readyEta: iso,
+    readyAt: iso,
+    codeAttemptsRemaining: z.number().int(),
+    navigation: z.object({ pickupUrl: z.string(), dropUrl: z.string() }),
+    assignedAt: iso,
+    pickedUpAt: iso,
+    deliveredAt: iso,
+    failureReason: z.string().nullable(),
+    createdAt: iso,
+  })
+  .meta({ id: 'PartnerDeliveryJob' });
+
+const History = z.object({ from: z.string().nullable(), to: z.string(), at: iso, actor: z.string(), actorId: z.string().nullable(), reason: z.string().nullable() });
+export const AdminJobView = z
+  .object({
+    id: z.string(),
+    childOrderId: z.string(),
+    checkoutGroupId: z.string(),
+    restaurantId: z.string(),
+    customerUserId: z.string(),
+    status: z.enum(enumValues(DeliveryStatus)),
+    partnerId: z.string().nullable(),
+    partnerUserId: z.string().nullable(),
+    pickup: Place,
+    drop: Drop,
+    dispatchRound: z.number().int(),
+    exception: z.boolean(),
+    exceptionReason: z.string().nullable(),
+    distanceKm: z.number(),
+    estimatedMinutes: z.number(),
+    estimateSource: z.enum(enumValues(EstimateSource)),
+    codeAttempts: z.number().int(),
+    readyAt: iso,
+    failureReason: z.string().nullable(),
+    lastLocation: LatLng.nullable(),
+    lastLocationAt: iso,
+    locationSimulated: z.boolean(),
+    statusHistory: z.array(History),
+    assignedAt: iso,
+    pickedUpAt: iso,
+    deliveredAt: iso,
+    createdAt: iso,
+  })
+  .meta({ id: 'AdminDeliveryJob' });
+
+export const BatchEvaluationSchema = z
+  .object({ eligible: z.boolean(), reasons: z.array(z.string()), extraMinutes: z.number() })
+  .meta({ id: 'BatchEvaluation', example: { eligible: true, reasons: ['active 1 < max 2 ✓', 'pickup 0.8km ≤ 1.5km ✓', 'drop 2.0km ≤ 3km ✓', 'extra 7.8min ≤ 12min ✓'], extraMinutes: 7.8 } });
+
+export const OfferView = z
+  .object({
+    id: z.string(),
+    jobId: z.string(),
+    status: z.enum(enumValues(OfferStatus)),
+    round: z.number().int(),
+    expiresAt: iso,
+    distanceToPickupKm: z.number(),
+    batchEvaluation: BatchEvaluationSchema,
+    job: z
+      .object({ childOrderId: z.string(), pickup: Place, drop: Place, distanceKm: z.number(), estimatedMinutes: z.number(), estimateSource: z.enum(enumValues(EstimateSource)), readyEta: iso })
+      .nullable(),
+  })
+  .meta({ id: 'DeliveryOffer' });
+
+export const AcceptResponse = z.object({ offerId: z.string(), status: z.literal('ACCEPTED'), job: PartnerJobView }).meta({ id: 'AcceptOfferResult' });
+export const PingResponse = z.object({ at: z.string(), jobsUpdated: z.number().int() }).meta({ id: 'LocationPingResult' });
+
+export const TrackingResponse = z
+  .object({
+    childOrderId: z.string(),
+    status: z.enum(enumValues(DeliveryStatus)),
+    partner: z.object({ firstName: z.string(), vehicleType: VehicleTypeSchema }).nullable(),
+    location: LatLng.nullable(),
+    lastLocationAt: iso,
+    stale: z.boolean().describe('true when the last location is older than LOCATION_STALE_SEC (60 s)'),
+    simulated: z.boolean().describe('true when the location comes from the demo simulator'),
+    estimatedMinutes: z.number(),
+    estimateSource: z.enum(enumValues(EstimateSource)),
+  })
+  .meta({ id: 'DeliveryTracking' });
+
+export const DocumentUrlResponse = z.object({ url: z.string(), expiresAt: z.string(), type: DocTypeSchema, demoVerified: z.boolean() }).meta({ id: 'PartnerDocumentUrl' });
+export const OverviewResponse = z
+  .object({
+    jobsByStatus: z.record(z.string(), z.number()),
+    exceptions: z.number().int(),
+    liveOffers: z.number().int(),
+    partners: z.object({ byStatus: z.record(z.string(), z.number()), online: z.number().int() }),
+    generatedAt: z.string(),
+  })
+  .meta({ id: 'DeliveryOverview' });
+export const SimulateResponse = z.object({ jobId: z.string(), steps: z.number().int(), stepMs: z.number().int(), simulated: z.literal(true) }).meta({ id: 'DemoSimulation' });
+
+export const page = <T extends z.ZodType>(item: T, id: string) => z.object({ items: z.array(item), nextCursor: z.string().nullable() }).meta({ id });
+export const ItemsOf = <T extends z.ZodType>(item: T, id: string) => z.object({ items: z.array(item) }).meta({ id });
