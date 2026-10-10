@@ -164,9 +164,12 @@ export const paymentTransitions = defineTransitions<PaymentStatus>(
   rows<PaymentStatus>([
     ['CREATED', 'AUTHORIZED', ['SYSTEM']],
     ['AUTHORIZED', 'CAPTURED', ['SYSTEM']],
+    ['CREATED', 'CAPTURED', ['SYSTEM']], // captured webhook/reconcile without a seen authorization
     ['CREATED', 'FAILED', ['SYSTEM']],
     ['AUTHORIZED', 'FAILED', ['SYSTEM']],
+    ['FAILED', 'CAPTURED', ['SYSTEM']], // later successful attempt on the same provider order
     ['CAPTURED', 'PARTIALLY_REFUNDED', ['SYSTEM']],
+    ['PARTIALLY_REFUNDED', 'PARTIALLY_REFUNDED', ['SYSTEM']], // further partial refunds
     ['PARTIALLY_REFUNDED', 'REFUNDED', ['SYSTEM']],
     ['CAPTURED', 'REFUNDED', ['SYSTEM']],
   ]),

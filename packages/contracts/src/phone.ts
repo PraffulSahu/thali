@@ -1,4 +1,4 @@
-import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js/max';
+import { parsePhoneNumberFromString, type CountryCode } from 'libphonenumber-js/mobile';
 import { DomainError } from './errors.js';
 
 /**
