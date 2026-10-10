@@ -89,8 +89,16 @@ export interface CouponValidateRequest {
   code: string;
   userId: string;
   itemsSubtotalPaise: number;
+  /** Contract 1 (MKT-8): per-restaurant item subtotals so marketplace can apply a restaurant-scoped coupon. */
+  restaurantSubtotals?: { restaurantId: string; subtotalPaise: number }[];
 }
-const CouponValidateResponseSchema = z.object({ code: z.string().optional(), discountPaise: z.number().int().nonnegative() });
+const CouponValidateResponseSchema = z.object({
+  code: z.string().optional(),
+  discountPaise: z.number().int().nonnegative(),
+  /** Restaurants the coupon applies to; empty (or absent, pre-MKT-8 marketplace) = all restaurants. */
+  restaurantIds: z.array(z.string()).default([]),
+  badgeLabel: z.string().nullable().default(null),
+});
 export type CouponValidateResponse = z.output<typeof CouponValidateResponseSchema>;
 
 export interface MembershipBenefitsRequest {
@@ -138,7 +146,7 @@ export type InternalRestaurant = z.output<typeof InternalRestaurantSchema>;
 export interface MarketplaceClient {
   /** `POST /internal/quote` */
   quote(req: QuoteRequest): Promise<QuoteResponse>;
-  /** `POST /internal/coupons/validate` — invalid coupon → 422 COUPON_INVALID (thrown). */
+  /** `POST /internal/coupons/validate` — invalid coupon → 422 COUPON_INVALID (thrown; `{reason:'NOT_APPLICABLE'}` when no listed restaurant is in the order). */
   validateCoupon(req: CouponValidateRequest): Promise<CouponValidateResponse>;
   /** `POST /internal/memberships/benefits` */
   membershipBenefits(req: MembershipBenefitsRequest): Promise<MembershipBenefitsResponse>;

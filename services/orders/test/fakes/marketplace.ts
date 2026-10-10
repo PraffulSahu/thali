@@ -67,7 +67,8 @@ const oid = () => new Types.ObjectId().toHexString();
 export class FakeMarketplace implements MarketplaceClient {
   restaurants = new Map<string, FakeRestaurant>();
   items = new Map<string, FakeItem>();
-  coupons = new Map<string, { discountPaise: number }>();
+  /** `restaurantIds` (MKT-8 scope): empty/absent = every restaurant. */
+  coupons = new Map<string, { discountPaise: number; restaurantIds?: string[] }>();
   membership: MembershipBenefitsResponse | null = null;
   reserveCalls: ReservationRequest[] = [];
   quoteCalls: QuoteRequest[] = [];
@@ -226,7 +227,15 @@ export class FakeMarketplace implements MarketplaceClient {
     this.couponCalls.push(req);
     const c = this.coupons.get(req.code.toUpperCase());
     if (!c) throw new DomainError('COUPON_INVALID', 'Coupon is not valid', 422);
-    return { code: req.code.toUpperCase(), discountPaise: Math.min(c.discountPaise, req.itemsSubtotalPaise) };
+    const scope = c.restaurantIds ?? [];
+    let eligible = req.itemsSubtotalPaise;
+    if (scope.length && req.restaurantSubtotals) {
+      eligible = req.restaurantSubtotals.filter((r) => scope.includes(r.restaurantId)).reduce((s, r) => s + r.subtotalPaise, 0);
+      if (!req.restaurantSubtotals.some((r) => scope.includes(r.restaurantId))) {
+        throw new DomainError('COUPON_INVALID', 'This coupon does not apply to these restaurants', 422, { reason: 'NOT_APPLICABLE' });
+      }
+    }
+    return { code: req.code.toUpperCase(), discountPaise: Math.min(c.discountPaise, eligible), restaurantIds: [...scope], badgeLabel: null };
   }
 
   async membershipBenefits(req: MembershipBenefitsRequest): Promise<MembershipBenefitsResponse> {

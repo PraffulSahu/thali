@@ -137,7 +137,15 @@ export const PreviewResponse = z
     children: z.array(PricedChild),
     problems: z.array(QuoteProblemView),
     canCheckout: z.boolean(),
-    coupon: z.object({ code: z.string(), valid: z.boolean(), discountPaise: z.number().int(), message: z.string().optional() }).nullable(),
+    coupon: z
+      .object({
+        code: z.string(),
+        valid: z.boolean(),
+        discountPaise: z.number().int(),
+        restaurantIds: z.array(z.string()).meta({ description: 'Restaurants the coupon applies to; empty = every restaurant in the order' }),
+        message: z.string().optional(),
+      })
+      .nullable(),
     membership: z.object({ applied: z.boolean(), membershipId: z.string().nullable() }).nullable(),
     deliveryExplanation: z.string().nullable(),
   })

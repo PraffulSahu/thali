@@ -20,7 +20,7 @@
 import { randomUUID } from 'node:crypto';
 import mongoose, { Types } from 'mongoose';
 import { DomainError, restaurantSetKey, type CreateCheckoutBody } from '@thali/contracts';
-import { lineTotal, priceCheckout, type PricedCheckout, type RestaurantInput } from '@thali/pricing';
+import { couponNotApplicableError, couponScope, lineTotal, priceCheckout, type PricedCheckout, type RestaurantInput } from '@thali/pricing';
 import { redisKey, withTransaction } from '@thali/service-kit';
 import type { OrdersContext } from '../context.js';
 import type { InternalUser } from '../clients/identity.js';
@@ -72,7 +72,8 @@ export interface QuoteAndPrice {
   problems: QuoteProblem[];
   restaurants: QuotedRestaurant[];
   itemsSubtotalPaise: number;
-  coupon: { code: string; valid: boolean; discountPaise: number; message?: string } | null;
+  /** `restaurantIds`: the coupon's restaurant scope (empty = every restaurant), contract 1 / MKT-8. */
+  coupon: { code: string; valid: boolean; discountPaise: number; restaurantIds: string[]; message?: string } | null;
   membership: MembershipBenefitsResponse | null;
   priced: PricedCheckout;
 }
@@ -180,17 +181,31 @@ export async function quoteAndPrice(
 ): Promise<QuoteAndPrice> {
   const { quote, problems, restaurants } = await quoteCart(ctx, cartLines, drop);
   const inputs = pricingInputs(restaurants);
-  const itemsSubtotalPaise = inputs.reduce((s, r) => s + r.lines.reduce((t, l) => t + lineTotal(l), 0), 0);
+  const subtotals = inputs.map((r) => ({ restaurantId: r.restaurantId, itemsSubtotalPaise: r.lines.reduce((t, l) => t + lineTotal(l), 0) }));
+  const itemsSubtotalPaise = subtotals.reduce((s, r) => s + r.itemsSubtotalPaise, 0);
 
   let coupon: QuoteAndPrice['coupon'] = null;
   const code = opts.couponCode ? opts.couponCode.trim().toUpperCase() : null;
   if (code) {
     try {
-      const v = await ctx.clients.marketplace.validateCoupon({ code, userId, itemsSubtotalPaise });
-      coupon = { code: (v.code ?? code).toUpperCase(), valid: true, discountPaise: Math.min(v.discountPaise, itemsSubtotalPaise) };
+      const v = await ctx.clients.marketplace.validateCoupon({
+        code,
+        userId,
+        itemsSubtotalPaise,
+        restaurantSubtotals: subtotals.map((r) => ({ restaurantId: r.restaurantId, subtotalPaise: r.itemsSubtotalPaise })),
+      });
+      // re-check the scope locally: the discount may only use the eligible restaurants' items (pricing throws otherwise)
+      const scope = couponScope(subtotals, v.restaurantIds);
+      if (!scope.ok) throw couponNotApplicableError();
+      coupon = {
+        code: (v.code ?? code).toUpperCase(),
+        valid: true,
+        discountPaise: Math.min(v.discountPaise, scope.eligibleSubtotalPaise),
+        restaurantIds: [...v.restaurantIds],
+      };
     } catch (e) {
       if (opts.strictCoupon || !(e instanceof DomainError) || e.httpStatus >= 500) throw e;
-      coupon = { code, valid: false, discountPaise: 0, message: e.message };
+      coupon = { code, valid: false, discountPaise: 0, restaurantIds: [], message: e.message };
     }
   }
 
@@ -209,7 +224,11 @@ export async function quoteAndPrice(
 
   const priced = priceCheckout(
     inputs,
-    { ...(coupon?.valid ? { couponCode: coupon.code } : {}), couponDiscountPaise: coupon?.valid ? coupon.discountPaise : 0 },
+    {
+      ...(coupon?.valid ? { couponCode: coupon.code } : {}),
+      couponDiscountPaise: coupon?.valid ? coupon.discountPaise : 0,
+      ...(coupon?.valid && coupon.restaurantIds.length ? { couponRestaurantIds: coupon.restaurantIds } : {}),
+    },
     membership
       ? {
           freeDeliveryRestaurantIds: membership.freeDeliveryRestaurantIds,
