@@ -43,7 +43,7 @@ export function createEventHandlers(ctx: DeliveryContext): EventHandlers {
           checkoutGroupId: p.checkoutId,
           restaurantId: p.restaurantId,
           customerUserId: p.userId,
-          pickup: { name: p.pickup.name, address: p.pickup.address, location: p.pickup.location },
+          pickup: { name: p.pickup.name, address: p.pickup.address, location: p.pickup.location, phone: p.pickup.phone?.trim() || null },
           drop: {
             name: p.drop.name,
             address: p.drop.address,

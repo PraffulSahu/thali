@@ -1,12 +1,13 @@
 /** 🛵 partner delivery actions: offers accept/reject, active/history, execution steps, job-scoped location. */
 import express, { type RequestHandler, type Router } from 'express';
-import { requireAuth, validate } from '@thali/service-kit';
+import { rateLimit, requireAuth, validate } from '@thali/service-kit';
 import type { DeliveryContext } from '../context.js';
 import { acceptOffer, rejectOffer } from '../domain/accept.js';
 import { activeJobs, confirmDelivery, confirmPickup, failDelivery, jobHistory, markArrived, startDelivery } from '../domain/execution.js';
+import { revealContact } from '../domain/contact.js';
 import { recordPing } from '../domain/tracking.js';
 import { offerView, partnerJobView } from '../domain/views.js';
-import { CodeBody, FailBody, HistoryQuery, JobIdParams, OfferIdParams, PingBody } from '../schemas.js';
+import { CodeBody, ContactBody, FailBody, HistoryQuery, JobIdParams, OfferIdParams, PingBody } from '../schemas.js';
 
 export function deliveriesRouter(ctx: DeliveryContext, locationLimiter: RequestHandler): Router {
   const r = express.Router();
@@ -56,6 +57,21 @@ export function deliveriesRouter(ctx: DeliveryContext, locationLimiter: RequestH
     const { params, body } = vFail.get(req);
     res.json(view(await failDelivery(ctx, uid(req), params.jobId, body.reason)));
   });
+  // DLV-1: 10 contact reveals / min / partner. A privacy control, so it fails closed if Redis is down.
+  const contactLimiter = rateLimit({
+    redis: ctx.redis,
+    name: 'partner-contact',
+    keyFn: (req) => req.auth?.userId ?? null,
+    points: 10,
+    durationSec: 60,
+    message: 'Too many call requests; try again in a minute',
+  });
+  const vContact = validate({ params: JobIdParams, body: ContactBody });
+  r.post('/:jobId/contact', auth, contactLimiter, vContact, async (req, res) => {
+    const { params, body } = vContact.get(req);
+    res.json(await revealContact(ctx, uid(req), params.jobId, body.target, req.ip));
+  });
+
   const vPing = validate({ params: JobIdParams, body: PingBody });
   r.post('/:jobId/location', auth, locationLimiter, vPing, async (req, res) => {
     const { params, body } = vPing.get(req);

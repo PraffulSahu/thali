@@ -15,6 +15,8 @@ const placeSchema = new Schema(
     name: { type: String, required: true },
     address: { type: String, required: true },
     location: { type: pointSchema, required: true },
+    /** DLV-1: restaurant phone from order.accepted (never exposed in views; revealed via /contact). */
+    phone: { type: String, default: null },
   },
   { _id: false },
 );

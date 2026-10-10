@@ -58,6 +58,9 @@ export const JobsQuery = PaginationQuerySchema.extend({
     .optional(),
 });
 export const HistoryQuery = PaginationQuerySchema;
+export const ContactBody = z
+  .object({ target: z.enum(['CUSTOMER', 'RESTAURANT']) })
+  .meta({ id: 'ContactRequest', example: { target: 'CUSTOMER' } });
 
 // ---------------------------------------------------------------- responses
 const LatLng = GeoPointSchema;
@@ -201,6 +204,17 @@ export const TrackingResponse = z
     estimateSource: z.enum(enumValues(EstimateSource)),
   })
   .meta({ id: 'DeliveryTracking' });
+
+export const ContactResponse = z
+  .object({
+    target: z.enum(['CUSTOMER', 'RESTAURANT']),
+    mode: z.enum(['DIRECT', 'PROXY', 'DEMO']).describe('DEMO: no real call (APP_MODE=demo); DIRECT: real number in telUrl (pilot); PROXY: reserved'),
+    telUrl: z.string().nullable().describe('tel: URL to dial; null in DEMO mode'),
+    displayNumber: z.string().describe('Masked number for display, e.g. "+91 ••••• •3210"'),
+    expiresAt: z.string().describe('Do not reuse the number after this time; ask again'),
+    note: z.string().nullable().describe('"Calling is simulated in demo" in DEMO mode, else null'),
+  })
+  .meta({ id: 'ContactResult', example: { target: 'CUSTOMER', mode: 'DEMO', telUrl: null, displayNumber: '+91 ••••• •3210', expiresAt: '2026-10-11T14:10:00.000Z', note: 'Calling is simulated in demo' } });
 
 export const DocumentUrlResponse = z.object({ url: z.string(), expiresAt: z.string(), type: DocTypeSchema, demoVerified: z.boolean() }).meta({ id: 'PartnerDocumentUrl' });
 export const OverviewResponse = z

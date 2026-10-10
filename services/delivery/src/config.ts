@@ -66,6 +66,10 @@ export const deliveryConfigShape = {
 
   // other services
   IDENTITY_URL: z.string().url().default('http://localhost:4001'),
+  /** DLV-1: restaurant phone fallback for jobs created without `pickup.phone`. */
+  MARKETPLACE_URL: z.string().url().default('http://localhost:4002'),
+  /** DLV-4: order-code backfill for jobs created before codes rode on order.accepted. */
+  ORDERS_URL: z.string().url().default('http://localhost:4003'),
 
   // demo simulator (APP_MODE=demo only)
   SIMULATOR_STEP_MS: int(2000),

@@ -45,12 +45,69 @@ export function createIdentityClient(config: DeliveryConfig): IdentityClient {
   };
 }
 
+/** marketplace `GET /internal/restaurants/:id` (only the fields delivery reads). */
+export interface MarketplaceRestaurant {
+  id: string;
+  name: string;
+  phone: string | null;
+}
+
+export interface MarketplaceClient {
+  /** null on 404. */
+  getRestaurant(id: string): Promise<MarketplaceRestaurant | null>;
+}
+
+export function createMarketplaceClient(config: DeliveryConfig): MarketplaceClient {
+  const http = internalClient('marketplace', config.MARKETPLACE_URL, { from: 'delivery', secret: config.INTERNAL_SERVICE_SECRET });
+  return {
+    async getRestaurant(id) {
+      try {
+        return await http.get<MarketplaceRestaurant>(`/internal/restaurants/${encodeURIComponent(id)}`);
+      } catch (err) {
+        if (err instanceof UpstreamError && err.upstreamStatus === 404) return null;
+        throw err;
+      }
+    },
+  };
+}
+
+/** orders `GET /internal/orders/child/:id` (only the fields delivery reads). */
+export interface OrdersChild {
+  id: string;
+  code: string;
+  /** Not in the binding shape today; derived from `code` when absent. */
+  checkoutCode?: string;
+}
+
+export interface OrdersClient {
+  /** null on 404. */
+  getChild(id: string): Promise<OrdersChild | null>;
+}
+
+export function createOrdersClient(config: DeliveryConfig): OrdersClient {
+  const http = internalClient('orders', config.ORDERS_URL, { from: 'delivery', secret: config.INTERNAL_SERVICE_SECRET });
+  return {
+    async getChild(id) {
+      try {
+        return await http.get<OrdersChild>(`/internal/orders/child/${encodeURIComponent(id)}`);
+      } catch (err) {
+        if (err instanceof UpstreamError && err.upstreamStatus === 404) return null;
+        throw err;
+      }
+    },
+  };
+}
+
 export interface ContextDeps {
   config: DeliveryConfig;
   logger: Logger;
   conn: Connection;
   redis: Redis;
   identity: IdentityClient;
+  /** Defaults to the HTTP client for `config.MARKETPLACE_URL`. */
+  marketplace?: MarketplaceClient;
+  /** Defaults to the HTTP client for `config.ORDERS_URL`. */
+  orders?: OrdersClient;
   storage: StorageProvider;
   geo?: GeoProvider;
   clock?: () => Date;
@@ -62,6 +119,8 @@ export interface DeliveryContext {
   conn: Connection;
   redis: Redis;
   identity: IdentityClient;
+  marketplace: MarketplaceClient;
+  orders: OrdersClient;
   storage: StorageProvider;
   geo: GeoProvider;
   now: () => Date;
@@ -76,6 +135,8 @@ export function createContext(deps: ContextDeps): DeliveryContext {
     conn: deps.conn,
     redis: deps.redis,
     identity: deps.identity,
+    marketplace: deps.marketplace ?? createMarketplaceClient(deps.config),
+    orders: deps.orders ?? createOrdersClient(deps.config),
     storage: deps.storage,
     geo: deps.geo ?? createDemoGeo({ roadFactor: deps.config.ROAD_FACTOR, avgSpeedKmph: deps.config.AVG_SPEED_KMPH }),
     now: deps.clock ?? (() => new Date()),

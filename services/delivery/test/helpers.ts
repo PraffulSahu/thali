@@ -10,7 +10,7 @@ import { createTestDb, createTestRedis, generateTestKeys, testLogger, TEST_INTER
 import { toGeoJsonPoint, type EventEnvelope, type EventPayloads, type EventType, type Role } from '@thali/contracts';
 import { buildApp } from '../src/app.js';
 import { parseDeliveryConfig, type DeliveryConfig } from '../src/config.js';
-import { createContext, type DeliveryContext, type IdentityClient, type IdentityUser } from '../src/context.js';
+import { createContext, type DeliveryContext, type IdentityClient, type IdentityUser, type MarketplaceClient, type MarketplaceRestaurant, type OrdersChild, type OrdersClient } from '../src/context.js';
 import { createEventHandlers } from '../src/events/handlers.js';
 import { initDeliveryModels } from '../src/models/index.js';
 import { offsetKm, type LatLng } from '../src/domain/geo.js';
@@ -64,6 +64,34 @@ export function fakeIdentity() {
   };
 }
 
+/** Fake marketplace: restaurants by id; `fail` makes every call throw (upstream down). */
+export function fakeMarketplace() {
+  const restaurants = new Map<string, MarketplaceRestaurant>();
+  const state = { calls: 0, fail: null as Error | null };
+  const client: MarketplaceClient = {
+    async getRestaurant(id) {
+      state.calls++;
+      if (state.fail) throw state.fail;
+      return restaurants.get(id) ?? null;
+    },
+  };
+  return { client, restaurants, state };
+}
+
+/** Fake orders: child orders by id; `fail` makes every call throw (orders unavailable). */
+export function fakeOrders() {
+  const children = new Map<string, OrdersChild>();
+  const state = { calls: 0, fail: null as Error | null };
+  const client: OrdersClient = {
+    async getChild(id) {
+      state.calls++;
+      if (state.fail) throw state.fail;
+      return children.get(id) ?? null;
+    },
+  };
+  return { client, children, state };
+}
+
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a4f10000000049454e44ae426082', 'hex');
 
 export function fakeStorage() {
@@ -107,6 +135,8 @@ export interface Harness {
   config: DeliveryConfig;
   clock: ReturnType<typeof makeClock>;
   identity: ReturnType<typeof fakeIdentity>;
+  marketplace: ReturnType<typeof fakeMarketplace>;
+  orders: ReturnType<typeof fakeOrders>;
   storage: ReturnType<typeof fakeStorage>;
   token(userId: string, roles?: Role[]): Promise<string>;
   adminToken(opts?: { mfa?: boolean; adminRoles?: string[] }): Promise<string>;
@@ -119,6 +149,8 @@ export async function setup(name: string, env: Record<string, string> = {}): Pro
   const keys = await generateTestKeys();
   const clock = makeClock();
   const identity = fakeIdentity();
+  const marketplace = fakeMarketplace();
+  const orders = fakeOrders();
   const storage = fakeStorage();
   const config = parseDeliveryConfig({
     SERVICE_NAME: 'delivery',
@@ -141,6 +173,8 @@ export async function setup(name: string, env: Record<string, string> = {}): Pro
     geo: createDemoGeo({}),
     storage: storage.storage,
     identity: identity.client,
+    marketplace: marketplace.client,
+    orders: orders.client,
     clock: clock.now,
   });
   const app = buildApp({ ...ctx, auth: createAuthVerifier({ jwks: keys.jwks, redis: tr.redis }) });
@@ -150,6 +184,8 @@ export async function setup(name: string, env: Record<string, string> = {}): Pro
     config,
     clock,
     identity,
+    marketplace,
+    orders,
     storage,
     token: (userId, roles = ['CONSUMER']) => keys.sign({ sub: userId, roles }),
     adminToken: (opts = {}) =>
