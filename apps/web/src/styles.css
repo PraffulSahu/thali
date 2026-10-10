@@ -161,35 +161,38 @@
   --animate-sheet-left: sheet-left 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
   --animate-sheet-right: sheet-right 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
 
-  @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
-  @keyframes pulse-live { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--acc) 55%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
-  @keyframes pulse-ok { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 50%, transparent); } 100% { box-shadow: 0 0 0 8px transparent; } }
-  @keyframes shimmer { from { background-position: -300px 0; } to { background-position: 300px 0; } }
-  @keyframes bob { 0%, 100% { transform: translateY(0) rotate(0); } 50% { transform: translateY(-10px) rotate(4deg); } }
-  @keyframes bob2 { 0%, 100% { transform: translateY(0) rotate(0); } 50% { transform: translateY(8px) rotate(-5deg); } }
-  @keyframes split { 0%, 25% { transform: translateX(0); } 45%, 80% { transform: translateX(14px); } 100% { transform: translateX(0); } }
-  @keyframes dockin { 0% { opacity: 0; transform: translateY(40px) scale(0.96); } 60% { opacity: 1; } 100% { transform: none; } }
-  @keyframes trayin { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: none; } }
-  @keyframes bump { 0%, 100% { transform: none; } 40% { transform: scale(1.06); } }
-  @keyframes toast { 0% { opacity: 0; transform: translateY(6px); } 12%, 70% { opacity: 1; transform: none; } 100% { opacity: 0; } }
-  @keyframes pop { from { opacity: 0; transform: translateY(16px) scale(0.98); } to { opacity: 1; transform: none; } }
-  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
-  @keyframes open { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  @keyframes dash { to { stroke-dashoffset: -24; } }
-  @keyframes ride { from { offset-distance: 30%; } to { offset-distance: 74%; } }
-  @keyframes arrive { 0% { opacity: 0; transform: translateY(-14px); } 100% { opacity: 1; transform: none; } }
-  @keyframes ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--acc) 45%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
-  @keyframes slidein { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: none; } }
-  @keyframes in { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: none; } }
-  @keyframes urgent { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--bad) 30%, transparent); } }
-  @keyframes grow { from { transform: scaleX(0); } to { transform: none; } }
-  @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-  @keyframes swap { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
-  @keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
-  @keyframes sheet-left { from { transform: translateX(-100%); } to { transform: none; } }
-  @keyframes sheet-right { from { transform: translateX(100%); } to { transform: none; } }
 }
+
+
+/* Keyframes live outside @theme so every one is emitted (some are used from inline styles). */
+@keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes pulse-live { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--acc) 55%, transparent); } 100% { box-shadow: 0 0 0 10px transparent; } }
+@keyframes pulse-ok { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 50%, transparent); } 100% { box-shadow: 0 0 0 8px transparent; } }
+@keyframes shimmer { from { background-position: -300px 0; } to { background-position: 300px 0; } }
+@keyframes bob { 0%, 100% { transform: translateY(0) rotate(0); } 50% { transform: translateY(-10px) rotate(4deg); } }
+@keyframes bob2 { 0%, 100% { transform: translateY(0) rotate(0); } 50% { transform: translateY(8px) rotate(-5deg); } }
+@keyframes split { 0%, 25% { transform: translateX(0); } 45%, 80% { transform: translateX(14px); } 100% { transform: translateX(0); } }
+@keyframes dockin { 0% { opacity: 0; transform: translateY(40px) scale(0.96); } 60% { opacity: 1; } 100% { transform: none; } }
+@keyframes trayin { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes bump { 0%, 100% { transform: none; } 40% { transform: scale(1.06); } }
+@keyframes toast { 0% { opacity: 0; transform: translateY(6px); } 12%, 70% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+@keyframes pop { from { opacity: 0; transform: translateY(16px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes open { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes dash { to { stroke-dashoffset: -24; } }
+@keyframes ride { from { offset-distance: 30%; } to { offset-distance: 74%; } }
+@keyframes arrive { 0% { opacity: 0; transform: translateY(-14px); } 100% { opacity: 1; transform: none; } }
+@keyframes ring { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--acc) 45%, transparent); } 100% { box-shadow: 0 0 0 14px transparent; } }
+@keyframes slidein { from { opacity: 0; transform: translateX(-18px); } to { opacity: 1; transform: none; } }
+@keyframes in { from { opacity: 0; transform: translateY(14px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes urgent { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--bad) 30%, transparent); } }
+@keyframes grow { from { transform: scaleX(0); } to { transform: none; } }
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes swap { from { opacity: 0; transform: translateX(10px); } to { opacity: 1; transform: none; } }
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
+@keyframes sheet-left { from { transform: translateX(-100%); } to { transform: none; } }
+@keyframes sheet-right { from { transform: translateX(100%); } to { transform: none; } }
 
 /* ---------- 3. Semantic utilities (bg-card, text-fg-3, border-line, shadow-card …) ---------- */
 @theme inline {
