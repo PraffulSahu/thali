@@ -8,10 +8,11 @@
 import type { Request } from 'express';
 import { Types, type ClientSession } from 'mongoose';
 import { z } from 'zod';
-import { DomainError, PaiseSchema } from '@thali/contracts';
+import { DomainError, ObjectIdSchema, PaiseSchema } from '@thali/contracts';
 import { auditEvent, requireAuth, validate, withTransaction } from '@thali/service-kit';
 import type { AppContext, RouteModule } from '../context.js';
-import type { CouponLean } from '../domain/coupons.js';
+import { scopeOf, type CouponLean } from '../domain/coupons.js';
+import { bumpDiscoveryEpoch } from '../domain/discovery-cache.js';
 import { adminOverview } from '../domain/dashboard.js';
 import { planView, type PlanLean } from '../domain/memberships.js';
 import { API, json, userIdOf } from './common.js';
@@ -38,6 +39,8 @@ const couponFieldDefs = {
   perUserLimit: z.number().int().min(1),
   active: z.boolean(),
   firstOrderOnly: z.boolean(),
+  restaurantIds: z.array(ObjectIdSchema).max(200).describe('MKT-8: restaurants the coupon applies to; empty = all'),
+  badgeLabel: z.string().trim().min(1).max(16).nullable().describe('MKT-8: discovery card badge, e.g. "20% OFF"'),
 };
 const CouponFields = z
   .object({
@@ -51,6 +54,8 @@ const CouponFields = z
     perUserLimit: couponFieldDefs.perUserLimit.default(1),
     active: couponFieldDefs.active.default(true),
     firstOrderOnly: couponFieldDefs.firstOrderOnly.default(false),
+    restaurantIds: couponFieldDefs.restaurantIds.default([]),
+    badgeLabel: couponFieldDefs.badgeLabel.optional(),
   })
   .strict();
 
@@ -83,6 +88,8 @@ export const CouponAdminView = z
     heldCount: z.number().int(),
     active: z.boolean(),
     firstOrderOnly: z.boolean(),
+    restaurantIds: z.array(z.string()),
+    badgeLabel: z.string().nullable(),
   })
   .meta({ id: 'AdminCoupon' });
 
@@ -104,7 +111,17 @@ function couponAdminView(c: CouponLean) {
     heldCount: c.heldCount ?? 0,
     active: c.active !== false,
     firstOrderOnly: !!c.firstOrderOnly,
+    restaurantIds: scopeOf(c),
+    badgeLabel: c.badgeLabel ?? null,
   };
+}
+
+/** Dedupe scope ids; a null badge clears it. */
+function normaliseScope<T extends { restaurantIds?: string[]; badgeLabel?: string | null }>(b: T) {
+  const out: Record<string, unknown> = { ...b };
+  if (b.restaurantIds) out.restaurantIds = [...new Set(b.restaurantIds.map((x) => x.toLowerCase()))];
+  if (b.badgeLabel === null) out.badgeLabel = undefined;
+  return out;
 }
 
 // ---- plans ---- (defaults on create only; see the coupon note above)
@@ -180,9 +197,10 @@ export const adminPromotionRoutes: RouteModule = {
       const body = vCreate.get(req).body;
       couponRules(body);
       const result = await audited(ctx, req, 'coupon', 'create', async (session) => {
-        const [doc] = await ctx.models.Coupon.create([{ ...body, usedCount: 0, heldCount: 0 }], { session });
+        const [doc] = await ctx.models.Coupon.create([{ ...normaliseScope(body), usedCount: 0, heldCount: 0 }], { session });
         return { id: String(doc!._id), label: doc!.code, result: couponAdminView(doc!.toObject() as CouponLean) };
       });
+      await bumpDiscoveryEpoch(ctx.redis);
       res.status(201).json(result);
     });
     const vPatch = validate({ params: IdParams, body: CouponPatch });
@@ -191,11 +209,14 @@ export const adminPromotionRoutes: RouteModule = {
       const result = await audited(ctx, req, 'coupon', 'update', async (session) => {
         const doc = await ctx.models.Coupon.findById(oid(params.id)).session(session);
         if (!doc) throw new DomainError('NOT_FOUND', 'Coupon not found');
-        doc.set(body);
-        couponRules(doc.toObject() as CouponInput);
+        const patch = normaliseScope(body);
+        if (body.badgeLabel === null) doc.set('badgeLabel', undefined);
+        doc.set(patch);
+        couponRules(doc.toObject() as unknown as CouponInput);
         await doc.save({ session });
         return { id: String(doc._id), label: doc.code, result: couponAdminView(doc.toObject() as CouponLean) };
       });
+      await bumpDiscoveryEpoch(ctx.redis);
       res.json(result);
     });
     const vDel = validate({ params: IdParams });

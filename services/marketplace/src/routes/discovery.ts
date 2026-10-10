@@ -63,6 +63,10 @@ export const DiscoveryItemView = z
     rating: RatingView,
     priceBand: z.number().int().min(1).max(3).nullable(),
     isDemo: z.boolean(),
+    offer: z
+      .object({ label: z.string().describe('e.g. "20% OFF"'), code: z.string() })
+      .nullable()
+      .describe('Best live restaurant-scoped coupon (MKT-8); null = no badge'),
     matchedItems: z.array(MatchedItem).optional().describe('Present when q is given'),
   })
   .meta({ id: 'DiscoveryRestaurant' });

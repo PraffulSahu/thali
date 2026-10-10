@@ -22,6 +22,7 @@ import { redisKey, roadEstimate, type LatLng } from '@thali/service-kit';
 import { Types } from 'mongoose';
 import type { AppContext } from '../context.js';
 import type { MenuItemDoc } from '../models/menu-item.js';
+import { scopedOffers } from './coupons.js';
 import { discoveryEpoch } from './discovery-cache.js';
 import { geohash } from './geohash.js';
 import { computeMenuStats, emptyMenuStats, menuStatsFromItems, type MenuStats } from './menu-stats.js';
@@ -174,7 +175,9 @@ function listEstimate(ctx: AppContext, r: Candidate, area: ServiceArea, drop: La
   };
 }
 
-function rowFor(ctx: AppContext, r: Candidate, area: ServiceArea, drop: LatLng, now: Date, matched?: ItemLean[]) {
+type Offers = Map<string, { label: string; code: string }>;
+
+function rowFor(ctx: AppContext, r: Candidate, area: ServiceArea, drop: LatLng, now: Date, offers: Offers, matched?: ItemLean[]) {
   const id = String(r._id);
   const est = listEstimate(ctx, r, area, drop);
   const st = statusBlock(r, now);
@@ -196,6 +199,7 @@ function rowFor(ctx: AppContext, r: Candidate, area: ServiceArea, drop: LatLng, 
     rating: ratingOf(r),
     priceBand: (r.menuStats?.priceBand ?? null) as 1 | 2 | 3 | null,
     isDemo: !!r.isDemo,
+    offer: offers.get(id) ?? null,
     ...(matched ? { matchedItems: matched.map((i) => matchedItemView(ctx, i)) } : {}),
   };
 }
@@ -252,7 +256,7 @@ interface ComputedListing extends Listing {
   rows: Map<string, DiscoveryItem>;
 }
 
-async function computeListing(ctx: AppContext, query: DiscoveryQuery, area: ServiceArea): Promise<ComputedListing> {
+async function computeListing(ctx: AppContext, query: DiscoveryQuery, area: ServiceArea, offers: Offers): Promise<ComputedListing> {
   const drop = { lat: query.lat, lng: query.lng };
   const now = ctx.now();
   let restaurants = await deliverableCandidates(ctx, drop, area);
@@ -284,7 +288,7 @@ async function computeListing(ctx: AppContext, query: DiscoveryQuery, area: Serv
     restaurants = restaurants.filter((r) => (r.cuisines ?? []).some((c) => want.has(c.toLowerCase())));
   }
 
-  let rows = restaurants.map((r) => rowFor(ctx, r, area, drop, now, q ? (matchedItems.get(String(r._id)) ?? []) : undefined));
+  let rows = restaurants.map((r) => rowFor(ctx, r, area, drop, now, offers, q ? (matchedItems.get(String(r._id)) ?? []) : undefined));
   // MKT-2: totals after cuisine/veg/price/q, before openNow + pagination
   const counts = { total: rows.length, open: rows.filter((r) => r.open).length };
   if (query.openNow) rows = rows.filter((r) => r.open);
@@ -309,9 +313,9 @@ function cacheKey(query: DiscoveryQuery, area: ServiceArea, epoch: string) {
 }
 
 /** Cached ordered listing; on a miss also returns the freshly built rows. Redis trouble → compute (fail open). */
-async function getListing(ctx: AppContext, query: DiscoveryQuery, area: ServiceArea): Promise<Listing & { rows?: Map<string, DiscoveryItem> }> {
+async function getListing(ctx: AppContext, query: DiscoveryQuery, area: ServiceArea, offers: Offers): Promise<Listing & { rows?: Map<string, DiscoveryItem> }> {
   const ttl = ctx.config.DISCOVERY_CACHE_TTL_SEC;
-  if (!ttl) return computeListing(ctx, query, area);
+  if (!ttl) return computeListing(ctx, query, area, offers);
   let key: string | null = null;
   try {
     key = redisKey(ctx.redis, cacheKey(query, area, await discoveryEpoch(ctx.redis)));
@@ -320,7 +324,7 @@ async function getListing(ctx: AppContext, query: DiscoveryQuery, area: ServiceA
   } catch (err) {
     ctx.logger.warn({ err }, 'discovery cache read failed');
   }
-  const fresh = await computeListing(ctx, query, area);
+  const fresh = await computeListing(ctx, query, area, offers);
   if (key) {
     const { rows: _rows, ...cached } = fresh;
     await ctx.redis.set(key, JSON.stringify(cached), 'EX', ttl).catch((err: unknown) => ctx.logger.warn({ err }, 'discovery cache write failed'));
@@ -329,7 +333,7 @@ async function getListing(ctx: AppContext, query: DiscoveryQuery, area: ServiceA
 }
 
 /** Rows for `ids` in order: from the fresh build, else re-read (dropping rows that no longer qualify). */
-async function hydrate(ctx: AppContext, ids: string[], listing: Listing & { rows?: Map<string, DiscoveryItem> }, query: DiscoveryQuery, area: ServiceArea): Promise<DiscoveryItem[]> {
+async function hydrate(ctx: AppContext, ids: string[], listing: Listing & { rows?: Map<string, DiscoveryItem> }, query: DiscoveryQuery, area: ServiceArea, offers: Offers): Promise<DiscoveryItem[]> {
   if (!ids.length) return [];
   if (listing.rows) return ids.map((id) => listing.rows!.get(id)!).filter(Boolean);
   const drop = { lat: query.lat, lng: query.lng };
@@ -351,7 +355,7 @@ async function hydrate(ctx: AppContext, ids: string[], listing: Listing & { rows
     const r = byId.get(id);
     if (!r || r.status !== 'APPROVED' || !isDeliverable(r, area, drop).deliverable) continue;
     const matched = query.q?.trim() ? (listing.matched[id] ?? []).map((x) => items.get(x)).filter((x): x is ItemLean => !!x) : undefined;
-    const row = rowFor(ctx, r, area, drop, now, matched);
+    const row = rowFor(ctx, r, area, drop, now, offers, matched);
     if (query.openNow && !row.open) continue;
     out.push(row);
   }
@@ -367,8 +371,9 @@ export async function discoverRestaurants(ctx: AppContext, query: DiscoveryQuery
   if (!area) {
     return { items: [] as DiscoveryItem[], nextCursor: null, serviceable: false, serviceArea: null, counts: { total: 0, open: 0 }, facets: { cuisines: [] as { slug: string; count: number }[] } };
   }
-  const listing = await getListing(ctx, query, area);
-  const items = await hydrate(ctx, listing.ids.slice(offset, offset + limit), listing, query, area);
+  const offers = await scopedOffers(ctx);
+  const listing = await getListing(ctx, query, area, offers);
+  const items = await hydrate(ctx, listing.ids.slice(offset, offset + limit), listing, query, area, offers);
   return {
     items,
     nextCursor: offset + limit < listing.ids.length ? encodeOffset(offset + limit) : null,
@@ -384,8 +389,9 @@ export async function searchCatalog(ctx: AppContext, query: { lat: number; lng: 
   const area = await findServiceArea(ctx.conn, query);
   if (!area) return { serviceable: false, restaurants: [] as DiscoveryItem[], items: [] };
   const q = { ...query, sort: 'distance' as const };
-  const listing = await getListing(ctx, q, area);
-  const rows = await hydrate(ctx, listing.ids.slice(0, 50), listing, q, area);
+  const offers = await scopedOffers(ctx);
+  const listing = await getListing(ctx, q, area, offers);
+  const rows = await hydrate(ctx, listing.ids.slice(0, 50), listing, q, area, offers);
   const items = rows.flatMap((r) => (r.matchedItems ?? []).map((i) => ({ ...i, restaurantId: r.id, restaurantName: r.name })));
   return { serviceable: true, restaurants: rows, items: items.slice(0, 50) };
 }

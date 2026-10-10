@@ -24,6 +24,10 @@ export const couponSchema = new Schema(
     heldCount: { type: Number, default: 0 },
     active: { type: Boolean, default: true },
     firstOrderOnly: { type: Boolean, default: false },
+    /** MKT-8: restaurants the coupon applies to; empty = every restaurant. */
+    restaurantIds: { type: [Schema.Types.ObjectId], default: [] },
+    /** MKT-8: short card badge ("20% OFF", ≤ 16 chars); shown on scoped restaurants' discovery cards. */
+    badgeLabel: { type: String, maxlength: 16 },
     /** Demo seed data (APP_MODE=demo). */
     isDemo: { type: Boolean, default: false },
   },
@@ -31,6 +35,7 @@ export const couponSchema = new Schema(
 );
 couponSchema.index({ code: 1 }, { unique: true });
 couponSchema.index({ active: 1, validTo: 1 });
+couponSchema.index({ restaurantIds: 1, active: 1 });
 
 export type CouponDoc = InferSchemaType<typeof couponSchema>;
 export type CouponModel = Model<CouponDoc>;

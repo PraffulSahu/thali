@@ -1,7 +1,7 @@
 /**
  * Internal commerce API for orders (LLD §8 steps 2, 4, 6) — service token, caller `orders` only.
  *   POST /internal/quote                → { restaurants: QuoteRestaurant[], problems: QuoteProblem[] } (200 even with problems)
- *   POST /internal/coupons/validate     → { code, discountPaise } | 422 COUPON_INVALID | 422 COUPON_LIMIT_REACHED
+ *   POST /internal/coupons/validate     → { code, discountPaise, description, restaurantIds, badgeLabel } | 422 COUPON_INVALID | 422 COUPON_LIMIT_REACHED
  *   POST /internal/memberships/benefits → { membershipId|null, freeDeliveryRestaurantIds, extraDiscountBps, extraDiscountCapPaise }
  *   POST /internal/reservations         → { checkoutId, status, expiresAt } | 409 OUT_OF_STOCK | 422 COUPON_LIMIT_REACHED (idempotent per checkoutId)
  */
@@ -89,8 +89,27 @@ export const QuoteResponse = z
   })
   .meta({ id: 'QuoteResponse' });
 
-const CouponValidateBody = z.object({ code: z.string().trim().min(1).max(40), userId: z.string().min(1).max(64), itemsSubtotalPaise: Paise }).meta({ id: 'CouponValidateRequest' });
-const CouponValidateResponse = z.object({ code: z.string(), discountPaise: Paise, description: z.string() }).meta({ id: 'CouponValidateResponse' });
+const CouponValidateBody = z
+  .object({
+    code: z.string().trim().min(1).max(40),
+    userId: z.string().min(1).max(64),
+    itemsSubtotalPaise: Paise,
+    restaurantSubtotals: z
+      .array(z.object({ restaurantId: z.string().min(1).max(64), subtotalPaise: Paise }))
+      .max(50)
+      .optional()
+      .describe('Per-restaurant item subtotals (MKT-8). Required for restaurant-scoped coupons; none eligible → 422 COUPON_INVALID NOT_APPLICABLE'),
+  })
+  .meta({ id: 'CouponValidateRequest' });
+const CouponValidateResponse = z
+  .object({
+    code: z.string(),
+    discountPaise: Paise,
+    description: z.string(),
+    restaurantIds: z.array(z.string()).describe('Coupon scope; empty = all restaurants (pass to priceCheckout as couponRestaurantIds)'),
+    badgeLabel: z.string().nullable(),
+  })
+  .meta({ id: 'CouponValidateResponse' });
 
 const BenefitsBody = z
   .object({
@@ -161,7 +180,7 @@ export const internalCommerceRoutes: RouteModule = {
       ...base,
       method: 'post',
       path: '/internal/coupons/validate',
-      summary: 'Validate a coupon and compute its discount against Σ itemsSubtotal (LLD §8 step 4)',
+      summary: 'Validate a coupon and compute its discount against Σ itemsSubtotal, or the eligible restaurants\' subtotal for a scoped coupon (LLD §8 step 4, MKT-8)',
       request: { body: { content: json(CouponValidateBody) } },
       responses: { 200: { description: 'Discount', content: json(CouponValidateResponse) } },
       errors: ['COUPON_INVALID', 'COUPON_LIMIT_REACHED'],

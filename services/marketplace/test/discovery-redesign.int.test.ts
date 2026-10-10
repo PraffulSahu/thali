@@ -155,6 +155,21 @@ describe('discovery: counts, facets, paused, closesAt, veg, locality, images', (
     expect(fresh?.menuStats).toMatchObject({ itemCount: 1, availableItemCount: 1, nonVegCount: 0, avgItemPricePaise: 9000, priceBand: 1 });
   });
 
+  it('offer badge: best live restaurant-scoped coupon (MKT-8); unscoped coupons never badge', async () => {
+    const base = { description: '', minOrderPaise: 0, validFrom: new Date(Date.now() - 86400000), validTo: new Date(Date.now() + 86400000), totalLimit: null, perUserLimit: 1, active: true };
+    await h.models.Coupon.create([
+      { ...base, code: 'BIRY20', type: 'PERCENT', valueBps: 2000, restaurantIds: [biryani], badgeLabel: '20% OFF' },
+      { ...base, code: 'BIRY10', type: 'PERCENT', valueBps: 1000, restaurantIds: [biryani, dosa] },
+      { ...base, code: 'ALL50', type: 'FLAT', valuePaise: 50000, badgeLabel: 'BIG' },
+      { ...base, code: 'OLD', type: 'FLAT', valuePaise: 90000, restaurantIds: [declaredMixed], active: false },
+    ]);
+    const res = await list();
+    expect(byId(res.body.items, biryani).offer).toEqual({ label: '20% OFF', code: 'BIRY20' });
+    expect(byId(res.body.items, dosa).offer).toEqual({ label: '10% OFF', code: 'BIRY10' });
+    expect(byId(res.body.items, declaredMixed).offer).toBeNull();
+    expect(byId(res.body.items, paused).offer).toBeNull();
+  });
+
   it('item search goes through the menu_items text index', async () => {
     const res = await list({ q: 'biryani' });
     expect(res.body.items.map((i: { id: string }) => i.id)).toContain(biryani);

@@ -12,6 +12,7 @@
  */
 import type { ClientSession } from 'mongoose';
 import { bpsOf, DomainError } from '@thali/contracts';
+import { couponNotApplicableError, couponScope } from '@thali/pricing';
 import type { AppContext } from '../context.js';
 import type { CouponDoc } from '../models/coupon.js';
 
@@ -62,12 +63,52 @@ export async function userRedemptionCount(ctx: AppContext, couponId: unknown, us
 export const totalExhausted = (c: Pick<CouponLean, 'totalLimit' | 'usedCount' | 'heldCount'>) =>
   c.totalLimit != null && (c.usedCount ?? 0) + (c.heldCount ?? 0) >= c.totalLimit;
 
-/** `POST /internal/coupons/validate` → `{ code, discountPaise }` (+ description for display). */
-export async function validateCoupon(ctx: AppContext, input: { code: string; userId: string; itemsSubtotalPaise: number }) {
+const rupees = (paise: number) => {
+  const r = paise / 100;
+  return `₹${Number.isInteger(r) ? r.toLocaleString('en-IN') : r.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+const percent = (bps: number) => `${Number((bps / 100).toFixed(2))}%`;
+
+/** MKT-7: "50% off up to ₹100" / "₹100 off" — one server-side wording for every client. */
+export function offerHeadline(c: Pick<CouponLean, 'type' | 'valuePaise' | 'valueBps' | 'maxDiscountPaise'>): string {
+  if (c.type === 'PERCENT') return `${percent(c.valueBps ?? 0)} off${c.maxDiscountPaise != null ? ` up to ${rupees(c.maxDiscountPaise)}` : ''}`;
+  return `${rupees(c.valuePaise ?? 0)} off`;
+}
+
+/** MKT-8: card badge — the admin's `badgeLabel`, else "20% OFF" / "₹100 OFF". */
+export function badgeOf(c: Pick<CouponLean, 'type' | 'valuePaise' | 'valueBps' | 'badgeLabel'>): string {
+  if (c.badgeLabel) return c.badgeLabel;
+  return c.type === 'PERCENT' ? `${percent(c.valueBps ?? 0)} OFF` : `${rupees(c.valuePaise ?? 0)} OFF`;
+}
+
+export const scopeOf = (c: Pick<CouponLean, 'restaurantIds'>) => (c.restaurantIds ?? []).map((id) => String(id));
+
+export interface ValidateCouponInput {
+  code: string;
+  userId: string;
+  itemsSubtotalPaise: number;
+  /** Per-restaurant item subtotals (MKT-8): a scoped coupon is computed on the eligible ones only. */
+  restaurantSubtotals?: { restaurantId: string; subtotalPaise: number }[];
+}
+
+/**
+ * `POST /internal/coupons/validate` → `{ code, discountPaise, description, restaurantIds, badgeLabel }`.
+ * Scoped coupons (non-empty `restaurantIds`) need `restaurantSubtotals`: the discount and min-order use
+ * the eligible restaurants' subtotal; none eligible (or no subtotals) → 422 COUPON_INVALID NOT_APPLICABLE.
+ */
+export async function validateCoupon(ctx: AppContext, input: ValidateCouponInput) {
   const code = normalizeCode(input.code);
   const c = await ctx.models.Coupon.findOne({ code }).lean<CouponLean>();
   assertCouponLive(c, ctx.now());
-  if (input.itemsSubtotalPaise < (c.minOrderPaise ?? 0)) {
+  const scope = scopeOf(c);
+  let subtotal = input.itemsSubtotalPaise;
+  if (scope.length) {
+    const groups = (input.restaurantSubtotals ?? []).map((g) => ({ restaurantId: g.restaurantId, itemsSubtotalPaise: g.subtotalPaise }));
+    const s = couponScope(groups, scope);
+    if (!s.ok) throw couponNotApplicableError();
+    subtotal = s.eligibleSubtotalPaise;
+  }
+  if (subtotal < (c.minOrderPaise ?? 0)) {
     throw couponInvalid('MIN_ORDER', `Add items worth ₹${((c.minOrderPaise ?? 0) / 100).toFixed(2)} or more to use this coupon`, { minOrderPaise: c.minOrderPaise ?? 0 });
   }
   if (c.firstOrderOnly && (await firstOrderUsed(ctx, input.userId))) throw couponInvalid('FIRST_ORDER_ONLY', 'This coupon is valid on your first order only');
@@ -75,12 +116,14 @@ export async function validateCoupon(ctx: AppContext, input: { code: string; use
   if (c.perUserLimit != null && (await userRedemptionCount(ctx, c._id, input.userId)) >= c.perUserLimit) {
     throw couponLimit('PER_USER_LIMIT', 'You have already used this coupon');
   }
-  const discountPaise = computeDiscount(c, input.itemsSubtotalPaise);
+  const discountPaise = computeDiscount(c, subtotal);
   if (discountPaise <= 0) throw couponInvalid('NO_DISCOUNT', 'This coupon gives no discount on this order');
-  return { code: c.code, discountPaise, description: c.description ?? '' };
+  return { code: c.code, discountPaise, description: c.description ?? '', restaurantIds: scope, badgeLabel: c.badgeLabel ?? null };
 }
 
-export function couponPublicView(c: CouponLean, remainingUses: number | null) {
+export type CouponEligibility = 'ELIGIBLE' | 'SIGN_IN_TO_CHECK';
+
+export function couponPublicView(c: CouponLean, remainingUses: number | null, eligibility: CouponEligibility = 'ELIGIBLE') {
   return {
     code: c.code,
     description: c.description ?? '',
@@ -92,17 +135,48 @@ export function couponPublicView(c: CouponLean, remainingUses: number | null) {
     validTo: new Date(c.validTo).toISOString(),
     firstOrderOnly: !!c.firstOrderOnly,
     remainingUses,
+    offerHeadline: offerHeadline(c),
+    eligibility,
+    restaurantIds: scopeOf(c),
+    badgeLabel: c.badgeLabel ?? null,
   };
 }
 
-/** `GET /coupons/available` — coupons this user can apply right now (server-enforced eligibility). */
-export async function availableCoupons(ctx: AppContext, userId: string) {
+const liveCoupons = async (ctx: AppContext) => {
   const now = ctx.now();
   const rows = await ctx.models.Coupon.find({ active: true, validFrom: { $lte: now }, validTo: { $gte: now } })
     .sort({ validTo: 1, _id: 1 })
     .limit(100)
     .lean<CouponLean[]>();
-  const live = rows.filter((c) => !totalExhausted(c));
+  return rows.filter((c) => !totalExhausted(c));
+};
+
+/** MKT-7 guests: every live coupon; per-user rules cannot be checked (`SIGN_IN_TO_CHECK`). */
+export async function guestCoupons(ctx: AppContext) {
+  return (await liveCoupons(ctx)).map((c) => couponPublicView(c, null, 'SIGN_IN_TO_CHECK'));
+}
+
+/** MKT-8: best live scoped offer per restaurant (by discount on a ₹500 basket), for discovery cards. */
+export async function scopedOffers(ctx: AppContext): Promise<Map<string, { label: string; code: string }>> {
+  const now = ctx.now();
+  const rows = await ctx.models.Coupon.find({ active: true, validFrom: { $lte: now }, validTo: { $gte: now }, 'restaurantIds.0': { $exists: true } })
+    .limit(500)
+    .lean<CouponLean[]>();
+  const best = new Map<string, { c: CouponLean; value: number }>();
+  for (const c of rows) {
+    if (totalExhausted(c)) continue;
+    const value = computeDiscount(c, 50000);
+    for (const rid of scopeOf(c)) {
+      const cur = best.get(rid);
+      if (!cur || value > cur.value || (value === cur.value && c.code < cur.c.code)) best.set(rid, { c, value });
+    }
+  }
+  return new Map([...best].map(([rid, { c }]) => [rid, { label: badgeOf(c), code: c.code }]));
+}
+
+/** `GET /coupons/available` — coupons this user can apply right now (server-enforced eligibility). */
+export async function availableCoupons(ctx: AppContext, userId: string) {
+  const live = await liveCoupons(ctx);
   if (!live.length) return [];
   const [placed, used] = await Promise.all([
     firstOrderUsed(ctx, userId),
@@ -116,5 +190,5 @@ export async function availableCoupons(ctx: AppContext, userId: string) {
     .filter((c) => !(c.firstOrderOnly && placed))
     .map((c) => ({ c, remaining: c.perUserLimit == null ? null : c.perUserLimit - (usedBy.get(String(c._id)) ?? 0) }))
     .filter((x) => x.remaining === null || x.remaining > 0)
-    .map((x) => couponPublicView(x.c, x.remaining));
+    .map((x) => couponPublicView(x.c, x.remaining, 'ELIGIBLE'));
 }

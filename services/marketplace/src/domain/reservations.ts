@@ -27,6 +27,7 @@
 import { Types, type ClientSession } from 'mongoose';
 import { DomainError } from '@thali/contracts';
 import { withTransaction } from '@thali/service-kit';
+import { couponNotApplicableError } from '@thali/pricing';
 import type { AppContext } from '../context.js';
 import type { StockReservationDoc } from '../models/stock-reservation.js';
 import { assertCouponLive, couponInvalid, couponLimit, firstOrderUsed, normalizeCode, userRedemptionCount, type CouponLean } from './coupons.js';
@@ -120,6 +121,9 @@ export async function reserve(ctx: AppContext, input: ReserveInput): Promise<Res
         couponCode = normalizeCode(input.couponCode);
         const c = await ctx.models.Coupon.findOne({ code: couponCode }).session(session).lean<CouponLean>();
         assertCouponLive(c, now);
+        // MKT-8: a scoped coupon needs at least one of its restaurants in the reserved lines
+        const scope = new Set((c.restaurantIds ?? []).map((id) => String(id).toLowerCase()));
+        if (scope.size && !input.lines.some((l) => scope.has(l.restaurantId.toLowerCase()))) throw couponNotApplicableError();
         if (c.firstOrderOnly && (await firstOrderUsed(ctx, input.userId, session))) throw couponInvalid('FIRST_ORDER_ONLY', 'This coupon is valid on your first order only');
         if (c.perUserLimit != null && (await userRedemptionCount(ctx, c._id, input.userId, session)) >= c.perUserLimit) {
           throw couponLimit('PER_USER_LIMIT', 'You have already used this coupon');

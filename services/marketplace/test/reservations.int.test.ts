@@ -159,6 +159,17 @@ describe('coupon holds', () => {
     expect(await h.models.CouponRedemption.countDocuments({ couponId, status: 'HELD' })).toBe(1);
   });
 
+  it('restaurant-scoped coupon (MKT-8): none of its restaurants in the lines → 422 NOT_APPLICABLE; in scope → HELD', async () => {
+    const it1 = await seedItem(h, rid);
+    const other = await seedCoupon(h, { restaurantIds: [oid()] });
+    const na = await reserve({ lines: [{ restaurantId: rid, itemId: it1, qty: 1 }], couponCode: other.code, couponDiscountPaise: 100 });
+    expect(na.status).toBe(422);
+    expect(na.body.error).toMatchObject({ code: 'COUPON_INVALID', details: { reason: 'NOT_APPLICABLE' } });
+    const mine = await seedCoupon(h, { restaurantIds: [rid] });
+    const ok = await reserve({ lines: [{ restaurantId: rid, itemId: it1, qty: 1 }], couponCode: mine.code, couponDiscountPaise: 100 });
+    expect(ok.status).toBe(200);
+  });
+
   it('totalLimit counts used + held', async () => {
     const { code } = await seedCoupon(h, { totalLimit: 3, usedCount: 2, heldCount: 1 });
     const it1 = await seedItem(h, rid);

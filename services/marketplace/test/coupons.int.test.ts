@@ -103,8 +103,82 @@ describe('GET /coupons/available', () => {
     expect(codes).not.toContain(gone.code);
     expect(codes).not.toContain(off.code);
     expect(codes).not.toContain(first.code); // returning customer
-    expect(res.body.items.find((c: { code: string }) => c.code === live.code)).toMatchObject({ description: 'Live one', remainingUses: 1, type: 'FLAT', valuePaise: 5000 });
-    expect((await request(h.app).get('/api/v1/coupons/available')).status).toBe(401);
+    expect(res.body.items.find((c: { code: string }) => c.code === live.code)).toMatchObject({
+      description: 'Live one',
+      remainingUses: 1,
+      type: 'FLAT',
+      valuePaise: 5000,
+      eligibility: 'ELIGIBLE',
+      offerHeadline: '₹50 off',
+      restaurantIds: [],
+      badgeLabel: null,
+    });
+    // MKT-7: guests see every live coupon, per-user rules unchecked
+    const guest = await request(h.app).get('/api/v1/coupons/available');
+    expect(guest.status).toBe(200);
+    const gcodes = guest.body.items.map((c: { code: string }) => c.code);
+    expect(gcodes).toEqual(expect.arrayContaining([live.code, first.code]));
+    expect(gcodes).not.toContain(gone.code);
+    expect(gcodes).not.toContain(off.code);
+    expect(guest.body.items.find((c: { code: string }) => c.code === live.code)).toMatchObject({ remainingUses: null, eligibility: 'SIGN_IN_TO_CHECK' });
+  });
+
+  it('offerHeadline wording', async () => {
+    const { offerHeadline } = await import('../src/domain/coupons.js');
+    expect(offerHeadline({ type: 'PERCENT', valueBps: 5000, maxDiscountPaise: 10000, valuePaise: null })).toBe('50% off up to ₹100');
+    expect(offerHeadline({ type: 'PERCENT', valueBps: 1250, maxDiscountPaise: null, valuePaise: null })).toBe('12.5% off');
+    expect(offerHeadline({ type: 'FLAT', valuePaise: 12550, valueBps: null, maxDiscountPaise: null })).toBe('₹125.50 off');
+    expect(offerHeadline({ type: 'FLAT', valuePaise: 150000, valueBps: null, maxDiscountPaise: null })).toBe('₹1,500 off');
+  });
+});
+
+describe('restaurant-scoped coupons (MKT-8)', () => {
+  const r1 = oid();
+  const r2 = oid();
+  const scopedValidate = (code: string, subtotals?: { restaurantId: string; subtotalPaise: number }[]) =>
+    request(h.app)
+      .post('/internal/coupons/validate')
+      .set(bearer(tok))
+      .send({ code, userId: oid(), itemsSubtotalPaise: (subtotals ?? []).reduce((a, s) => a + s.subtotalPaise, 0) || 50000, ...(subtotals ? { restaurantSubtotals: subtotals } : {}) });
+
+  it('discount and min order are computed on the eligible restaurants only; response carries scope + badge', async () => {
+    const c = await seedCoupon(h, { type: 'PERCENT', valuePaise: undefined, valueBps: 2000, minOrderPaise: 15000, restaurantIds: [r1], badgeLabel: '20% OFF' });
+    const ok = await scopedValidate(c.code, [
+      { restaurantId: r1, subtotalPaise: 20000 },
+      { restaurantId: r2, subtotalPaise: 80000 },
+    ]);
+    expect(ok.status).toBe(200);
+    expect(ok.body).toEqual({ code: c.code, discountPaise: 4000, description: 'test coupon', restaurantIds: [r1], badgeLabel: '20% OFF' });
+    const min = await scopedValidate(c.code, [
+      { restaurantId: r1, subtotalPaise: 10000 },
+      { restaurantId: r2, subtotalPaise: 80000 },
+    ]);
+    expect(min.body.error.details.reason).toBe('MIN_ORDER');
+  });
+
+  it('no eligible restaurant (or no subtotals) → 422 COUPON_INVALID NOT_APPLICABLE; unscoped coupons unchanged', async () => {
+    const c = await seedCoupon(h, { restaurantIds: [r1] });
+    const na = await scopedValidate(c.code, [{ restaurantId: r2, subtotalPaise: 30000 }]);
+    expect(na.status).toBe(422);
+    expect(na.body.error).toMatchObject({ code: 'COUPON_INVALID', details: { reason: 'NOT_APPLICABLE' } });
+    expect((await scopedValidate(c.code)).body.error.details.reason).toBe('NOT_APPLICABLE');
+    const all = await seedCoupon(h, {});
+    const ok = await scopedValidate(all.code, [{ restaurantId: r2, subtotalPaise: 30000 }]);
+    expect(ok.body).toMatchObject({ discountPaise: 5000, restaurantIds: [], badgeLabel: null });
+  });
+
+  it('admin CRUD carries restaurantIds + badgeLabel', async () => {
+    const admin = await h.adminToken();
+    const created = await request(h.app)
+      .post('/api/v1/admin/marketplace/coupons')
+      .set(bearer(admin))
+      .send({ code: 'SPICE20', type: 'PERCENT', valueBps: 2000, validFrom: new Date(Date.now() - day), validTo: new Date(Date.now() + day), restaurantIds: [r1, r1.toUpperCase()], badgeLabel: '20% OFF' });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ restaurantIds: [r1], badgeLabel: '20% OFF' });
+    const patched = await request(h.app).patch(`/api/v1/admin/marketplace/coupons/${created.body.id}`).set(bearer(admin)).send({ badgeLabel: null, restaurantIds: [r1, r2] });
+    expect(patched.status).toBe(200);
+    expect(patched.body).toMatchObject({ restaurantIds: [r1, r2], badgeLabel: null });
+    expect((await request(h.app).post('/api/v1/admin/marketplace/coupons').set(bearer(admin)).send({ code: 'LONGBADGE', type: 'FLAT', valuePaise: 100, validFrom: new Date(), validTo: new Date(Date.now() + day), badgeLabel: 'x'.repeat(17) })).status).toBe(400);
   });
 });
 
