@@ -8,7 +8,7 @@ describe('templates', () => {
         'otp', 'order_placed_customer', 'order_placed_restaurant', 'order_accepted', 'order_rejected', 'order_cancelled',
         'order_out_for_delivery', 'order_delivered', 'refund_succeeded', 'restaurant_email_verification',
         'restaurant_status_changed', 'partner_status_changed', 'delivery_exception_admin', 'membership_activated',
-        'restaurant_submitted_admin',
+        'restaurant_submitted_admin', 'ADMIN_PASSWORD_RESET',
       ].sort(),
     );
   });
@@ -59,6 +59,19 @@ describe('templates', () => {
         expect(r.text).not.toContain('NaN');
       }
     }
+  });
+
+  it('ADMIN_PASSWORD_RESET: subject, reset link, 30-minute expiry, link is the only secret', () => {
+    expect(TEMPLATES.ADMIN_PASSWORD_RESET.channels).toEqual(['EMAIL']);
+    expect(TEMPLATES.ADMIN_PASSWORD_RESET.secretKeys).toEqual(['resetUrl']);
+    const url = 'https://thali.test/admin/reset-password?token=abc_DEF-123&x=1';
+    const e = renderTemplate('ADMIN_PASSWORD_RESET', { resetUrl: url, expiresMinutes: 30 }, 'EMAIL');
+    expect(e.subject).toBe('Reset your Thali admin password');
+    expect(e.text).toContain(url);
+    expect(e.text).toContain('30 minutes');
+    expect(e.html).toContain('reset-password?token=abc_DEF-123&amp;x=1');
+    expect(e.html).toContain('30 minutes');
+    expect(renderTemplate('ADMIN_PASSWORD_RESET', { resetUrl: url }, 'EMAIL').text).toContain('30 minutes'); // default
   });
 
   it('masks recipients for display', () => {

@@ -145,6 +145,17 @@ export const TEMPLATES = {
     title: () => 'Verify your restaurant email',
     body: (d) => `Please confirm this email address for your Thali restaurant account by opening the link below.\n\n${str(d.verifyUrl)}\n\nIf you did not request this, you can ignore this email.`,
   },
+  /** IDN-1: identity sends it directly to the admin's address; the reset URL carries the token, so it is encrypted at rest. */
+  ADMIN_PASSWORD_RESET: {
+    channels: ['EMAIL'],
+    secretKeys: ['resetUrl'],
+    transactionalEmail: true,
+    title: () => 'Reset your Thali admin password',
+    body: (d) => {
+      const mins = int(d.expiresMinutes);
+      return `We received a request to reset the password of your Thali admin account. Open the link below to choose a new password. The link expires in ${mins && mins > 0 ? mins : 30} minutes.\n\n${str(d.resetUrl)}\n\nIf you did not request this, you can ignore this email and your password will stay as it is.`;
+    },
+  },
   restaurant_status_changed: {
     channels: ['IN_APP', 'EMAIL'],
     secretKeys: [],

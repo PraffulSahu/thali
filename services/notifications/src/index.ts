@@ -66,7 +66,7 @@ async function main() {
     sendingTimeoutSec: config.NOTIF_SENDING_TIMEOUT_SEC,
     statusCallbackUrl: config.TWILIO_STATUS_CALLBACK_URL ?? (config.PUBLIC_API_URL ? `${config.PUBLIC_API_URL.replace(/\/+$/, '')}/api/v1/webhooks/twilio/status` : undefined),
     logger,
-    onProviderError: (provider) => void recordProviderError(redis, 'notifications', provider).catch(() => undefined),
+    onProviderError: (provider, message) => void recordProviderError(redis, 'notifications', provider, Date.now(), message).catch(() => undefined),
   });
 
   const hub = await createRealtimeHub({

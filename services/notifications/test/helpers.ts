@@ -111,6 +111,7 @@ export interface HarnessOptions {
   autoKick?: boolean;
   appMode?: 'demo' | 'sandbox' | 'production';
   deadLetterSources?: DeadLetterSource[];
+  onProviderError?: (provider: string, message?: string) => void;
 }
 
 export interface Harness {
@@ -189,6 +190,7 @@ export async function createHarness(name: string, opts: HarnessOptions = {}): Pr
     logger,
     now: () => new Date(clock.now),
     autoKick: opts.autoKick ?? false,
+    ...(opts.onProviderError ? { onProviderError: opts.onProviderError } : {}),
   });
   const hub = await createRealtimeHub({ redis: tr.redis, logger, heartbeatMs: config.SSE_HEARTBEAT_MS, maxAgeMs: config.SSE_MAX_AGE_SEC * 1000, maxPerUser: config.SSE_MAX_STREAMS_PER_USER });
   const auth = createAuthVerifier({ jwks: keys.jwks, redis: tr.redis });

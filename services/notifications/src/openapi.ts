@@ -85,6 +85,45 @@ export const AdminNotificationView = z
 export const AdminListQuery = PaginationQuerySchema.extend({ status: StatusSchema.optional(), channel: ChannelSchema.optional(), userId: ObjectIdSchema.optional() });
 export const AdminListResponse = paginatedSchema(AdminNotificationView).meta({ id: 'AdminNotificationPage' });
 
+// NTF-1 / NTF-2
+export const NotificationSummaryResponse = z
+  .object({
+    byStatus: z.record(StatusSchema, z.number().int()).describe('All-time counts, every status present (0 when none)'),
+    failedLast24h: z.number().int().describe('FAILED + DEAD notifications last updated (i.e. last failed) in the past 24 hours'),
+    byChannel: z
+      .object({ SMS: z.object({ failed: z.number().int() }), EMAIL: z.object({ failed: z.number().int() }) })
+      .describe('FAILED + DEAD notifications updated in the past 24 hours, per channel'),
+    lastError: z
+      .object({ channel: ChannelSchema, provider: z.string().nullable(), message: z.string(), at: z.string() })
+      .nullable()
+      .describe('Most recent error on a FAILED/DEAD notification; message scrubbed of addresses, numbers and secrets'),
+  })
+  .meta({ id: 'NotificationSummary' });
+export const BulkRetryBody = z
+  .object({
+    status: z.enum(['FAILED', 'DEAD']),
+    channel: ChannelSchema.optional(),
+    before: z.iso.datetime({ offset: true }).pipe(z.coerce.date()).optional().describe('Only notifications created before this instant'),
+    limit: z.number().int().min(1).max(500).default(500),
+  })
+  .strict()
+  .meta({ id: 'BulkRetryRequest' });
+export const BulkRetryResponse = z.object({ queued: z.number().int() }).meta({ id: 'BulkRetryResult' });
+
+// NTF-3
+export const BulkReplayBody = z
+  .object({ service: z.string().min(1).max(32).optional(), limit: z.number().int().min(1).max(100).default(100) })
+  .strict()
+  .meta({ id: 'BulkReplayRequest' });
+export const BulkReplayResponse = z
+  .object({
+    replayed: z.number().int(),
+    failed: z
+      .array(z.object({ service: z.string(), id: z.string().describe("'*' when the service's dead letters could not be listed"), error: z.string() }))
+      .describe('Per-item failures; never silently dropped'),
+  })
+  .meta({ id: 'BulkReplayResult' });
+
 export const DEAD_LETTER_SERVICES = ['identity', 'marketplace', 'orders', 'payments', 'delivery', 'notifications'] as const;
 export const DeadLetterListQuery = z.object({ limit: z.coerce.number().int().min(1).max(200).default(50) });
 export const DeadLetterReplayParams = z.object({ service: z.string().min(1).max(32), id: z.string().min(1).max(200) });
@@ -178,6 +217,25 @@ openapi.route({
   responses: { 200: { description: 'Page', content: json(AdminListResponse) } },
 });
 openapi.route({
+  method: 'get',
+  path: '/api/v1/admin/notifications/summary',
+  tags: ['admin'],
+  summary: 'Counts by status, failures in the last 24 h per channel and the last provider error (ADMIN + MFA)',
+  security: 'bearer',
+  errors: ['MFA_REQUIRED'],
+  responses: { 200: { description: 'Summary', content: json(NotificationSummaryResponse) } },
+});
+openapi.route({
+  method: 'post',
+  path: '/api/v1/admin/notifications/retry',
+  tags: ['admin'],
+  summary: 'Bulk re-queue FAILED or DEAD notifications, oldest first, optionally by channel / created-before (ADMIN + MFA, audited; OTPs are never retried)',
+  security: 'bearer',
+  request: { body: { content: json(BulkRetryBody) } },
+  errors: ['VALIDATION_FAILED', 'MFA_REQUIRED'],
+  responses: { 200: { description: 'Number re-queued', content: json(BulkRetryResponse) } },
+});
+openapi.route({
   method: 'post',
   path: '/api/v1/admin/notifications/:id/retry',
   tags: ['admin'],
@@ -186,6 +244,16 @@ openapi.route({
   request: { params: IdParams },
   errors: ['NOT_FOUND', 'CONFLICT', 'MFA_REQUIRED'],
   responses: { 200: { description: 'Re-queued', content: json(AdminNotificationView) } },
+});
+openapi.route({
+  method: 'post',
+  path: '/api/v1/admin/notifications/dead-letters/replay',
+  tags: ['admin'],
+  summary: 'Replay un-replayed dead letters across services (or one `service`), oldest first, up to `limit` in total (ADMIN + MFA, audited)',
+  security: 'bearer',
+  request: { body: { content: json(BulkReplayBody) } },
+  errors: ['VALIDATION_FAILED', 'MFA_REQUIRED'],
+  responses: { 200: { description: 'Replayed count and per-item failures', content: json(BulkReplayResponse) } },
 });
 openapi.route({
   method: 'get',

@@ -14,15 +14,18 @@ import {
   listDeadLetters,
   replayDeadLetter,
   requireAuth,
+  scrubProviderMessage,
   validate,
   withTransaction,
   type Redis,
 } from '@thali/service-kit';
 import type { NotificationsConfig } from '../config.js';
 import type { Dispatcher } from '../domain/dispatcher.js';
-import type { NotificationDoc, NotificationModel } from '../models/notification.js';
+import { NOTIFICATION_STATUSES, type NotificationDoc, type NotificationModel } from '../models/notification.js';
 import {
   AdminListQuery,
+  BulkReplayBody,
+  BulkRetryBody,
   DeadLetterListQuery,
   DeadLetterReplayParams,
   FailModeBody,
@@ -115,10 +118,30 @@ const view = (n: NotificationDoc & { _id: unknown }) => ({
   updatedAt: n.updatedAt.toISOString(),
 });
 
+const describeFailure = (err: unknown): string => {
+  const { code, message } = errorSummary('', err);
+  return `${code}: ${message}`;
+};
+
 const errorSummary = (service: string, err: unknown) => {
   const e = err as { code?: unknown; message?: unknown };
   return { service, code: typeof e.code === 'string' ? e.code : 'UPSTREAM_ERROR', message: String(e.message ?? 'unreachable').slice(0, 300) };
 };
+
+/**
+ * What may be re-queued by an admin retry (single or bulk): DEAD/FAILED, never OTPs (the code is not stored) and
+ * only rows that still have a way to find their recipient.
+ */
+const retryable = (status: 'FAILED' | 'DEAD' | readonly ['DEAD', 'FAILED']): Record<string, unknown> => ({
+  status: typeof status === 'string' ? status : { $in: status },
+  template: { $ne: 'otp' },
+  $or: [{ channel: 'IN_APP' }, { toEnc: { $ne: null } }, { userId: { $ne: null } }, { recipientChildOrderId: { $ne: null } }],
+});
+const requeue = (at: Date) => ({ $set: { status: 'QUEUED', attempts: 0, nextAttemptAt: at, updatedAt: at }, $unset: { sendingAt: 1 } });
+
+const DAY_MS = 86_400_000;
+/** Notifications kicked straight away after a bulk retry; the retry worker picks up the rest (avoids a provider burst). */
+const BULK_KICK = 25;
 
 export interface AdminDeps {
   config: NotificationsConfig;
@@ -148,6 +171,60 @@ export function adminRouter(deps: AdminDeps): Router {
     res.json(buildPage(docs, query.limit, view));
   });
 
+  // ---- NTF-1: counts and the last provider error ----
+  r.get('/summary', admin, async (_req, res) => {
+    const since = new Date(now().getTime() - DAY_MS);
+    const failedNow = { $in: ['FAILED', 'DEAD'] };
+    const [statusRows, channelRows, last] = await Promise.all([
+      Notification.aggregate<{ _id: string; n: number }>([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
+      Notification.aggregate<{ _id: string; n: number }>([
+        { $match: { status: failedNow, updatedAt: { $gte: since } } },
+        { $group: { _id: '$channel', n: { $sum: 1 } } },
+      ]),
+      Notification.findOne({ status: failedNow, lastError: { $ne: null } }, { channel: 1, provider: 1, lastError: 1, updatedAt: 1 }).sort({ updatedAt: -1 }).lean(),
+    ]);
+    const byStatus = Object.fromEntries(NOTIFICATION_STATUSES.map((st) => [st, 0])) as Record<string, number>;
+    for (const row of statusRows) byStatus[row._id] = row.n;
+    const failedIn = (channel: string) => channelRows.find((row) => row._id === channel)?.n ?? 0;
+    res.json({
+      byStatus,
+      failedLast24h: channelRows.reduce((sum, row) => sum + row.n, 0),
+      byChannel: { SMS: { failed: failedIn('SMS') }, EMAIL: { failed: failedIn('EMAIL') } },
+      lastError: last
+        ? { channel: last.channel, provider: last.provider ?? null, message: scrubProviderMessage(last.lastError ?? ''), at: last.updatedAt.toISOString() }
+        : null,
+    });
+  });
+
+  // ---- NTF-2: bulk retry (same re-queue path as the per-id retry) ----
+  const vBulkRetry = validate({ body: BulkRetryBody });
+  r.post('/retry', admin, vBulkRetry, async (req, res) => {
+    const { body } = vBulkRetry.get(req);
+    const at = now();
+    const filter: Record<string, unknown> = { ...retryable(body.status) };
+    if (body.channel) filter.channel = body.channel;
+    if (body.before) filter.createdAt = { $lt: body.before };
+    const { queued, ids } = await withTransaction(conn, async (session) => {
+      const candidates = await Notification.find(filter, { _id: 1 }).sort({ createdAt: 1, _id: 1 }).limit(body.limit).session(session).lean();
+      const picked = candidates.map((c) => c._id);
+      // The status guard is repeated so a row that moved on since the read (sent, already retried) is left alone.
+      const result = picked.length ? await Notification.updateMany({ ...filter, _id: { $in: picked } }, requeue(at), { session }) : { modifiedCount: 0 };
+      await auditEvent(conn, session, {
+        service: 'notifications',
+        actorId: req.auth!.userId,
+        actorRole: actorRole(req),
+        action: 'notification.bulk_retry',
+        targetType: 'notification',
+        targetId: 'bulk',
+        summary: `Re-queued ${result.modifiedCount} ${body.status} notification(s)${body.channel ? ` on ${body.channel}` : ''}${body.before ? ` created before ${body.before.toISOString()}` : ''}`,
+        ip: req.ip,
+      });
+      return { queued: result.modifiedCount, ids: picked.map(String) };
+    });
+    dispatcher.kick(ids.slice(0, BULK_KICK));
+    res.json({ queued });
+  });
+
   // ---- event dead letters across services ----
   const vDl = validate({ query: DeadLetterListQuery });
   r.get('/dead-letters', admin, vDl, async (req, res) => {
@@ -162,6 +239,49 @@ export function adminRouter(deps: AdminDeps): Router {
     });
     items.sort((a, b) => b.failedAt.localeCompare(a.failedAt));
     res.json({ items, errors, sources: names });
+  });
+
+  // ---- NTF-3: bulk replay (fans out to each service's internal replay route; this service's own DLQ included) ----
+  const vBulkReplay = validate({ body: BulkReplayBody });
+  r.post('/dead-letters/replay', admin, vBulkReplay, async (req, res) => {
+    const { body } = vBulkReplay.get(req);
+    if (body.service && !sources.has(body.service)) {
+      throw new DomainError('VALIDATION_FAILED', `Unknown service '${body.service}'`, undefined, { allowed: [...sources.keys()] });
+    }
+    const targets = body.service ? [sources.get(body.service)!] : [...sources.values()];
+    const failed: { service: string; id: string; error: string }[] = [];
+    const listed = await Promise.allSettled(targets.map((src) => src.list(body.limit)));
+    const queue: { src: DeadLetterSource; id: string; failedAt: string }[] = [];
+    listed.forEach((result, i) => {
+      const src = targets[i]!;
+      if (result.status === 'fulfilled') queue.push(...result.value.filter((d) => !d.replayedAt).map((d) => ({ src, id: d.id, failedAt: d.failedAt })));
+      else failed.push({ service: src.service, id: '*', error: describeFailure(result.reason) });
+    });
+    queue.sort((a, b) => a.failedAt.localeCompare(b.failedAt)); // oldest first
+    let replayed = 0;
+    for (const item of queue.slice(0, body.limit)) {
+      try {
+        await item.src.replay(item.id);
+        replayed++;
+      } catch (err) {
+        failed.push({ service: item.src.service, id: item.id, error: describeFailure(err) });
+      }
+    }
+    if (replayed > 0 || failed.length > 0) {
+      await withTransaction(conn, (session) =>
+        auditEvent(conn, session, {
+          service: 'notifications',
+          actorId: req.auth!.userId,
+          actorRole: actorRole(req),
+          action: 'dead_letter.bulk_replay',
+          targetType: 'dead_letter',
+          targetId: body.service ?? 'all',
+          summary: `Bulk replay of dead-lettered events (${body.service ?? 'all services'}): ${replayed} replayed, ${failed.length} failed`,
+          ip: req.ip,
+        }),
+      );
+    }
+    res.json({ replayed, failed });
   });
 
   const vReplay = validate({ params: DeadLetterReplayParams });
@@ -219,11 +339,7 @@ export function adminRouter(deps: AdminDeps): Router {
     const { params } = vId.get(req);
     const at = now();
     const updated = await withTransaction(conn, async (session) => {
-      const doc = await Notification.findOneAndUpdate(
-        { _id: params.id, status: { $in: ['DEAD', 'FAILED'] }, template: { $ne: 'otp' }, $or: [{ channel: 'IN_APP' }, { toEnc: { $ne: null } }, { userId: { $ne: null } }, { recipientChildOrderId: { $ne: null } }] },
-        { $set: { status: 'QUEUED', attempts: 0, nextAttemptAt: at, updatedAt: at }, $unset: { sendingAt: 1 } },
-        { new: true, session },
-      ).lean();
+      const doc = await Notification.findOneAndUpdate({ _id: params.id, ...retryable(['DEAD', 'FAILED']) }, requeue(at), { new: true, session }).lean();
       if (!doc) return null;
       await auditEvent(conn, session, {
         service: 'notifications',

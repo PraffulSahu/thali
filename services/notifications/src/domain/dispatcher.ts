@@ -51,7 +51,8 @@ export interface DispatcherDeps {
   now?: () => Date;
   /** `kick()` schedules an immediate best-effort dispatch. Default true. */
   autoKick?: boolean;
-  onProviderError?: (provider: string) => void;
+  /** `message` = short, secret-free description of the failure (scrubbed again before it is stored). */
+  onProviderError?: (provider: string, message?: string) => void;
 }
 
 export type CallbackOutcome = 'applied' | 'ignored' | 'not_found';
@@ -269,7 +270,7 @@ export class Dispatcher {
     const now = this.now();
     const retryable = isRetryable(err);
     const dead = !retryable || n.attempts >= this.d.maxAttempts;
-    if (countProviderError) this.d.onProviderError?.(provider);
+    if (countProviderError) this.d.onProviderError?.(provider, describeError(err));
     this.d.logger.warn(
       { notificationId: String(n._id), channel: n.channel, provider, attempt: n.attempts, retryable, final: dead, status: (err as { status?: number }).status, code: (err as { code?: string }).code, ...(countProviderError ? {} : { stage: 'recipient-lookup' }) },
       'notification delivery failed',
@@ -314,7 +315,7 @@ export class Dispatcher {
       const result = await this.d.sms.send({ to: phone, body: renderTemplate('otp', { code }, 'SMS').text, notificationId: id, statusCallbackUrl: this.d.statusCallbackUrl });
       providerMessageId = result.providerMessageId;
     } catch (err) {
-      this.d.onProviderError?.(this.d.sms.name);
+      this.d.onProviderError?.(this.d.sms.name, describeError(err));
       this.d.logger.warn({ notificationId: id, provider: this.d.sms.name, status: (err as { status?: number }).status, code: (err as { code?: string }).code }, 'otp delivery failed');
       await this.d.models.Notification.updateOne(
         { _id: id, status: 'SENDING' },
