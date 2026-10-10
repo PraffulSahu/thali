@@ -15,6 +15,9 @@ export interface AdminCredentialDoc {
   /** IDN-1: SHA-256 (hex) of the one outstanding password-reset token; the raw token is never stored. */
   resetTokenHash: string | null;
   resetExpiresAt: Date | null;
+  /** Bumped on every password reset; embedded in mfaTokens so pending logins die with the old password. */
+  credentialVersion: number;
+  passwordChangedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -30,6 +33,8 @@ const AdminCredentialSchema = new Schema<AdminCredentialDoc>(
     lockedUntil: { type: Date, default: null },
     resetTokenHash: { type: String, default: null },
     resetExpiresAt: { type: Date, default: null },
+    credentialVersion: { type: Number, default: 0 },
+    passwordChangedAt: { type: Date, default: null },
   },
   { collection: 'admin_credentials', timestamps: true },
 );

@@ -15,7 +15,7 @@ import {
   PincodeSchema,
   RoleSchema,
 } from '@thali/contracts';
-import { MIN_ADMIN_PASSWORD_LENGTH } from './domain/admin-auth.js';
+import { MIN_ADMIN_PASSWORD_LENGTH } from './domain/constants.js';
 
 export const IdParams = z.object({ id: z.string().min(1).max(64) });
 

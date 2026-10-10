@@ -32,9 +32,10 @@ export interface KeyStore {
   /** Public JWKS (`kid`, `alg: EdDSA`, `use: sig`) for `/.well-known/jwks.json`. */
   jwks(): JSONWebKeySet;
   signAccessToken(claims: AccessClaims): Promise<string>;
-  signMfaToken(userId: string): Promise<string>;
-  /** → `{ userId }` or 401 UNAUTHENTICATED. */
-  verifyMfaToken(token: string): Promise<{ userId: string }>;
+  /** `credentialVersion` (claim `cv`) binds the token to the admin's current password. */
+  signMfaToken(userId: string, credentialVersion?: number): Promise<string>;
+  /** → `{ userId, credentialVersion }` (missing `cv` = 0) or 401 UNAUTHENTICATED. */
+  verifyMfaToken(token: string): Promise<{ userId: string; credentialVersion: number }>;
 }
 
 function publicJwkOf(publicKey: KeyObject, kid: string): JWK {
@@ -63,9 +64,9 @@ export function createKeyStore(privateKey: KeyObject, kid: string, accessTtlSec 
         .setExpirationTime(now + accessTtlSec)
         .sign(privateKey);
     },
-    async signMfaToken(userId) {
+    async signMfaToken(userId, credentialVersion = 0) {
       const now = Math.floor(Date.now() / 1000);
-      return new SignJWT({ typ: 'mfa' })
+      return new SignJWT({ typ: 'mfa', cv: credentialVersion })
         .setProtectedHeader({ alg: 'EdDSA', kid, typ: 'JWT' })
         .setSubject(userId)
         .setIssuer(ACCESS_TOKEN_ISSUER)
@@ -83,7 +84,9 @@ export function createKeyStore(privateKey: KeyObject, kid: string, accessTtlSec 
           audience: MFA_TOKEN_AUDIENCE,
         });
         if (payload.typ !== 'mfa' || typeof payload.sub !== 'string') throw new Error('bad mfa token');
-        return { userId: payload.sub };
+        const cv = payload.cv === undefined ? 0 : payload.cv;
+        if (typeof cv !== 'number' || !Number.isInteger(cv)) throw new Error('bad mfa token');
+        return { userId: payload.sub, credentialVersion: cv };
       } catch {
         throw new DomainError('UNAUTHENTICATED', 'MFA session expired — sign in again');
       }

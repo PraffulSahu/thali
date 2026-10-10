@@ -8,16 +8,18 @@
  *   - generates a token = 32 random bytes (base64url); only its SHA-256 is stored
  *     (`admin_credentials.resetTokenHash`, `resetExpiresAt` = now + 30 min). A new request replaces any
  *     earlier token (one outstanding token per admin);
- *   - audits `admin.password_reset_requested` in the same transaction;
+ *   - audits `admin.password_reset_requested` in the same transaction (actor anonymous + IP, target admin);
  *   - asks notifications to email `${PUBLIC_WEB_URL}/admin/reset-password?token=<token>` (template
  *     ADMIN_PASSWORD_RESET, dedupeKey `admin-reset:<tokenId>`). A notifications failure is logged and
  *     recorded as a provider error (`identity` / `notifications`); the caller already got its 202.
  *
  * reset (`resetAdminPassword`): token (sha256 lookup, unexpired) → admin ACTIVE + not locked → valid,
- * unreplayed TOTP (a wrong code counts toward the login lockout) → password policy (≥ 12 chars, differs
- * from the current one) → in ONE transaction: consume the token (single use, guarded on the hash),
- * set the new argon2id hash, revoke every session of that admin, audit `admin.password_reset_completed`;
- * after commit the Redis revocation keys are written.
+ * unreplayed TOTP (a wrong code is audited `admin.password_reset_failed` and counts toward the login
+ * lockout) → the TOTP step is consumed → password policy (≥ 12 chars, differs from the current one; one
+ * generic error) → in ONE transaction: consume the token (single use, guarded on the hash), set the new
+ * argon2id hash, bump `credentialVersion` + `passwordChangedAt` (pending mfaTokens die), revoke every
+ * session of that admin, audit `admin.password_reset_completed`; after commit the Redis revocation keys
+ * are written.
  */
 import { createHash, randomBytes } from 'node:crypto';
 import argon2 from 'argon2';
@@ -29,7 +31,8 @@ import type { Ctx } from '../deps.js';
 import { ADMIN_PASSWORD_RESET_TEMPLATE } from '../clients/notifications.js';
 import type { AdminCredentialDoc } from '../models/admin-credential.js';
 import type { UserDoc } from '../models/user.js';
-import { hashPassword, MIN_ADMIN_PASSWORD_LENGTH, registerFailure, totpStep } from './admin-auth.js';
+import { hashPassword, registerFailure, totpStep } from './admin-auth.js';
+import { MIN_ADMIN_PASSWORD_LENGTH } from './constants.js';
 import { revokeUserSessionsTx, writeRevocations, type ClientMeta } from './sessions.js';
 
 export const RESET_TOKEN_TTL_MINUTES = 30;
@@ -75,10 +78,11 @@ export async function requestAdminPasswordReset(ctx: Ctx, rawEmail: string, meta
         { $set: { resetTokenHash: hashResetToken(token), resetExpiresAt: expiresAt } },
         { session },
       );
+      // Unauthenticated request: the actor is anonymous (with IP), the admin is only the subject.
       await auditEvent(ctx.conn, session, {
         service: 'identity',
-        actorId: String(user._id),
-        actorRole: 'ADMIN',
+        actorId: ANONYMOUS_ACTOR.actorId,
+        actorRole: ANONYMOUS_ACTOR.actorRole,
         action: 'admin.password_reset_requested',
         targetType: 'user',
         targetId: String(user._id),
@@ -107,6 +111,9 @@ export async function requestAdminPasswordReset(ctx: Ctx, rawEmail: string, meta
 }
 
 const invalidLink = () => new DomainError('INVALID_CREDENTIALS', 'This reset link is invalid or has expired. Request a new one.');
+/** One message for every password-policy failure, so "same as current" is not distinguishable (no oracle). */
+export const PASSWORD_POLICY_MESSAGE = `Password does not meet the admin password policy (at least ${MIN_ADMIN_PASSWORD_LENGTH} characters, different from the current password)`;
+const policyError = () => new DomainError('VALIDATION_FAILED', PASSWORD_POLICY_MESSAGE, undefined, { field: 'newPassword' });
 
 export async function resetAdminPassword(
   ctx: Ctx,
@@ -125,29 +132,40 @@ export async function resetAdminPassword(
   }
   if (!cred.totpEnabled || !cred.totpSecretEnc) throw invalidLink();
 
+  // 1. TOTP: valid and newer than the last accepted step. A failure with a valid link is audited
+  //    (strong sign the mailbox is compromised) and counts toward the login lockout.
   const step = totpStep(decryptField(cred.totpSecretEnc, ctx.config.FIELD_ENCRYPTION_KEY), input.totpCode);
-  if (step === null || (cred.lastTotpStep !== null && step <= cred.lastTotpStep)) {
-    await registerFailure(ctx, cred); // counts toward the login lockout (throws 423 at the threshold)
-    throw new DomainError('INVALID_CREDENTIALS', step === null ? 'Incorrect authenticator code' : 'This code was already used. Wait for the next code.');
+  const replay = step !== null && cred.lastTotpStep !== null && step <= cred.lastTotpStep;
+  if (step === null || replay) {
+    await auditResetFailure(ctx, user, replay ? 'reused authenticator code' : 'wrong authenticator code', meta);
+    await registerFailure(ctx, cred); // throws 423 at the threshold
+    throw new DomainError('INVALID_CREDENTIALS', replay ? 'This code was already used. Wait for the next code.' : 'Incorrect authenticator code');
   }
 
-  if (input.newPassword.length < MIN_ADMIN_PASSWORD_LENGTH) {
-    throw new DomainError('VALIDATION_FAILED', `Password must be at least ${MIN_ADMIN_PASSWORD_LENGTH} characters`, undefined, { field: 'newPassword' });
+  // 2. Consume the TOTP step BEFORE any password check: each policy probe costs a fresh code.
+  const consumed = await AdminCredential.updateOne(
+    { _id: cred._id, resetTokenHash: tokenHash, resetExpiresAt: { $gt: new Date() }, $or: [{ lastTotpStep: null }, { lastTotpStep: { $lt: step } }] },
+    { $set: { lastTotpStep: step, failedAttempts: 0 } },
+  );
+  if (consumed.modifiedCount !== 1) {
+    const still = await AdminCredential.exists({ _id: cred._id, resetTokenHash: tokenHash, resetExpiresAt: { $gt: new Date() } });
+    if (!still) throw invalidLink();
+    throw new DomainError('INVALID_CREDENTIALS', 'This code was already used. Wait for the next code.');
   }
-  if (await argon2.verify(cred.passwordHash, input.newPassword).catch(() => false)) {
-    throw new DomainError('VALIDATION_FAILED', 'Choose a password you have not used for this account', undefined, { field: 'newPassword' });
-  }
+
+  // 3. Policy (generic error for every rule; the token stays valid for another try with a new code).
+  if (input.newPassword.length < MIN_ADMIN_PASSWORD_LENGTH) throw policyError();
+  if (await argon2.verify(cred.passwordHash, input.newPassword).catch(() => false)) throw policyError();
   const passwordHash = await hashPassword(input.newPassword);
 
+  // 4. Consume the token, bump the credential version (kills pending mfaTokens), revoke sessions, audit.
   const sids = await withTransaction(ctx.conn, async (session) => {
     const r = await AdminCredential.updateOne(
+      { _id: cred._id, resetTokenHash: tokenHash, resetExpiresAt: { $gt: new Date() } },
       {
-        _id: cred._id,
-        resetTokenHash: tokenHash,
-        resetExpiresAt: { $gt: new Date() },
-        $or: [{ lastTotpStep: null }, { lastTotpStep: { $lt: step } }],
+        $set: { passwordHash, resetTokenHash: null, resetExpiresAt: null, failedAttempts: 0, passwordChangedAt: new Date() },
+        $inc: { credentialVersion: 1 },
       },
-      { $set: { passwordHash, resetTokenHash: null, resetExpiresAt: null, lastTotpStep: step, failedAttempts: 0 } },
       { session },
     );
     if (r.modifiedCount !== 1) throw invalidLink(); // used concurrently / replaced / expired meanwhile
@@ -159,10 +177,31 @@ export async function resetAdminPassword(
       action: 'admin.password_reset_completed',
       targetType: 'user',
       targetId: String(user._id),
-      summary: `Password reset for ${user.email ?? String(user._id)}; ${revoked.length} session(s) revoked`,
+      summary: `Password reset for ${user.email ?? String(user._id)} (link + authenticator code); ${revoked.length} session(s) revoked`,
       ...(meta.ip ? { ip: meta.ip } : {}),
     });
     return revoked;
   });
   await writeRevocations(ctx, sids);
+}
+
+/** Actor for unauthenticated password-reset events (the admin is the target, not the actor). */
+export const ANONYMOUS_ACTOR = { actorId: 'anonymous', actorRole: 'ANONYMOUS' } as const;
+
+async function auditResetFailure(ctx: Ctx, user: UserDoc, reason: string, meta: ClientMeta): Promise<void> {
+  try {
+    await withTransaction(ctx.conn, (session) =>
+      auditEvent(ctx.conn, session, {
+        service: 'identity',
+        ...ANONYMOUS_ACTOR,
+        action: 'admin.password_reset_failed',
+        targetType: 'user',
+        targetId: String(user._id),
+        summary: `Password reset with a valid link failed for ${user.email ?? String(user._id)}: ${reason}`,
+        ...(meta.ip ? { ip: meta.ip } : {}),
+      }),
+    );
+  } catch (err) {
+    ctx.logger.error({ err, userId: String(user._id) }, 'could not audit failed password reset');
+  }
 }

@@ -18,10 +18,11 @@ import type { Ctx } from '../deps.js';
 import { models } from '../models/index.js';
 import type { AdminCredentialDoc } from '../models/admin-credential.js';
 import type { UserDoc } from '../models/user.js';
+import { MIN_ADMIN_PASSWORD_LENGTH } from './constants.js';
 import { createSession, type ClientMeta, type CreatedSession } from './sessions.js';
 
 export const ARGON2_OPTIONS = { type: argon2.argon2id, memoryCost: 19_456, timeCost: 2, parallelism: 1 } as const;
-export const MIN_ADMIN_PASSWORD_LENGTH = 12;
+export { MIN_ADMIN_PASSWORD_LENGTH } from './constants.js';
 const TOTP_STEP_SEC = 30;
 const TOTP_WINDOW = 1;
 
@@ -148,7 +149,8 @@ export async function adminLogin(ctx: Ctx, email: string, password: string, meta
   if (user.status === 'BLOCKED' || user.deletedAt) throw new DomainError('ACCOUNT_BLOCKED', 'This account has been blocked');
   await AdminCredential.updateOne({ _id: cred._id }, { $set: { failedAttempts: 0 } });
 
-  if (cred.totpEnabled) return { kind: 'mfa', mfaToken: await ctx.keys.signMfaToken(String(user._id)) };
+  // The mfaToken carries the credential version: a password reset in between invalidates it.
+  if (cred.totpEnabled) return { kind: 'mfa', mfaToken: await ctx.keys.signMfaToken(String(user._id), cred.credentialVersion ?? 0) };
   // Password-only session: short-lived, never refreshable (no cookie); only MFA enrolment accepts it.
   const session = await createSession(
     ctx,
@@ -205,8 +207,10 @@ export async function mfaVerify(
   code: string,
   meta: ClientMeta,
 ): Promise<{ user: UserDoc; session: CreatedSession }> {
-  const { userId } = await ctx.keys.verifyMfaToken(mfaToken);
+  const { userId, credentialVersion } = await ctx.keys.verifyMfaToken(mfaToken);
   const { user, cred } = await loadAdmin(ctx, userId);
+  const staleToken = () => new DomainError('UNAUTHENTICATED', 'MFA session expired — sign in again');
+  if ((cred.credentialVersion ?? 0) !== credentialVersion) throw staleToken(); // password changed since login
   assertNotLocked(cred);
   if (user.status === 'BLOCKED' || user.deletedAt) throw new DomainError('ACCOUNT_BLOCKED', 'This account has been blocked');
   if (!cred.totpEnabled || !cred.totpSecretEnc) throw new DomainError('CONFLICT', 'Two-factor authentication is not enabled');
@@ -216,17 +220,31 @@ export async function mfaVerify(
     await registerFailure(ctx, cred);
     throw new DomainError('INVALID_CREDENTIALS', 'Incorrect authenticator code');
   }
-  const accepted = await ctx.m.AdminCredential.updateOne(
-    { _id: cred._id, totpEnabled: true, $or: [{ lastTotpStep: null }, { lastTotpStep: { $lt: step } }] },
-    { $set: { lastTotpStep: step, failedAttempts: 0 } },
-  );
-  if (accepted.modifiedCount !== 1) {
-    throw new DomainError('INVALID_CREDENTIALS', 'This code was already used. Wait for the next code.');
-  }
-  const session = await createSession(
-    ctx,
-    { userId: user._id, kind: 'ADMIN', amr: ['pwd', 'mfa'], ttlMs: ctx.config.ADMIN_SESSION_HOURS * 3_600_000 },
-    meta,
-  );
+  // One transaction for "accept the TOTP step" + "create the session": it writes the same credential
+  // document as a password reset, so the two serialize (write conflict → retry). Either the reset sees
+  // and revokes this session, or this guard sees the bumped credential version and refuses.
+  const session = await withTransaction(ctx.conn, async (txn) => {
+    const accepted = await ctx.m.AdminCredential.updateOne(
+      {
+        _id: cred._id,
+        totpEnabled: true,
+        credentialVersion: credentialVersion === 0 ? { $in: [0, null] } : credentialVersion,
+        $or: [{ lastTotpStep: null }, { lastTotpStep: { $lt: step } }],
+      },
+      { $set: { lastTotpStep: step, failedAttempts: 0 } },
+      { session: txn },
+    );
+    if (accepted.modifiedCount !== 1) {
+      const now = await ctx.m.AdminCredential.findById(cred._id, { credentialVersion: 1 }, { session: txn }).lean<AdminCredentialDoc>();
+      if ((now?.credentialVersion ?? 0) !== credentialVersion) throw staleToken();
+      throw new DomainError('INVALID_CREDENTIALS', 'This code was already used. Wait for the next code.');
+    }
+    return createSession(
+      ctx,
+      { userId: user._id, kind: 'ADMIN', amr: ['pwd', 'mfa'], ttlMs: ctx.config.ADMIN_SESSION_HOURS * 3_600_000 },
+      meta,
+      txn,
+    );
+  });
   return { user, session };
 }

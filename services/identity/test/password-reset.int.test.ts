@@ -5,6 +5,7 @@ import request from 'supertest';
 import { authenticator } from 'otplib';
 import { redisKey } from '@thali/service-kit';
 import { bootstrapAdmin } from '../src/domain/admin-auth.js';
+import { PASSWORD_POLICY_MESSAGE } from '../src/domain/password-reset.js';
 import { bearer, createHarness, isRevoked, refreshCookie, type Harness } from './helpers.js';
 import { decodeJwt } from 'jose';
 
@@ -87,6 +88,8 @@ describe('POST /api/v1/auth/admin/password/forgot', () => {
 
     const audit = await findAudit('admin.password_reset_requested', a.userId);
     expect(audit).toBeTruthy();
+    // unauthenticated request: anonymous actor, the admin is only the subject
+    expect(audit!.envelope.payload).toMatchObject({ actorId: 'anonymous', actorRole: 'ANONYMOUS', targetType: 'user', targetId: a.userId });
     expect(JSON.stringify(audit)).not.toContain(token);
   });
 
@@ -225,6 +228,8 @@ describe('POST /api/v1/auth/admin/password/reset', () => {
     expect(r.body.error.code).toBe('INVALID_CREDENTIALS');
     const user = await users().findOne({ email: a.email });
     expect((await creds().findOne({ userId: user!._id }))!.failedAttempts).toBe(1);
+    const failed = await findAudit('admin.password_reset_failed', a.userId);
+    expect(failed!.envelope.payload).toMatchObject({ actorId: 'anonymous', actorRole: 'ANONYMOUS', targetId: a.userId });
 
     for (let i = 0; i < 3; i++) await reset({ token, newPassword: 'a-long-new-password', totpCode: wrong });
     const locked = await reset({ token, newPassword: 'a-long-new-password', totpCode: wrong });
@@ -252,26 +257,61 @@ describe('POST /api/v1/auth/admin/password/reset', () => {
     expect(r.status).toBe(401);
   });
 
-  it('password policy: < 12 chars → 400; same as current → 400 (token not consumed)', async () => {
+  it('password policy: < 12 chars → 400 (schema); same as current → generic policy 400 only after the TOTP is verified AND consumed', async () => {
     const a = await enrolledAdmin();
     const token = await issueToken(a.email);
     const short = await reset({ token, newPassword: 'short', totpCode: totpAt(a.secret, 1) });
     expect(short.status).toBe(400);
     expect(short.body.error.code).toBe('VALIDATION_FAILED');
-    const same = await reset({ token, newPassword: a.password, totpCode: totpAt(a.secret, 0) });
+
+    // wrong TOTP + current password → 401 (TOTP first: no password oracle without a valid code)
+    const wrong = totpAt(a.secret) === '000000' ? '111111' : '000000';
+    const noCode = await reset({ token, newPassword: a.password, totpCode: wrong });
+    expect(noCode.status).toBe(401);
+
+    const code = totpAt(a.secret, 0);
+    const same = await reset({ token, newPassword: a.password, totpCode: code });
     expect(same.status).toBe(400);
-    expect(same.body.error.code).toBe('VALIDATION_FAILED');
+    expect(same.body.error).toMatchObject({ code: 'VALIDATION_FAILED', message: PASSWORD_POLICY_MESSAGE });
+    // the code was consumed by that attempt: probing again with it fails before any password check
+    const probe = await reset({ token, newPassword: a.password, totpCode: code });
+    expect(probe.status).toBe(401);
+
     const ok = await reset({ token, newPassword: 'finally-a-good-password', totpCode: totpAt(a.secret, 1) });
     expect(ok.status).toBe(204);
   });
 
   it('a TOTP code already used for login cannot be replayed for reset', async () => {
     const a = await enrolledAdmin();
-    const s = await fullLogin(a.email, a.password, a.secret, 1);
+    const code = totpAt(a.secret, 1); // one string, reused (no step-boundary flake)
+    const l = await login(a.email, a.password);
+    const s = await request(h.app).post('/api/v1/auth/admin/mfa').send({ mfaToken: l.body.mfaToken, code });
     expect(s.status).toBe(200);
     const token = await issueToken(a.email);
-    const r = await reset({ token, newPassword: 'a-long-new-password', totpCode: totpAt(a.secret, 1) });
+    const r = await reset({ token, newPassword: 'a-long-new-password', totpCode: code });
     expect(r.status).toBe(401);
+    expect(r.body.error.code).toBe('INVALID_CREDENTIALS');
+  });
+
+  it('an mfaToken issued before the reset (pending login with the old password) is rejected afterwards', async () => {
+    const a = await enrolledAdmin();
+    const pending = await login(a.email, a.password);
+    expect(pending.body.mfaRequired).toBe(true);
+    const token = await issueToken(a.email);
+    expect((await reset({ token, newPassword: 'brand-new-password-1', totpCode: totpAt(a.secret, 0) })).status).toBe(204);
+
+    const user = await users().findOne({ email: a.email });
+    const cred = await creds().findOne({ userId: user!._id });
+    expect(cred!.credentialVersion).toBe(1);
+    expect(cred!.passwordChangedAt).toBeInstanceOf(Date);
+
+    const stale = await request(h.app).post('/api/v1/auth/admin/mfa').send({ mfaToken: pending.body.mfaToken, code: totpAt(a.secret, 1) });
+    expect(stale.status).toBe(401);
+    expect(stale.body.error.code).toBe('UNAUTHENTICATED');
+    // a login with the new password gets a fresh token that works
+    const fresh = await login(a.email, 'brand-new-password-1');
+    const ok = await request(h.app).post('/api/v1/auth/admin/mfa').send({ mfaToken: fresh.body.mfaToken, code: totpAt(a.secret, 1) });
+    expect(ok.status).toBe(200);
   });
 
   it('malformed token → 400; unknown token → 401', async () => {

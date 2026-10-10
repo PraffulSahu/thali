@@ -9,6 +9,9 @@ const optionalString = () => z.preprocess((v) => (v === '' ? undefined : v), z.s
 const optionalUrl = () => z.preprocess((v) => (v === '' ? undefined : v), z.url().optional());
 const intEnv = (def: number, min = 0) => z.coerce.number().int().min(min).default(def);
 
+const isLocalHost = (h: string) =>
+  h === 'localhost' || h.endsWith('.localhost') || h === '0.0.0.0' || h === '[::1]' || h === '::1' || /^127\./.test(h);
+
 export const DEFAULT_DEMO_PHONE_PREFIXES = '+91900,+91910,+91920,+91930';
 
 export const identityConfigShape = {
@@ -98,6 +101,12 @@ export function loadIdentityConfig(env: Record<string, string | undefined> = pro
   if (raw.APP_MODE === 'production' && !raw.JWT_PRIVATE_KEY_PEM) {
     issues.push('JWT_PRIVATE_KEY_PEM: required when APP_MODE=production');
   }
+  if (raw.APP_MODE === 'production') {
+    // Reset emails link to PUBLIC_WEB_URL: it must be the real web origin, never a localhost fallback.
+    const host = raw.PUBLIC_WEB_URL ? new URL(raw.PUBLIC_WEB_URL).hostname.toLowerCase() : null;
+    if (!host) issues.push('PUBLIC_WEB_URL: required when APP_MODE=production (admin password-reset links)');
+    else if (isLocalHost(host)) issues.push('PUBLIC_WEB_URL: must not be a localhost address when APP_MODE=production');
+  }
   if (raw.APP_MODE === 'production' && raw.COOKIE_SECURE === false) {
     issues.push('COOKIE_SECURE: must not be false when APP_MODE=production (refresh cookie must be Secure)');
   }
@@ -143,7 +152,7 @@ export function demoOtpAllowed(
   return config.DEMO_PHONES.includes(phone) || (config.DEMO_PHONE_PREFIXES ?? []).some((p) => phone.startsWith(p));
 }
 
-/** Web origin used in links sent by email (admin password reset). */
+/** Web origin used in links sent by email (admin password reset). Production guarantees PUBLIC_WEB_URL (non-localhost). */
 export function webBaseUrl(config: Pick<IdentityConfig, 'PUBLIC_WEB_URL'>): string {
   return (config.PUBLIC_WEB_URL ?? 'http://localhost:8080').replace(/\/+$/, '');
 }

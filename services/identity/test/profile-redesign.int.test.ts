@@ -179,7 +179,7 @@ describe('demo phone prefixes (contract 8)', () => {
 
   it('production refuses DEMO_PHONE_PREFIXES', () => {
     expect(() =>
-      loadIdentityConfig(env({ APP_MODE: 'production', INTERNAL_SERVICE_SECRET: 'x'.repeat(40), DEMO_PHONE_PREFIXES: '+91910' })),
+      loadIdentityConfig(env({ APP_MODE: 'production', INTERNAL_SERVICE_SECRET: 'x'.repeat(40), PUBLIC_WEB_URL: 'https://thali.example', DEMO_PHONE_PREFIXES: '+91910' })),
     ).toThrow(/DEMO_PHONE_PREFIXES/);
   });
 });

@@ -18,14 +18,16 @@ export function adminAuthRouter(ctx: Ctx): Router {
   const { config, redis } = ctx;
   const r = express.Router();
 
+  /** Normalized email from the body (rate-limit keys). */
+  const emailOf = (req: express.Request) => {
+    const email = (req.body as { email?: unknown } | undefined)?.email;
+    return typeof email === 'string' ? email.trim().toLowerCase().slice(0, 254) : null;
+  };
   // LLD §5.4: admin login 10 / 15 min per IP+email — fails CLOSED if Redis is down.
   const loginLimit = rateLimit({
     redis,
     name: 'admin-login',
-    keyFn: (req) => {
-      const email = (req.body as { email?: unknown } | undefined)?.email;
-      return `${req.ip}:${typeof email === 'string' ? email.trim().toLowerCase().slice(0, 254) : ''}`;
-    },
+    keyFn: (req) => `${req.ip}:${emailOf(req) ?? ''}`,
     points: config.ADMIN_LOGIN_MAX_PER_WINDOW,
     durationSec: config.ADMIN_LOGIN_WINDOW_SEC,
     message: 'Too many sign-in attempts. Try again later.',
@@ -38,10 +40,6 @@ export function adminAuthRouter(ctx: Ctx): Router {
     durationSec: config.ADMIN_LOGIN_WINDOW_SEC,
   });
   // IDN-1 limits mirror admin login (fail CLOSED): per IP, and per email for forgot (mail-bomb guard).
-  const emailOf = (req: express.Request) => {
-    const email = (req.body as { email?: unknown } | undefined)?.email;
-    return typeof email === 'string' ? email.trim().toLowerCase().slice(0, 254) : null;
-  };
   const forgotIpLimit = rateLimit({
     redis,
     name: 'admin-pwd-forgot-ip',

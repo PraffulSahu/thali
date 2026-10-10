@@ -69,7 +69,7 @@ describe('signing keys', () => {
 });
 
 describe('config', () => {
-  const prodBase = { APP_MODE: 'production', INTERNAL_SERVICE_SECRET: 'x'.repeat(40) };
+  const prodBase = { APP_MODE: 'production', INTERNAL_SERVICE_SECRET: 'x'.repeat(40), PUBLIC_WEB_URL: 'https://thali.example' };
 
   it('production requires JWT_PRIVATE_KEY_PEM and refuses DEMO_* flags', () => {
     expect(() => loadIdentityConfig(env(prodBase))).toThrow(/JWT_PRIVATE_KEY_PEM/);
@@ -77,6 +77,16 @@ describe('config', () => {
     expect(() => loadIdentityConfig(env({ ...prodBase, JWT_PRIVATE_KEY_PEM: pem, DEMO_OTP_ENABLED: 'true' }))).toThrow(/DEMO_OTP_ENABLED/);
     expect(() => loadIdentityConfig(env({ ...prodBase, JWT_PRIVATE_KEY_PEM: pem, DEMO_PHONES: '+919999900001' }))).toThrow(/DEMO_PHONES/);
     expect(loadIdentityConfig(env({ ...prodBase, JWT_PRIVATE_KEY_PEM: pem })).COOKIE_SECURE).toBe(true);
+  });
+
+  it('production requires a non-localhost PUBLIC_WEB_URL (reset links)', () => {
+    const pem = generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    const { PUBLIC_WEB_URL: _omit, ...noUrl } = prodBase;
+    expect(() => loadIdentityConfig(env({ ...noUrl, JWT_PRIVATE_KEY_PEM: pem }))).toThrow(/PUBLIC_WEB_URL: required/);
+    for (const url of ['http://localhost:8080', 'http://127.0.0.1:5173', 'http://app.localhost']) {
+      expect(() => loadIdentityConfig(env({ ...prodBase, JWT_PRIVATE_KEY_PEM: pem, PUBLIC_WEB_URL: url })), url).toThrow(/PUBLIC_WEB_URL: must not be a localhost/);
+    }
+    expect(loadIdentityConfig(env({ ...prodBase, JWT_PRIVATE_KEY_PEM: pem })).PUBLIC_WEB_URL).toBe('https://thali.example');
   });
 
   it('production rejects COOKIE_SECURE=false (explicit true is fine)', () => {
