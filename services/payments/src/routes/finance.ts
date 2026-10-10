@@ -6,7 +6,7 @@ import express, { type Request, type Router } from 'express';
 import { DomainError, type LedgerAccountType } from '@thali/contracts';
 import { PAGE_SORT, buildPage, cursorFilter, requireAuth, validate } from '@thali/service-kit';
 import type { PaymentsContext } from '../context.js';
-import { accountSummary, accountWindow, ledgerEntryView } from '../domain/ledger.js';
+import { financeSummary, ledgerEntryView } from '../domain/ledger.js';
 import { payoutView } from '../domain/payouts.js';
 import { PageQuery, RestaurantParams, SummaryWindowQuery } from '../schemas.js';
 
@@ -45,8 +45,7 @@ export function financeRouter(ctx: PaymentsContext): Router {
 
   r.get('/api/v1/finance/restaurants/:restaurantId/summary', owner, vRestSummary, async (req, res) => {
     const id = await ownedRestaurant(req);
-    const [summary, window] = await Promise.all([accountSummary(ctx, 'RESTAURANT', id), accountWindow(ctx, 'RESTAURANT', id, vRestSummary.get(req).query)]);
-    res.json({ ...summary, window });
+    res.json(await financeSummary(ctx, 'RESTAURANT', id, vRestSummary.get(req).query));
   });
   r.get('/api/v1/finance/restaurants/:restaurantId/ledger', owner, vRest, async (req, res) => {
     const id = await ownedRestaurant(req);
@@ -58,8 +57,7 @@ export function financeRouter(ctx: PaymentsContext): Router {
   });
 
   r.get('/api/v1/finance/partner/summary', partner, vWindow, async (req, res) => {
-    const [summary, window] = await Promise.all([accountSummary(ctx, 'PARTNER', req.auth!.userId), accountWindow(ctx, 'PARTNER', req.auth!.userId, vWindow.get(req).query)]);
-    res.json({ ...summary, window });
+    res.json(await financeSummary(ctx, 'PARTNER', req.auth!.userId, vWindow.get(req).query));
   });
   r.get('/api/v1/finance/partner/ledger', partner, vPage, async (req, res) => {
     res.json(await listLedger(ctx, 'PARTNER', req.auth!.userId, vPage.get(req).query));

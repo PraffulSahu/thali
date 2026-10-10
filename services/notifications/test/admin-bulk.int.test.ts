@@ -27,6 +27,7 @@ afterAll(async () => {
   await h.close();
 });
 beforeEach(async () => {
+  h.clock.now = new Date('2026-10-10T10:00:00.000Z');
   await h.models.Notification.deleteMany({});
   replays.length = 0;
   ordersDown = false;
@@ -52,17 +53,17 @@ const getSummary = async (token?: string) => request(h.app).get('/api/v1/admin/n
 
 describe('NTF-1 summary', () => {
   it('counts every status (zero-filled), failures of the last 24 h by channel, and the scrubbed last error', async () => {
-    h.clock.now = new Date();
-    const old = new Date(Date.now() - 3 * 86_400_000);
+    const old = iso(3 * 24 * 60);
     await seed({ status: 'FAILED', channel: 'SMS' });
     await seed({ status: 'DEAD', channel: 'SMS', lastError: 'twilio 400: bad number +919876543210' });
-    await seed({ status: 'DEAD', channel: 'EMAIL', template: 'refund_succeeded', provider: 'resend', lastError: 'resend 422: ops@example.com rejected', updatedAt: new Date(Date.now() - 1000) });
+    await seed({ status: 'DEAD', channel: 'EMAIL', template: 'refund_succeeded', provider: 'resend', lastError: 'resend 422: ops@example.com rejected', updatedAt: iso(1) });
     await seed({ status: 'FAILED', channel: 'EMAIL', updatedAt: old, createdAt: old }); // failed long ago: counted in byStatus only
     await seed({ status: 'SENT' });
     await seed({ status: 'SKIPPED', skipReason: 'OPTED_OUT' });
+    await seed({ status: 'FAILED', channel: 'IN_APP', toEnc: null, userId: oid(), updatedAt: iso(2) }); // not counted in failedLast24h / byChannel
     const res = await getSummary();
     expect(res.status).toBe(200);
-    expect(res.body.byStatus).toEqual({ QUEUED: 0, SENDING: 0, SENT: 1, DELIVERED: 0, FAILED: 2, DEAD: 2, SKIPPED: 1 });
+    expect(res.body.byStatus).toEqual({ QUEUED: 0, SENDING: 0, SENT: 1, DELIVERED: 0, FAILED: 3, DEAD: 2, SKIPPED: 1 });
     expect(res.body.failedLast24h).toBe(3);
     expect(res.body.byChannel).toEqual({ SMS: { failed: 2 }, EMAIL: { failed: 1 } });
     expect(res.body.lastError).toEqual({ channel: 'EMAIL', provider: 'resend', message: 'resend 422: [email] rejected', at: expect.any(String) });
@@ -100,7 +101,7 @@ describe('NTF-2 bulk retry', () => {
     expect(audits).toHaveLength(1);
     expect(audits[0]!.envelope.payload).toMatchObject({ service: 'notifications', actorRole: 'ADMIN:OPS', targetType: 'notification', targetId: 'bulk' });
     expect(audits[0]!.envelope.payload.summary).toContain('Re-queued 2 FAILED');
-    expect(await h.dispatcher.dispatchDue()).toBe(1 + 1);
+    expect(await h.dispatcher.dispatchDue()).toBe(2); // the two re-queued rows (a: SMS, b: EMAIL), nothing else is due
     expect((await h.models.Notification.findById(a).lean())!.status).toBe('SENT');
   });
 

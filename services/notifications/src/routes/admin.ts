@@ -188,7 +188,7 @@ export function adminRouter(deps: AdminDeps): Router {
     const failedIn = (channel: string) => channelRows.find((row) => row._id === channel)?.n ?? 0;
     res.json({
       byStatus,
-      failedLast24h: channelRows.reduce((sum, row) => sum + row.n, 0),
+      failedLast24h: failedIn('SMS') + failedIn('EMAIL'), // same scope as byChannel (IN_APP never goes through a provider)
       byChannel: { SMS: { failed: failedIn('SMS') }, EMAIL: { failed: failedIn('EMAIL') } },
       lastError: last
         ? { channel: last.channel, provider: last.provider ?? null, message: scrubProviderMessage(last.lastError ?? ''), at: last.updatedAt.toISOString() }

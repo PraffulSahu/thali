@@ -114,9 +114,12 @@ export const EarningsWindowSchema = z
   .object({
     from: Iso,
     to: Iso,
-    earningsPaise: z.number().int(),
+    earningsPaise: z
+      .number()
+      .int()
+      .describe('Earned in the window. Partner: DELIVERY_EARNING. Restaurant: ORDER_EARNING + COMMISSION + REFUND_ADJUSTMENT (net of commission and refunds). PAYOUT and MANUAL_ADJUSTMENT are never included.'),
     entriesByType: z.record(z.enum(enumValues(LedgerEntryType)), z.number().int()),
-    deliveries: z.number().int().nonnegative(),
+    deliveries: z.number().int().nonnegative().describe('Number of DELIVERY_EARNING entries (one per delivered job)'),
   })
   .meta({ id: 'EarningsWindow' });
 

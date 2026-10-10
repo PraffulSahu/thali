@@ -228,10 +228,26 @@ export interface EarningsWindow {
   deliveries: number;
 }
 
-/** Resolve `from`/`to` (default: today in IST, IST midnight to now). Window is half-open [from, to). */
-export function resolveWindow(ctx: PaymentsContext, q: { from?: Date | undefined; to?: Date | undefined }): { from: Date; to: Date } {
-  const to = q.to ?? ctx.now();
-  const from = q.from ?? istDayStart(to);
+/**
+ * What counts as "earned" in a window (payouts and manual adjustments never do; `entriesByType` still shows every type):
+ *   partner    = DELIVERY_EARNING
+ *   restaurant = ORDER_EARNING + COMMISSION + REFUND_ADJUSTMENT (net of commission and refunds)
+ */
+export const EARNED_ENTRY_TYPES: Record<LedgerAccountType, readonly LedgerEntryType[]> = {
+  PARTNER: ['DELIVERY_EARNING'],
+  RESTAURANT: ['ORDER_EARNING', 'COMMISSION', 'REFUND_ADJUSTMENT'],
+  PLATFORM: [],
+};
+
+/** Resolve `from`/`to` (default: today in IST, IST midnight to `now`). Window is half-open [from, to). */
+export function resolveWindow(now: Date, q: { from?: Date | undefined; to?: Date | undefined }): { from: Date; to: Date } {
+  const to = q.to ?? now;
+  let from = q.from;
+  if (!from) {
+    from = istDayStart(to);
+    // `to` exactly at IST midnight: the day that just ended, not an empty window.
+    if (from.getTime() >= to.getTime()) from = istDayStart(new Date(to.getTime() - 1));
+  }
   const bad = (path: string, message: string) => new DomainError('VALIDATION_FAILED', 'Request validation failed', undefined, { issues: [{ path: `query.${path}`, code: 'custom', message }] });
   if (!(from.getTime() < to.getTime())) throw bad('from', '`from` must be before `to`');
   if (to.getTime() - from.getTime() > MAX_EARNINGS_WINDOW_DAYS * DAY_MS) throw bad('to', `window must not exceed ${MAX_EARNINGS_WINDOW_DAYS} days`);
@@ -239,26 +255,40 @@ export function resolveWindow(ctx: PaymentsContext, q: { from?: Date | undefined
 }
 
 /** Σ ledger entries of the account created in [from, to), by entry type; `deliveries` = DELIVERY_EARNING entries (one per job). */
-export async function accountWindow(
+async function accountWindow(
   ctx: PaymentsContext,
   accountType: LedgerAccountType,
   accountId: string,
-  q: { from?: Date | undefined; to?: Date | undefined },
+  win: { from: Date; to: Date },
 ): Promise<EarningsWindow> {
-  const { from, to } = resolveWindow(ctx, q);
+  const { from, to } = win;
   const rows = await ctx.models.LedgerEntry.aggregate<{ _id: LedgerEntryType; total: number; count: number }>([
     { $match: { accountType, accountId, createdAt: { $gte: from, $lt: to } } },
     { $group: { _id: '$entryType', total: { $sum: '$amountPaise' }, count: { $sum: 1 } } },
   ]);
+  const earned = EARNED_ENTRY_TYPES[accountType];
   const entriesByType: Partial<Record<LedgerEntryType, number>> = {};
   let earningsPaise = 0;
   let deliveries = 0;
   for (const r of rows) {
     entriesByType[r._id] = r.total;
-    earningsPaise += r.total;
+    if (earned.includes(r._id)) earningsPaise += r.total;
     if (r._id === 'DELIVERY_EARNING') deliveries = r.count;
   }
   return { from: from.toISOString(), to: to.toISOString(), earningsPaise, entriesByType, deliveries };
+}
+
+/** Finance summary + PAY-1 window. The window is validated before any read; `asOf` and a defaulted `window.to` share one `now`. */
+export async function financeSummary(
+  ctx: PaymentsContext,
+  accountType: LedgerAccountType,
+  accountId: string,
+  q: { from?: Date | undefined; to?: Date | undefined },
+) {
+  const now = ctx.now();
+  const win = resolveWindow(now, q);
+  const [summary, window] = await Promise.all([accountSummary(ctx, accountType, accountId), accountWindow(ctx, accountType, accountId, win)]);
+  return { ...summary, asOf: now.toISOString(), window };
 }
 
 /** Admin: balances of every account of a type (sorted by accountId, cursor = last accountId). */

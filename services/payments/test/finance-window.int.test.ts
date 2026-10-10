@@ -9,11 +9,14 @@ const owner = oid();
 const rest = oid();
 const partnerA = oid();
 const partnerB = oid();
+const partnerC = oid();
+const owner2 = oid();
+const rest2 = oid();
 
 const NOW = new Date('2026-10-11T10:00:00.000Z'); // 15:30 IST on 11 Oct
 const IST_MIDNIGHT = '2026-10-10T18:30:00.000Z';
 
-async function post(at: string, accountType: 'PARTNER' | 'RESTAURANT', accountId: string, entryType: 'DELIVERY_EARNING' | 'ORDER_EARNING' | 'COMMISSION', amountPaise: number, key: string) {
+async function post(at: string, accountType: 'PARTNER' | 'RESTAURANT', accountId: string, entryType: 'DELIVERY_EARNING' | 'ORDER_EARNING' | 'COMMISSION' | 'PAYOUT' | 'MANUAL_ADJUSTMENT' | 'REFUND_ADJUSTMENT', amountPaise: number, key: string) {
   h.clock.now = new Date(at);
   await withTransaction(h.ctx.conn, (s) => postEntry(h.ctx, s, { accountType, accountId, entryType, amountPaise, dedupeKey: key, memo: key, createdBy: 'test' }));
 }
@@ -28,6 +31,18 @@ beforeAll(async () => {
   await post('2026-10-10T18:00:00.000Z', 'RESTAURANT', rest, 'ORDER_EARNING', 1_000, 'r-before');
   await post('2026-10-11T08:00:00.000Z', 'RESTAURANT', rest, 'ORDER_EARNING', 50_000, 'r-1');
   await post('2026-10-11T08:00:00.000Z', 'RESTAURANT', rest, 'COMMISSION', -9_000, 'r-c1');
+  h.marketplace.add(rest2, owner2);
+  // partner C: 2 deliveries, then a payout and a manual adjustment inside the same window
+  await post('2026-10-11T07:00:00.000Z', 'PARTNER', partnerC, 'DELIVERY_EARNING', 3_000, 'c-1');
+  await post('2026-10-11T07:30:00.000Z', 'PARTNER', partnerC, 'DELIVERY_EARNING', 3_420, 'c-2');
+  await post('2026-10-11T08:00:00.000Z', 'PARTNER', partnerC, 'PAYOUT', -5_000, 'c-p');
+  await post('2026-10-11T08:30:00.000Z', 'PARTNER', partnerC, 'MANUAL_ADJUSTMENT', -100, 'c-m');
+  // restaurant 2: order, commission, refund adjustment count; payout and manual adjustment do not
+  await post('2026-10-11T07:00:00.000Z', 'RESTAURANT', rest2, 'ORDER_EARNING', 20_000, 'r2-o');
+  await post('2026-10-11T07:00:00.000Z', 'RESTAURANT', rest2, 'COMMISSION', -3_600, 'r2-c');
+  await post('2026-10-11T07:10:00.000Z', 'RESTAURANT', rest2, 'REFUND_ADJUSTMENT', -500, 'r2-r');
+  await post('2026-10-11T08:00:00.000Z', 'RESTAURANT', rest2, 'PAYOUT', -10_000, 'r2-p');
+  await post('2026-10-11T08:30:00.000Z', 'RESTAURANT', rest2, 'MANUAL_ADJUSTMENT', 50, 'r2-m');
   h.clock.now = NOW;
 });
 afterAll(async () => {
@@ -46,6 +61,36 @@ describe('istDayStart', () => {
 });
 
 describe('PAY-1 windowed earnings', () => {
+  it('PAYOUT and MANUAL_ADJUSTMENT never reduce "earned" (partner); entriesByType still lists every type', async () => {
+    const res = await request(h.app).get('/api/v1/finance/partner/summary').set('authorization', `Bearer ${await partnerTok(partnerC)}`);
+    expect(res.body.window).toMatchObject({
+      earningsPaise: 6_420,
+      deliveries: 2,
+      entriesByType: { DELIVERY_EARNING: 6_420, PAYOUT: -5_000, MANUAL_ADJUSTMENT: -100 },
+    });
+    expect(res.body.balancePaise).toBe(6_420 - 5_000 - 100);
+  });
+
+  it('restaurant earned = ORDER_EARNING + COMMISSION + REFUND_ADJUSTMENT, excluding PAYOUT and MANUAL_ADJUSTMENT', async () => {
+    const res = await request(h.app).get(`/api/v1/finance/restaurants/${rest2}/summary`).set('authorization', `Bearer ${await ownerTok(owner2)}`);
+    expect(res.body.window).toMatchObject({
+      earningsPaise: 20_000 - 3_600 - 500,
+      deliveries: 0,
+      entriesByType: { ORDER_EARNING: 20_000, COMMISSION: -3_600, REFUND_ADJUSTMENT: -500, PAYOUT: -10_000, MANUAL_ADJUSTMENT: 50 },
+    });
+  });
+
+  it('asOf and a defaulted window.to come from the same clock reading', async () => {
+    const res = await request(h.app).get('/api/v1/finance/partner/summary').set('authorization', `Bearer ${await partnerTok(partnerA)}`);
+    expect(res.body.asOf).toBe(res.body.window.to);
+  });
+
+  it('only `to` exactly at IST midnight: from = the IST day that just ended (no 400)', async () => {
+    const res = await request(h.app).get(`/api/v1/finance/partner/summary?to=${IST_MIDNIGHT}`).set('authorization', `Bearer ${await partnerTok(partnerA)}`);
+    expect(res.status).toBe(200);
+    expect(res.body.window).toMatchObject({ from: '2026-10-09T18:30:00.000Z', to: IST_MIDNIGHT, earningsPaise: 9_900, deliveries: 1 });
+  });
+
   it('partner summary defaults to today in IST (midnight IST to now) and keeps the all-time fields', async () => {
     const res = await request(h.app).get('/api/v1/finance/partner/summary').set('authorization', `Bearer ${await partnerTok(partnerA)}`);
     expect(res.status).toBe(200);
