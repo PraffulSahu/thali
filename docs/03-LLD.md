@@ -35,12 +35,12 @@ Each service builds with `tsc -b` to `dist/` and runs `node dist/index.js`; dev 
 typescript 5.9.3 · express 5.3.0 · mongoose 8.24.5 · ioredis 5.11.1 · zod 4.6.5 ·
 @asteasolutions/zod-to-openapi 8.5.0 · swagger-ui-express 5.0.1 · pino 9.14.0 ·
 pino-http 10.5.0 · helmet 8.3.0 · cors 2.8.6 · cookie-parser 1.4.7 · jose 6.2.12 ·
-argon2 0.45.1 · otplib 12.0.1 · libphonenumber-js 1.13.15 · http-proxy-middleware 3.0.7 ·
-@aws-sdk/client-s3 + s3-request-presigner 3.1149.0 · file-type 21.3.4 · vitest 3.2.7 ·
+argon2 0.45.1 · otplib 12.0.1 · libphonenumber-js 1.13.15 ·
+@aws-sdk/client-s3 + s3-request-presigner 3.1149.0 · file-type 21.3.4 · vitest 4.1.11 ·
 supertest 7.3.1 · tsx 4.23.15 · react/react-dom 19.3.0 · react-router 7.18.4 · vite 7.3.7 ·
 @vitejs/plugin-react 5.2.0 · @tanstack/react-query 5.104.1 · tailwindcss/@tailwindcss/vite 4.3.3 ·
 leaflet 1.9.4 · react-leaflet 5.0.0 · @playwright/test 1.64.0.
-Provider HTTP calls use Node's built-in `fetch` + `AbortSignal.timeout()` (no provider SDKs).
+Gateway proxying uses a small native `node:http` proxy (no http-proxy-middleware: unfixable micromatch/braces advisory). Provider HTTP calls use Node's built-in `fetch` + `AbortSignal.timeout()` (no provider SDKs).
 
 ## 1. Cross-cutting conventions
 
@@ -536,8 +536,8 @@ Orders: `ACCEPT_WINDOW_SEC=300`, `CHECKOUT_TTL_SEC=900`, `FOOD_TAX_BPS=500`, `FE
 `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `MOCK_WEBHOOK_SECRET`, `PAYOUT_HOLD_DAYS`,
 `PARTNER_BASE_PAYOUT_PAISE=3000`, `PARTNER_PER_KM_PAISE=800`. Delivery: §7 vars, `GEO_PROVIDER`,
 storage vars. Notifications: `SMS_PROVIDER=twilio|mock`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
-`TWILIO_FROM` / `TWILIO_MESSAGING_SERVICE_SID`, `EMAIL_PROVIDER=resend|smtp|mock`, `RESEND_API_KEY`,
-`RESEND_WEBHOOK_SECRET`, `EMAIL_FROM`, `SMTP_URL` (Mailpit in demo).
+`TWILIO_FROM` / `TWILIO_MESSAGING_SERVICE_SID`, `EMAIL_PROVIDER=resend|mailpit|mock`, `RESEND_API_KEY`,
+`RESEND_WEBHOOK_SECRET`, `EMAIL_FROM`, `MAILPIT_URL` (demo: Mailpit HTTP send API `POST /api/v1/send`).
 
 ## 13. Testing strategy
 - **Unit** (vitest): pricing (incl. property tests on reconciliation), state machines, phone
