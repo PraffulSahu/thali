@@ -5,6 +5,7 @@
  *   <Button onClick={geo.request} loading={geo.status === 'locating'}>Use my location</Button>
  *   if (geo.status === 'denied') -> explain + offer the map pin
  *   if (geo.position) -> geo.position.lat / lng / accuracyM
+ *   const { fix, status } = await geo.locate();   // outcome of THIS request (don't read geo.status after await)
  *
  * status:
  *   'idle'        nothing requested yet (permission may be 'granted' already; see `permission`)
@@ -69,10 +70,11 @@ export function useGeolocation(opts: UseGeolocationOptions = {}) {
     };
   }, []);
 
-  const request = useCallback((): Promise<GeoFix | null> => {
+  /** Request a fix; resolves with the fix (or null) AND the outcome status of this request. */
+  const locate = useCallback((): Promise<{ fix: GeoFix | null; status: GeolocationStatus }> => {
     if (!supported) {
       setStatus('unsupported');
-      return Promise.resolve(null);
+      return Promise.resolve({ fix: null, status: 'unsupported' });
     }
     setStatus('locating');
     return new Promise((resolve) => {
@@ -84,7 +86,7 @@ export function useGeolocation(opts: UseGeolocationOptions = {}) {
             setStatus('success');
             setPermission('granted');
           }
-          resolve(fix);
+          resolve({ fix, status: 'success' });
         },
         (err) => {
           const next: GeolocationStatus = err.code === 1 ? 'denied' : err.code === 3 ? 'timeout' : 'unavailable';
@@ -92,13 +94,15 @@ export function useGeolocation(opts: UseGeolocationOptions = {}) {
             setStatus(next);
             if (next === 'denied') setPermission('denied');
           }
-          resolve(null);
+          resolve({ fix: null, status: next });
         },
         { enableHighAccuracy: highAccuracy, timeout: timeoutMs, maximumAge: maximumAgeMs },
       );
     });
   }, [supported, highAccuracy, timeoutMs, maximumAgeMs]);
 
+  const request = useCallback((): Promise<GeoFix | null> => locate().then((r) => r.fix), [locate]);
+
   const message = status === 'idle' || status === 'locating' || status === 'success' ? null : GEO_MESSAGES[status];
-  return { status, position, permission, request, message, supported };
+  return { status, position, permission, request, locate, message, supported };
 }

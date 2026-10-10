@@ -86,7 +86,7 @@ export function CartDock({ carts, itemCount, totalPaise, open, onOpenChange, che
           <button
             type="button"
             aria-expanded={open}
-            aria-controls={trayId}
+            aria-controls={open && tray ? trayId : undefined}
             onClick={() => onOpenChange(!open)}
             className="flex h-11 min-w-0 items-center gap-3 rounded-pill px-1.5"
           >
@@ -129,6 +129,7 @@ export function CartDock({ carts, itemCount, totalPaise, open, onOpenChange, che
   );
 }
 
+/** Tray filter buttons (All + per cart) are aria-pressed toggles: they filter the slots below, not tab panels. */
 export interface CartTrayProps {
   carts: Array<Pick<DockCart, 'id' | 'name' | 'hue' | 'itemCount'>>;
   activeId: string | 'all';
@@ -145,8 +146,8 @@ export function CartTray({ carts, activeId, onSelect, onClose, children, footer 
       <header className="flex flex-wrap items-center gap-3 border-b border-line px-3.5 py-3">
         <SegmentedTabs
           size="sm"
-          semantics="tabs"
-          label="Carts"
+          semantics="pressed"
+          label="Show carts"
           value={activeId}
           onChange={onSelect}
           options={[

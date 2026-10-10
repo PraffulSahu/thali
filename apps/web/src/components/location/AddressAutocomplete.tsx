@@ -134,6 +134,10 @@ export const AddressAutocomplete = forwardRef<HTMLInputElement, AddressAutocompl
         />
       </div>
       {trailing}
+      {/* Persistent polite region so the suggestion count is announced as results arrive. */}
+      <span className="sr-only" role="status" aria-live="polite">
+        {showList && !pending && items.length > 0 ? `${items.length} ${items.length === 1 ? 'suggestion' : 'suggestions'} available. Use up and down arrows to choose.` : ''}
+      </span>
       {showList ? (
         <div className="absolute inset-x-0 top-full z-40 mt-2 overflow-hidden rounded-field border border-line bg-card shadow-float">
           <ul id={listId} role="listbox" aria-label="Address suggestions" className="max-h-80 overflow-y-auto py-1.5">

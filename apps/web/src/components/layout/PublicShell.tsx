@@ -179,7 +179,7 @@ function PublicHeader() {
           </nav>
           <div className="flex items-center gap-2 max-lg:ml-auto">
             <CartLink />
-            <IconButton icon="menu" label="Open menu" size="lg" variant="outline" className="sm:hidden" onClick={() => setMenu(true)} />
+            <IconButton icon="menu" label="Open menu" size="lg" variant="outline" className="lg:hidden" onClick={() => setMenu(true)} />
           </div>
           <div className="w-full lg:hidden">
             <HeaderSearch density="marketing" hotkey={false} placeholder="Search for biryani, dosa or a restaurant" onSearch={onSearch} />
@@ -210,11 +210,27 @@ function PublicHeader() {
 function MobileSignIn() {
   const auth = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
   if (auth.isAuthenticated) {
     return (
-      <Link to="/account" className={navlink}>
-        <Icon name="user" size={17} /> Your account
-      </Link>
+      <>
+        <Link to="/account" className={navlink}>
+          <Icon name="user" size={17} /> Your account
+        </Link>
+        <Link to="/orders" className={navlink}>
+          <Icon name="receipt" size={17} /> Your orders
+        </Link>
+        <button
+          type="button"
+          className={cn(navlink, 'w-full text-left')}
+          onClick={async () => {
+            await auth.signOut();
+            navigate('/');
+          }}
+        >
+          <Icon name="logout" size={17} /> Sign out
+        </button>
+      </>
     );
   }
   return (

@@ -224,7 +224,7 @@ export function AdminSignInForm({ onSignedIn, onStepChange }: AdminSignInFormPro
             <label htmlFor="admin-password" className="text-sm font-medium text-fg">
               Password<span aria-hidden="true" className="ml-0.5 text-bad">*</span>
             </label>
-            <Link to={email.trim() ? `/admin/forgot?email=${encodeURIComponent(email.trim())}` : '/admin/forgot'} className="text-[13px] font-semibold text-fg-3 hover:text-acc-fg">
+            <Link to="/admin/forgot" state={email.trim() ? { email: email.trim() } : undefined} className="text-[13px] font-semibold text-fg-3 hover:text-acc-fg">
               Forgot?
             </Link>
           </div>

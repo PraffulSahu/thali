@@ -14,7 +14,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { cn } from '../../lib/cn';
-import { Icon } from './Icon';
+import { Icon, type IconName } from './Icon';
 
 export type ToastTone = 'neutral' | 'success' | 'warn' | 'danger' | 'info';
 
@@ -80,12 +80,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
-const toneStyle: Record<ToastTone, { dot: string }> = {
-  neutral: { dot: 'bg-neu' },
-  info: { dot: 'bg-info' },
-  success: { dot: 'bg-ok' },
-  warn: { dot: 'bg-warn' },
-  danger: { dot: 'bg-bad' },
+const toneStyle: Record<ToastTone, { dot: string; icon: IconName; iconClass: string; sr: string }> = {
+  neutral: { dot: 'bg-neu', icon: 'info', iconClass: 'text-fg-3', sr: '' },
+  info: { dot: 'bg-info', icon: 'info', iconClass: 'text-info', sr: 'Info: ' },
+  success: { dot: 'bg-ok', icon: 'check-circle', iconClass: 'text-ok', sr: 'Done: ' },
+  warn: { dot: 'bg-warn', icon: 'alert', iconClass: 'text-warn', sr: 'Warning: ' },
+  danger: { dot: 'bg-bad', icon: 'alert', iconClass: 'text-bad', sr: 'Error: ' },
 };
 
 /**
@@ -102,6 +102,7 @@ export function ToastPill({ children, tone = 'neutral', className }: { children:
       )}
     >
       {tone !== 'neutral' ? <span aria-hidden="true" className={cn('size-1.5 rounded-full', toneStyle[tone].dot)} /> : null}
+      {toneStyle[tone].sr ? <span className="sr-only">{toneStyle[tone].sr}</span> : null}
       {children}
     </span>
   );
@@ -136,9 +137,12 @@ function ToastView({ item, onDismiss }: { item: ToastItem; onDismiss: () => void
       onBlur={() => setPaused(false)}
       className="pointer-events-auto flex w-full max-w-sm animate-pop-in items-start gap-2.5 rounded-field border border-line bg-card py-2.5 pl-3.5 pr-2 text-fg shadow-card"
     >
-      <span aria-hidden="true" className={cn('mt-[7px] size-1.5 shrink-0 rounded-full', s.dot)} />
+      <Icon name={s.icon} size={16} className={cn('mt-0.5', s.iconClass)} />
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-fg">{item.title}</p>
+        <p className="text-sm font-semibold text-fg">
+          {s.sr ? <span className="sr-only">{s.sr}</span> : null}
+          {item.title}
+        </p>
         {item.description ? <p className="mt-0.5 text-[13px] text-fg-3">{item.description}</p> : null}
         {item.action ? (
           <button

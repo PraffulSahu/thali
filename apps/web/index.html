@@ -2,6 +2,15 @@
 <html lang="en-IN">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      /* Admin reset links carry a one-time token: never send it as a Referer, not even for the app's own assets. */
+      if (location.pathname.indexOf('/admin/reset-password') === 0) {
+        var m = document.createElement('meta');
+        m.name = 'referrer';
+        m.content = 'no-referrer';
+        document.head.appendChild(m);
+      }
+    </script>
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="description" content="Thali: order from restaurants near you, mix dishes from different kitchens in one checkout, and track every delivery live." />
     <meta name="theme-color" content="#ffffff" />

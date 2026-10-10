@@ -31,7 +31,7 @@ import { useDocumentTitle } from '../../components/ui/PageHeader';
 import { RatingBadge } from '../../components/ui/RestaurantCard';
 import { VegMark } from '../../components/ui/VegMark';
 import { roleEntryHref } from '../../components/layout/PublicShell';
-import { GEO_MESSAGES, useGeolocation } from '../../hooks/useGeolocation';
+import { useGeolocation, type GeolocationStatus } from '../../hooks/useGeolocation';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { cn } from '../../lib/cn';
@@ -40,6 +40,15 @@ import { setChosenLocation, useChosenLocation } from '../../lib/location';
 import { getPlace, reverseGeocode, shortLabel, type PlaceSuggestion } from '../../lib/places';
 
 type Notice = { tone: 'warn' | 'bad' | 'info'; text: ReactNode } | null;
+type Source = 'hero' | 'cta';
+
+/** Landing copy for geolocation failures (no map/pin here: the fallback is typing an address). */
+export const LANDING_GEO_MESSAGES: Record<Exclude<GeolocationStatus, 'idle' | 'locating' | 'success'>, string> = {
+  denied: 'Location is blocked for this site. Allow it in your browser settings, or type your address instead.',
+  unavailable: 'We couldn’t get your location. Check that location services are on, or type your address instead.',
+  timeout: 'Finding your location took too long. Try again, or type your address instead.',
+  unsupported: 'This browser can’t share your location. Type your address instead.',
+};
 
 const NOT_SERVICEABLE = "We don't deliver here yet. Thali is a Bengaluru pilot — try another address in the city.";
 
@@ -69,8 +78,13 @@ function useLandingCuisines(): CuisineItem[] {
 function useLocationFlow() {
   const navigate = useNavigate();
   const geo = useGeolocation();
-  const [notice, setNotice] = useState<Notice>(null);
+  const [notice, setNoticeState] = useState<Notice>(null);
+  const [source, setSource] = useState<Source>('hero');
   const [busy, setBusy] = useState<'place' | 'gps' | null>(null);
+  const setNotice = (n: Notice, from: Source = 'hero') => {
+    setNoticeState(n);
+    setSource(from);
+  };
   const pendingNext = useRef<string>('/');
 
   const go = () => navigate(pendingNext.current || '/');
@@ -100,30 +114,31 @@ function useLocationFlow() {
     }
   };
 
-  const useMyLocation = async () => {
+  const useMyLocation = async (from: Source = 'hero') => {
     setBusy('gps');
-    setNotice(null);
+    setNotice(null, from);
     try {
-      const fix = await geo.request();
+      const { fix, status } = await geo.locate();
       if (!fix) {
-        setNotice({ tone: 'warn', text: GEO_MESSAGES[(geo.status === 'idle' || geo.status === 'locating' || geo.status === 'success' ? 'unavailable' : geo.status) as keyof typeof GEO_MESSAGES] ?? 'We couldn’t get your location. Type your address instead.' });
+        const key = status === 'idle' || status === 'locating' || status === 'success' ? 'unavailable' : status;
+        setNotice({ tone: 'warn', text: LANDING_GEO_MESSAGES[key] }, from);
         return;
       }
       const here = await reverseGeocode({ lat: fix.lat, lng: fix.lng });
       if (!here.serviceable) {
-        setNotice({ tone: 'warn', text: NOT_SERVICEABLE });
+        setNotice({ tone: 'warn', text: NOT_SERVICEABLE }, from);
         return;
       }
       setChosenLocation({ lat: fix.lat, lng: fix.lng, label: shortLabel(here.label), address: here.label, source: 'gps' });
       go();
     } catch (e) {
-      setNotice({ tone: 'bad', text: errorMessage(e) });
+      setNotice({ tone: 'bad', text: errorMessage(e) }, from);
     } finally {
       setBusy(null);
     }
   };
 
-  return { choosePlace, useMyLocation, notice, setNotice, busy, pendingNext, geoMessage: geo.message };
+  return { choosePlace, useMyLocation, notice, source, setNotice, busy, pendingNext };
 }
 
 /* ------------------------------------------------------------------ sections */
@@ -218,7 +233,7 @@ function HeroArt() {
 }
 
 const DOORS: Array<{ icon: IconName; tile: string; title: string; body: string; cta: string; to: (signedIn: boolean) => string }> = [
-  { icon: 'bowl', tile: 'bg-pri text-white', title: 'Order food', body: 'Browse kitchens that deliver to your address. Sign in only at checkout.', cta: 'Start browsing', to: () => '/' },
+  { icon: 'bowl', tile: 'bg-pri text-pri-fg', title: 'Order food', body: 'Browse kitchens that deliver to your address. Sign in only at checkout.', cta: 'Start browsing', to: () => '/' },
   { icon: 'store', tile: 'bg-sun text-[#141414]', title: 'Run a restaurant', body: 'Get listed, manage menu and stock, accept orders fast, see payouts.', cta: 'Restaurant sign in', to: () => '/signin?role=restaurant' },
   { icon: 'bike', tile: 'bg-leaf text-white dark:text-[#121212]', title: 'Deliver with Thali', body: 'Go online, take offers, carry up to two orders at once, track earnings.', cta: 'Partner sign in', to: () => '/signin?role=partner' },
   { icon: 'shield-check', tile: 'bg-fg text-bg', title: 'Thali operations', body: 'Approvals, deliveries, refunds and system health. Email, password and MFA.', cta: 'Admin sign in', to: () => '/signin?role=admin' },
@@ -304,7 +319,9 @@ export default function LandingPage() {
     }
   };
 
-  const notice = flow.notice ?? (hint ? { tone: 'info' as const, text: hint } : null);
+  const heroNotice = flow.source === 'hero' ? flow.notice : null;
+  const notice = heroNotice ?? (hint ? { tone: 'info' as const, text: hint } : null);
+  const ctaNotice = flow.source === 'cta' ? flow.notice : null;
 
   return (
     <>
@@ -334,7 +351,7 @@ export default function LandingPage() {
               <h2 id="address-title" className="sr-only">
                 Where should we deliver?
               </h2>
-              <div className="relative flex max-w-[580px] flex-wrap items-center gap-2 rounded-[30px] border-[1.5px] border-line-2 bg-card p-2 shadow-card sm:rounded-pill">
+              <div className="relative flex max-w-[580px] flex-wrap items-center gap-2 rounded-[30px] border-[1.5px] border-line-2 bg-card p-2 shadow-card transition-[border-color,box-shadow] duration-150 has-[input:focus]:border-pri has-[input:focus]:shadow-[0_0_0_4px_var(--acc-soft),var(--shadow)] sm:rounded-pill">
                 <AddressAutocomplete
                   ref={inputRef}
                   id={ADDRESS_INPUT_ID}
@@ -353,7 +370,7 @@ export default function LandingPage() {
                   }}
                 />
                 <div className="flex gap-2 max-sm:w-full">
-                  <Button variant="ghost" size="lg" className="max-sm:flex-1" loading={flow.busy === 'gps'} onClick={() => void flow.useMyLocation()}>
+                  <Button variant="ghost" size="lg" className="max-sm:flex-1" loading={flow.busy === 'gps'} onClick={() => void flow.useMyLocation('hero')}>
                     Use my location
                   </Button>
                   <Button
@@ -563,9 +580,31 @@ export default function LandingPage() {
               </h2>
               <p className="text-[17px] font-medium text-[#3d2a00]">See who delivers to you in a few seconds.</p>
             </div>
-            <Button variant="dark" size="xl" className="max-sm:w-full" loading={flow.busy === 'gps'} onClick={() => void flow.useMyLocation()}>
-              Find food near me <Icon name="arrow-right" size={18} />
-            </Button>
+            <div className="flex flex-col items-end gap-3 max-sm:w-full max-sm:items-stretch">
+              <Button
+                variant="dark"
+                size="xl"
+                className="max-sm:w-full"
+                loading={flow.busy === 'gps'}
+                aria-describedby={ctaNotice ? 'cta-notice' : undefined}
+                onClick={() => void flow.useMyLocation('cta')}
+              >
+                Find food near me <Icon name="arrow-right" size={18} />
+              </Button>
+              <div id="cta-notice" aria-live="polite">
+                {ctaNotice ? (
+                  <p className="flex max-w-[420px] items-start gap-2 rounded-field bg-[#141414] px-4 py-3 text-sm text-white">
+                    <Icon name="alert" size={16} className="mt-0.5 shrink-0 text-[#ffc145]" />
+                    <span>
+                      {ctaNotice.text}{' '}
+                      <button type="button" className="font-bold text-[#ffc145] underline underline-offset-2" onClick={() => inputRef.current?.focus()}>
+                        Type your address
+                      </button>
+                    </span>
+                  </p>
+                ) : null}
+              </div>
+            </div>
           </div>
         </Container>
       </section>

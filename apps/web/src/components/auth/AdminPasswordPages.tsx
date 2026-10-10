@@ -4,7 +4,8 @@
  *   /admin/reset-password?token=  POST /auth/admin/password/reset {token, newPassword, totpCode} → 204
  *
  * The reset token is read into memory and immediately removed from the URL (history replace), and the page
- * sets `<meta name="referrer" content="no-referrer">` while mounted so the token never leaks via Referer.
+ * sets `<meta name="referrer" content="no-referrer">` while mounted (index.html also adds it before any request
+ * when the path matches) so the token never leaks via Referer.
  */
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
@@ -63,8 +64,9 @@ function SuccessBox({ children }: { children: ReactNode }) {
 }
 
 export function AdminForgotPage() {
-  const [params] = useSearchParams();
-  const [email, setEmail] = useState(params.get('email') ?? '');
+  // The email arrives via router state (never the URL, so it stays out of history and logs).
+  const { state } = useLocation();
+  const [email, setEmail] = useState(typeof (state as { email?: unknown } | null)?.email === 'string' ? (state as { email: string }).email : '');
   const [busy, setBusy] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);

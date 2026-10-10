@@ -101,14 +101,24 @@ describe('theme', () => {
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('system');
   });
 
-  it('segmented control is a radiogroup with the resolved theme checked', async () => {
-    mockSystemDark(false);
+  it('segmented control is a radiogroup (Light / Dark / System) with the preference checked', async () => {
+    const system = mockSystemDark(false);
     const user = userEvent.setup();
-    render(<ThemeSegmented />);
+    render(
+      <ThemeProvider>
+        <ThemeSegmented />
+      </ThemeProvider>,
+    );
     expect(screen.getByRole('radiogroup', { name: 'Theme' })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Light' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: 'System' })).toHaveAttribute('aria-checked', 'true');
     await user.click(screen.getByRole('radio', { name: 'Dark' }));
     expect(screen.getByRole('radio', { name: 'Dark' })).toHaveAttribute('aria-checked', 'true');
+    expect(document.documentElement.dataset.theme).toBe('dark');
+    // back to following the OS
+    await user.click(screen.getByRole('radio', { name: 'System' }));
+    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('system');
+    expect(document.documentElement.dataset.theme).toBe('light');
+    act(() => system.set(true));
     expect(document.documentElement.dataset.theme).toBe('dark');
   });
 

@@ -3,12 +3,12 @@
  *
  *   <ThemeToggle />                      // ghost icon button: moon in light, sun in dark ("Switch to dark mode")
  *   <ThemeToggle variant="outline" />    // sign-in header
- *   <ThemeSegmented />                   // "☀ Light | ☾ Dark" radiogroup (public utility bar)
+ *   <ThemeSegmented />                   // "☀ Light | ☾ Dark | ▭ System" radiogroup (public utility bar)
  *   <ThemeSegmented iconOnly />          // ≤640px
  */
 import type { KeyboardEvent } from 'react';
 import { cn } from '../../lib/cn';
-import { useTheme, type ResolvedTheme } from '../../lib/theme';
+import { useTheme, type ThemePreference } from '../../lib/theme';
 import { IconButton, type ButtonSize } from './Button';
 import { Icon } from './Icon';
 
@@ -33,24 +33,27 @@ export function ThemeToggle({ variant = 'ghost', size = 'md', className }: Theme
   );
 }
 
-const OPTIONS: Array<{ value: ResolvedTheme; label: string; icon: 'sun' | 'moon' }> = [
+const OPTIONS: Array<{ value: ThemePreference; label: string; icon: 'sun' | 'moon' | 'monitor' }> = [
   { value: 'light', label: 'Light', icon: 'sun' },
   { value: 'dark', label: 'Dark', icon: 'moon' },
+  { value: 'system', label: 'System', icon: 'monitor' },
 ];
 
 export function ThemeSegmented({ iconOnly, className }: { iconOnly?: boolean; className?: string }) {
-  const { resolved, setPreference } = useTheme();
+  const { preference, setPreference } = useTheme();
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    const dir = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
+    if (!dir) return;
     e.preventDefault();
-    const next = resolved === 'dark' ? 'light' : 'dark';
+    const i = OPTIONS.findIndex((o) => o.value === preference);
+    const next = OPTIONS[(i + dir + OPTIONS.length) % OPTIONS.length]!.value;
     setPreference(next);
     e.currentTarget.querySelector<HTMLButtonElement>(`[data-value="${next}"]`)?.focus();
   };
   return (
     <div role="radiogroup" aria-label="Theme" onKeyDown={onKeyDown} className={cn('inline-flex gap-0.5 rounded-badge bg-fill p-0.5', className)}>
       {OPTIONS.map((o) => {
-        const checked = resolved === o.value;
+        const checked = preference === o.value;
         return (
           <button
             key={o.value}

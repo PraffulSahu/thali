@@ -70,6 +70,7 @@ export function AccountMenu({ area, showName, links, size = 36, placement = 'dow
   const location = useLocation();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
   const name = useDisplayName();
 
@@ -79,8 +80,12 @@ export function AccountMenu({ area, showName, links, size = 36, placement = 'dow
     const onDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
+    // Disclosure pattern (button + list of links): Escape closes and returns focus to the trigger.
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Escape') {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
     };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
@@ -127,7 +132,7 @@ export function AccountMenu({ area, showName, links, size = 36, placement = 'dow
           type="button"
           aria-expanded={open}
           aria-controls={panelId}
-          aria-haspopup="true"
+          ref={triggerRef}
           aria-label="Account menu"
           title="Account menu"
           onClick={() => setOpen((o) => !o)}
@@ -140,7 +145,7 @@ export function AccountMenu({ area, showName, links, size = 36, placement = 'dow
           type="button"
           aria-expanded={open}
           aria-controls={panelId}
-          aria-haspopup="true"
+          ref={triggerRef}
           onClick={() => setOpen((o) => !o)}
           className="inline-flex items-center gap-2 rounded-pill text-fg hover:opacity-90"
         >

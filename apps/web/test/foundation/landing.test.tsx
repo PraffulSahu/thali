@@ -177,6 +177,39 @@ describe('landing address autocomplete', () => {
     expect(localStorage.getItem(LOCATION_STORAGE_KEY)).toBeNull();
   });
 
+  it('"Use my location" denied → the "blocked" message (no map/pin copy), nothing stored', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      geolocation: { getCurrentPosition: (_ok: PositionCallback, err: PositionErrorCallback) => err({ code: 1, message: 'denied' } as GeolocationPositionError) },
+    });
+    const fetchFn = mockFetch(() => undefined);
+    renderLanding();
+    await user.click(screen.getByRole('button', { name: /use my location/i }));
+    const msg = await screen.findByText(/location is blocked for this site/i, {}, slow);
+    expect(msg).toHaveTextContent(/type your address instead/i);
+    expect(screen.queryByText(/drop a pin/i)).not.toBeInTheDocument();
+    expect(fetchFn.mock.calls.some(([u]) => String(u).includes('/discovery/reverse'))).toBe(false);
+    expect(localStorage.getItem(LOCATION_STORAGE_KEY)).toBeNull();
+  });
+
+  it('"Find food near me" shows its error next to the CTA and offers to type an address', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('navigator', {
+      ...navigator,
+      geolocation: { getCurrentPosition: (_ok: PositionCallback, err: PositionErrorCallback) => err({ code: 3, message: 'timeout' } as GeolocationPositionError) },
+    });
+    mockFetch(() => undefined);
+    renderLanding();
+    const cta = screen.getByRole('button', { name: /find food near me/i });
+    await user.click(cta);
+    const notice = await screen.findByText(/took too long/i, {}, slow);
+    expect(notice.closest('#cta-notice')).not.toBeNull();
+    expect(cta).toHaveAccessibleDescription(/took too long/i);
+    await user.click(screen.getByRole('button', { name: 'Type your address' }));
+    expect(screen.getByRole('combobox', { name: /delivery address/i })).toHaveFocus();
+  });
+
   it('cuisine circles link to discover with ?cuisine=', async () => {
     mockFetch(() => undefined);
     renderLanding();
