@@ -528,7 +528,7 @@ heartbeats every 20 s (`: ping`).
 Common: `APP_MODE`, `MONGO_URI` (e.g. `mongodb://thali:pw@mongo:27017/?replicaSet=rs0&authSource=admin`),
 `REDIS_URL`, `INTERNAL_SERVICE_SECRET`, `LOG_LEVEL`, `CORS_ORIGINS`, `DOCS_ENABLED`, `PUBLIC_WEB_URL`,
 `PUBLIC_API_URL`. Identity: `JWT_PRIVATE_KEY_PEM`/`JWT_PUBLIC_KEY_PEM` (Ed25519; demo auto-generates and
-persists in DB `keys` collection if absent and `APP_MODE!=production`), `OTP_PEPPER`, `DEMO_OTP_ENABLED`,
+persists (AES-GCM encrypted) in the `signing_keys` collection if absent and `APP_MODE!=production`), `OTP_PEPPER`, `DEMO_OTP_ENABLED`,
 `DEMO_PHONES`, `FIELD_ENCRYPTION_KEY`, `ADMIN_SESSION_HOURS`. Marketplace: `GEO_PROVIDER=google|demo`,
 `GOOGLE_MAPS_API_KEY`, `STORAGE_PROVIDER=s3`, `S3_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY_ID`,
 `S3_SECRET_ACCESS_KEY`, `S3_PUBLIC_BUCKET`, `S3_PRIVATE_BUCKET`, `S3_PUBLIC_BASE_URL`, `FIELD_ENCRYPTION_KEY`.
