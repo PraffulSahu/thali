@@ -49,6 +49,25 @@ const paths = {
   heart: <path d="M12 20s-7.5-4.6-7.5-10A4.5 4.5 0 0 1 12 7.2 4.5 4.5 0 0 1 19.5 10c0 5.4-7.5 10-7.5 10Z" />,
   crosshair: <><circle cx="12" cy="12" r="7" /><path d="M12 2v4M12 18v4M2 12h4M18 12h4" /></>,
   activity: <path d="M3 12h4l3-8 4 16 3-8h4" />,
+  sun: <><circle cx="12" cy="12" r="4" /><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4" /></>,
+  moon: <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />,
+  bowl: <><path d="M3.5 11h17a8.5 8.5 0 0 1-17 0Z" /><path d="M8 7.5c0-1.5 1.5-1.5 1.5-3M12 7.5c0-1.5 1.5-1.5 1.5-3M16 7.5c0-1.5 1.5-1.5 1.5-3" /></>,
+  'shield-check': <><path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.3 7.5 9.5 4.3-1.2 7.5-4.9 7.5-9.5V6L12 3Z" /><path d="m9 12 2 2 4-4" /></>,
+  lock: <><rect x="5" y="10.5" width="14" height="10" rx="2" /><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3" /></>,
+  'arrow-right': <path d="M5 12h14M13 6l6 6-6 6" />,
+  'arrow-left': <path d="M19 12H5M11 6l-6 6 6 6" />,
+  tag: <><path d="M3.5 12.5V4.5a1 1 0 0 1 1-1h8l8 8-9 9-8-8Z" /><circle cx="8.5" cy="8.5" r="1.5" /></>,
+  bag: <><path d="M6 8h12l-1 12H7L6 8Z" /><path d="M9 8V6.5a3 3 0 0 1 6 0V8" /></>,
+  'chevrons-up-down': <path d="m8 9 4-4 4 4M8 15l4 4 4-4" />,
+  copy: <><rect x="8.5" y="8.5" width="11" height="11" rx="2" /><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5" /></>,
+  eye: <><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="3" /></>,
+  'eye-off': <><path d="M10.6 5.6A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a17 17 0 0 1-2.6 3.4M6.6 6.6C3.9 8.4 2.5 12 2.5 12S6 18.5 12 18.5c1.8 0 3.4-.6 4.7-1.4" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2M3 3l18 18" /></>,
+  mail: <><rect x="3" y="5.5" width="18" height="13" rx="2" /><path d="m3.5 7 8.5 6 8.5-6" /></>,
+  key: <><circle cx="8" cy="15" r="4" /><path d="m11 12 9-9M17 6l3 3M15 8l2 2" /></>,
+  more: <path d="M5 12h.01M12 12h.01M19 12h.01" strokeWidth={3} />,
+  'check-circle': <><circle cx="12" cy="12" r="8.5" /><path d="m8.5 12.5 2.5 2.5 4.5-5" /></>,
+  grid: <><rect x="4" y="4" width="7" height="7" rx="1.5" /><rect x="13" y="4" width="7" height="7" rx="1.5" /><rect x="4" y="13" width="7" height="7" rx="1.5" /><rect x="13" y="13" width="7" height="7" rx="1.5" /></>,
+  navigation: <path d="M12 3 5 20l7-4 7 4-7-17Z" />,
 } as const;
 
 export type IconName = keyof typeof paths;
@@ -83,23 +102,24 @@ export function Icon({ name, label, size = 20, className, ...rest }: IconProps) 
 }
 
 /**
- * Indian food marker: veg = green square outline with a filled circle; non-veg = brown square outline
- * with a filled triangle (FSSAI). Always labelled for screen readers.
+ * Indian food marker (design-spec §3.10): veg = square outline + dot, non-veg = square outline + triangle, in
+ * `--veg` / `--nveg` with a transparent fill so it works on dark. Always labelled ("Veg" / "Non-veg").
+ * Prefer `<VegMark veg />` (ui/VegMark) in new code; FoodMarker is kept for existing screens.
  */
-export function FoodMarker({ veg, size = 16, className }: { veg: boolean; size?: number; className?: string }) {
-  const color = veg ? 'var(--color-veg)' : 'var(--color-nonveg)';
+export function FoodMarker({ veg, size = 14, className, onColor }: { veg: boolean; size?: number; className?: string; onColor?: boolean }) {
+  const color = onColor ? '#ffffff' : veg ? 'var(--veg)' : 'var(--nveg)';
   return (
     <svg
       xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 16 16"
+      viewBox="0 0 14 14"
       width={size}
       height={size}
       role="img"
-      aria-label={veg ? 'Vegetarian' : 'Non-vegetarian'}
+      aria-label={veg ? 'Veg' : 'Non-veg'}
       className={cn('shrink-0', className)}
     >
-      <rect x="1" y="1" width="14" height="14" rx="2" fill="#fff" stroke={color} strokeWidth="1.5" />
-      {veg ? <circle cx="8" cy="8" r="3.5" fill={color} /> : <path d="M8 4.2 11.8 11H4.2L8 4.2Z" fill={color} />}
+      <rect x=".75" y=".75" width="12.5" height="12.5" rx="2" fill="none" stroke={color} strokeWidth="1.5" />
+      {veg ? <circle cx="7" cy="7" r="3.3" fill={color} /> : <path d="M7 3.4 10.4 10H3.6Z" fill={color} />}
     </svg>
   );
 }
