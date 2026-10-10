@@ -1,6 +1,7 @@
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { at, bearer, createJob, oid, outboxEvents, setup, type Harness } from './helpers.js';
+import { runDispatchTick } from '../src/jobs/dispatcher.js';
+import { at, bearer, createJob, createPartner, oid, outboxEvents, setup, type Harness } from './helpers.js';
 
 const vehicle = { type: 'SCOOTER', registrationNumber: 'KA05MN4321' };
 
@@ -160,5 +161,112 @@ describe('partner onboarding outside demo mode', () => {
     await request(h.app).post('/api/v1/partner/profile').set(bearer(token)).send({ vehicle });
     const doc = await uploadDoc(h, token, 'ID_PROOF');
     expect(doc.documents[0].demoVerified).toBe(false);
+  });
+});
+
+describe('onboarding review fixes', () => {
+  let h: Harness;
+  let admin: string;
+  beforeAll(async () => {
+    h = await setup('onboarding_fixes');
+    admin = await h.adminToken();
+  });
+  afterAll(async () => h.cleanup());
+
+  it('vehicle cannot change while APPROVAL_PENDING (bicycle → bike would skip DL/RC); name still can', async () => {
+    const userId = oid();
+    h.identity.addUser({ id: userId });
+    const token = await h.token(userId);
+    await request(h.app).post('/api/v1/partner/profile').set(bearer(token)).send({ vehicle: { type: 'BICYCLE', registrationNumber: 'NONE-002' } });
+    await uploadDoc(h, token, 'ID_PROOF');
+    expect((await request(h.app).post('/api/v1/partner/submit').set(bearer(token))).body.status).toBe('APPROVAL_PENDING');
+
+    const sw = await request(h.app).patch('/api/v1/partner/profile').set(bearer(token)).send({ vehicle: { type: 'BIKE', registrationNumber: 'KA01ZZ9999' } });
+    expect(sw.status).toBe(409);
+    expect((await h.ctx.models.Partner.findOne({ userId }).lean())!.vehicle!.type).toBe('BICYCLE');
+    const rename = await request(h.app).patch('/api/v1/partner/profile').set(bearer(token)).send({ name: 'Kiran Rao' });
+    expect(rename.status).toBe(200);
+    expect(rename.body.name).toBe('Kiran Rao');
+  });
+
+  it('approve re-validates required documents for the current vehicle → 422 PARTNER_PROFILE_INCOMPLETE', async () => {
+    const userId = oid();
+    h.identity.addUser({ id: userId });
+    const token = await h.token(userId);
+    const created = await request(h.app).post('/api/v1/partner/profile').set(bearer(token)).send({ vehicle: { type: 'BICYCLE', registrationNumber: 'NONE-003' } });
+    await uploadDoc(h, token, 'ID_PROOF');
+    await request(h.app).post('/api/v1/partner/submit').set(bearer(token));
+    // a motorised vehicle without DL/RC reaching review (e.g. a legacy edit) must not be approvable
+    await h.ctx.models.Partner.updateOne({ _id: created.body.id }, { $set: { vehicle: { type: 'BIKE', registrationNumber: 'KA01ZZ0001' } } });
+    const res = await request(h.app).post(`/api/v1/admin/delivery/partners/${created.body.id}/approve`).set(bearer(admin));
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe('PARTNER_PROFILE_INCOMPLETE');
+    expect(res.body.error.details.missing).toEqual(['DRIVING_LICENSE', 'VEHICLE_RC']);
+    expect((await h.ctx.models.Partner.findById(created.body.id).lean())!.status).toBe('APPROVAL_PENDING');
+    expect(await outboxEvents(h, 'audit.recorded', { targetId: created.body.id, action: 'partner.approve' })).toHaveLength(0);
+  });
+
+  it('going offline with ASSIGNED / PICKED_UP jobs → 409 PARTNER_HAS_ACTIVE_JOBS; allowed once delivered', async () => {
+    const p = await createPartner(h, { location: at(0.1, 0) });
+    const token = await h.token(p.userId);
+    const { job } = await createJob(h);
+    await request(h.app).post(`/api/v1/admin/delivery/jobs/${job.id}/assign`).set(bearer(admin)).send({ partnerId: p.id });
+
+    const assigned = await request(h.app).post('/api/v1/partner/offline').set(bearer(token));
+    expect(assigned.status).toBe(409);
+    expect(assigned.body.error.code).toBe('PARTNER_HAS_ACTIVE_JOBS');
+    expect(assigned.body.error.message).toMatch(/reassign/);
+
+    await request(h.app).post(`/api/v1/deliveries/${job.id}/arrived`).set(bearer(token));
+    await request(h.app).post(`/api/v1/deliveries/${job.id}/pickup`).set(bearer(token)).send({ code: '1234' });
+    const picked = await request(h.app).post('/api/v1/partner/offline').set(bearer(token));
+    expect(picked.status).toBe(409);
+    expect((await h.ctx.models.Partner.findById(p._id).lean())!.online).toBe(true);
+
+    await request(h.app).post(`/api/v1/deliveries/${job.id}/start`).set(bearer(token));
+    await request(h.app).post(`/api/v1/deliveries/${job.id}/deliver`).set(bearer(token)).send({ code: '5678' });
+    const ok = await request(h.app).post('/api/v1/partner/offline').set(bearer(token));
+    expect(ok.status).toBe(200);
+    expect(ok.body.online).toBe(false);
+  });
+
+  it('suspension withdraws live offers so the job re-dispatches immediately; a PICKED_UP job stays with the suspended partner', async () => {
+    await h.ctx.models.Partner.updateMany({}, { $set: { online: false } });
+    const p = await createPartner(h, { location: at(0.1, 0) });
+    const token = await h.token(p.userId);
+
+    // picked-up job held by p
+    const { job: carried } = await createJob(h);
+    await request(h.app).post(`/api/v1/admin/delivery/jobs/${carried.id}/assign`).set(bearer(admin)).send({ partnerId: p.id });
+    await request(h.app).post(`/api/v1/deliveries/${carried.id}/arrived`).set(bearer(token));
+    await request(h.app).post(`/api/v1/deliveries/${carried.id}/pickup`).set(bearer(token)).send({ code: '1234' });
+
+    // a fresh job from the same restaurant (batchable after pickup, LLD 7 rule 2) offered to p only
+    const { job: offeredJob } = await createJob(h, { restaurantId: carried.restaurantId, dropAt: at(0.3, 3) });
+    await runDispatchTick(h.ctx);
+    const offer = await h.ctx.models.Offer.findOne({ jobId: offeredJob._id, partnerId: p._id }).lean();
+    expect(offer!.status).toBe('OFFERED');
+    const other = await createPartner(h, { location: at(0.4, 0) });
+
+    const res = await request(h.app).post(`/api/v1/admin/delivery/partners/${p.id}/suspend`).set(bearer(admin)).send({ reason: 'Document fraud suspected' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ status: 'SUSPENDED', online: false });
+    expect(res.body.activeJobIds).toEqual([carried.id]);
+    expect((await h.ctx.models.Offer.findById(offer!._id).lean())!.status).toBe('CANCELLED');
+
+    const kept = (await h.ctx.models.Job.findById(carried.id).lean())!;
+    expect(kept.status).toBe('PICKED_UP');
+    expect(kept.partnerId!.toString()).toBe(p.id);
+    expect(await outboxEvents(h, 'delivery.unassigned', { jobId: carried.id })).toHaveLength(0);
+
+    // no clock advance needed: the job is due again right away and goes to the other partner
+    await runDispatchTick(h.ctx);
+    const next = await h.ctx.models.Offer.find({ jobId: offeredJob._id, status: 'OFFERED' }).lean();
+    expect(next.map((o) => o.partnerId.toString())).toEqual([other.id]);
+
+    // the suspended partner can still finish the order they carry
+    await request(h.app).post(`/api/v1/deliveries/${carried.id}/start`).set(bearer(token));
+    const done = await request(h.app).post(`/api/v1/deliveries/${carried.id}/deliver`).set(bearer(token)).send({ code: '5678' });
+    expect(done.status).toBe(200);
   });
 });

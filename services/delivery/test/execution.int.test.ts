@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runDispatchTick } from '../src/jobs/dispatcher.js';
-import { at, bearer, createJob, createPartner, outboxEvents, setup, type Harness } from './helpers.js';
+import { at, bearer, createJob, createPartner, oid, outboxEvents, setup, type Harness } from './helpers.js';
 
 describe('pickup / drop execution with handover codes', () => {
   let h: Harness;
@@ -113,6 +113,17 @@ describe('pickup / drop execution with handover codes', () => {
     expect((await request(h.app).post(`/api/v1/deliveries/${job.id}/pickup`).set(bearer(t)).send({ code: '1234' })).status).toBe(404);
     expect((await request(h.app).post(`/api/v1/deliveries/${job.id}/fail`).set(bearer(t)).send({ reason: 'Customer unreachable' })).status).toBe(404);
     // the attempt counter was not touched by the stranger
+    expect((await h.ctx.models.Job.findById(job.id).lean())!.codeAttempts).toBe(0);
+  });
+
+  it('a user without a partner profile gets 404 on accept and pickup', async () => {
+    const { job } = await assignedJob();
+    const offer = await h.ctx.models.Offer.findOne({ jobId: job._id }).lean();
+    const t = await h.token(oid());
+    const acc = await request(h.app).post(`/api/v1/deliveries/offers/${offer!._id.toString()}/accept`).set(bearer(t));
+    expect(acc.status).toBe(404);
+    const pick = await request(h.app).post(`/api/v1/deliveries/${job.id}/pickup`).set(bearer(t)).send({ code: '1234' });
+    expect(pick.status).toBe(404);
     expect((await h.ctx.models.Job.findById(job.id).lean())!.codeAttempts).toBe(0);
   });
 

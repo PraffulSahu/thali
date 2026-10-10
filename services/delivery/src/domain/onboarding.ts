@@ -70,13 +70,20 @@ export async function createProfile(
   return { partner, created };
 }
 
+/** Vehicle changes alter the required documents, so they are only allowed before submission. */
+const VEHICLE_EDITABLE: PartnerStatus[] = ['DRAFT', 'REJECTED'];
+
 export async function updateProfile(ctx: DeliveryContext, userId: string, patch: { name?: string; vehicle?: Vehicle }): Promise<PartnerLean> {
   const set: Record<string, unknown> = {};
   if (patch.name !== undefined) set.name = patch.name.trim();
   if (patch.vehicle !== undefined) set.vehicle = patch.vehicle;
-  const updated = await ctx.models.Partner.findOneAndUpdate({ userId, status: { $in: EDITABLE } }, { $set: set }, { new: true }).lean<PartnerLean>();
+  const allowed = patch.vehicle !== undefined ? VEHICLE_EDITABLE : EDITABLE;
+  const updated = await ctx.models.Partner.findOneAndUpdate({ userId, status: { $in: allowed } }, { $set: set }, { new: true }).lean<PartnerLean>();
   if (updated) return updated;
-  await requirePartner(ctx, userId);
+  const partner = await requirePartner(ctx, userId);
+  if (patch.vehicle !== undefined && partner.status === 'APPROVAL_PENDING') {
+    throw new DomainError('CONFLICT', 'Vehicle details cannot change while your profile is under review; contact support');
+  }
   throw new DomainError('CONFLICT', 'Profile details can only be changed before approval; contact support');
 }
 
@@ -185,10 +192,17 @@ export async function goOnline(ctx: DeliveryContext, userId: string, at: LatLng)
   throw new DomainError('PARTNER_NOT_APPROVED', 'Only approved partners can go online');
 }
 
+/**
+ * POST /partner/offline. Refused (409 PARTNER_HAS_ACTIVE_JOBS) while the partner holds any active job
+ * (ASSIGNED / AT_PICKUP / PICKED_UP / OUT_FOR_DELIVERY): finish them or ask ops to reassign.
+ */
 export async function goOffline(ctx: DeliveryContext, userId: string): Promise<PartnerLean> {
-  const updated = await ctx.models.Partner.findOneAndUpdate({ userId }, { $set: { online: false } }, { new: true }).lean<PartnerLean>();
-  if (!updated) throw new DomainError('NOT_FOUND', 'Create your delivery partner profile first');
-  return updated;
+  const updated = await ctx.models.Partner.findOneAndUpdate({ userId, activeJobIds: { $size: 0 } }, { $set: { online: false } }, { new: true }).lean<PartnerLean>();
+  if (updated) return updated;
+  const partner = await requirePartner(ctx, userId);
+  throw localError('PARTNER_HAS_ACTIVE_JOBS', 'You have active deliveries. Complete them or ask ops to reassign before going offline.', {
+    activeJobIds: (partner.activeJobIds ?? []).map(String),
+  });
 }
 
 export type AdminPartnerAction = 'approve' | 'reject' | 'suspend' | 'reinstate';
@@ -220,12 +234,31 @@ export async function adminPartnerAction(
     if (action === 'approve' && partner.status !== 'APPROVAL_PENDING') {
       throw new DomainError('PARTNER_INVALID_TRANSITION', `Cannot approve a ${partner.status} partner`, undefined, { from: partner.status, to, actor: 'ADMIN' });
     }
+    if (action === 'approve') {
+      // re-validate at approval time: profile/documents must still satisfy LLD 4.7 for the current vehicle
+      const missing = missingForSubmit(partner);
+      if (missing.length) throw localError('PARTNER_PROFILE_INCOMPLETE', `Cannot approve: missing ${missing.join(', ')}`, { missing });
+    }
     let updated = await changePartnerStatus(ctx, session, partner, to, 'ADMIN', {
       actorId: admin.userId,
       reason: reason ?? null,
       set: action === 'suspend' ? { online: false } : undefined,
     });
     if (action === 'suspend') {
+      // live offers to a suspended partner are withdrawn; jobs left without live offers re-dispatch now
+      const now = ctx.now();
+      const offered = await ctx.models.Offer.find({ partnerId: partner._id, status: 'OFFERED' }, { jobId: 1 }, { session }).lean();
+      if (offered.length) {
+        await ctx.models.Offer.updateMany({ partnerId: partner._id, status: 'OFFERED' }, { $set: { status: 'CANCELLED', respondedAt: now } }, { session });
+        const jobIds = offered.map((o) => o.jobId);
+        const stillLive = new Set(
+          (await ctx.models.Offer.distinct('jobId', { jobId: { $in: jobIds }, status: 'OFFERED', expiresAt: { $gt: now } }).session(session)).map(String),
+        );
+        const idle = jobIds.filter((id) => !stillLive.has(id.toString()));
+        if (idle.length) {
+          await ctx.models.Job.updateMany({ _id: { $in: idle }, partnerId: null, status: { $in: ['PENDING_ASSIGNMENT', 'OFFERED'] } }, { $set: { nextDispatchAt: now } }, { session });
+        }
+      }
       const jobs = await ctx.models.Job.find({ partnerId: partner._id, status: { $in: ['ASSIGNED', 'AT_PICKUP'] } }, null, { session }).lean<JobLean[]>();
       for (const job of jobs) await unassignJob(ctx, session, job, 'SYSTEM', { actorId: admin.userId, reason: 'PARTNER_SUSPENDED' });
       if (jobs.length) updated = (await ctx.models.Partner.findById(partner._id, null, { session }).lean<PartnerLean>())!;

@@ -43,6 +43,8 @@ registerOpsRoutes(openapi);
 const json = (schema: z.ZodType) => ({ 'application/json': { schema } });
 const ok = (description: string, schema: z.ZodType) => ({ 200: { description, content: json(schema) } });
 const API = '/api/v1';
+const OPS = 'Requires ADMIN role + MFA and admin sub-role OPS (SUPER_ADMIN always passes).';
+const READ = 'Requires ADMIN role + MFA (any admin sub-role).';
 const incomplete = { 422: { description: 'PARTNER_PROFILE_INCOMPLETE (details.missing lists fields/documents)', content: json(ErrorEnvelopeSchema) } };
 
 // ---------------------------------------------------------------- partner
@@ -55,7 +57,7 @@ openapi.route({
 });
 openapi.route({ method: 'get', path: `${API}/partner/profile`, tags: ['partner'], security: 'bearer', summary: 'My partner profile', responses: ok('Profile', PartnerView), errors: ['NOT_FOUND'] });
 openapi.route({
-  method: 'patch', path: `${API}/partner/profile`, tags: ['partner'], security: 'bearer', summary: 'Edit name / vehicle (before approval)',
+  method: 'patch', path: `${API}/partner/profile`, tags: ['partner'], security: 'bearer', summary: 'Edit name (before approval) / vehicle (DRAFT or REJECTED only)',
   request: { body: { content: json(UpdateProfileBody) } }, responses: ok('Profile', PartnerView), errors: ['NOT_FOUND', 'CONFLICT'],
 });
 openapi.route({
@@ -76,7 +78,11 @@ openapi.route({
   method: 'post', path: `${API}/partner/online`, tags: ['partner'], security: 'bearer', summary: 'Go online (APPROVED only) at the given location',
   request: { body: { content: json(OnlineBody) } }, responses: ok('Profile', PartnerView), errors: ['NOT_FOUND', 'PARTNER_NOT_APPROVED'],
 });
-openapi.route({ method: 'post', path: `${API}/partner/offline`, tags: ['partner'], security: 'bearer', summary: 'Go offline', responses: ok('Profile', PartnerView), errors: ['NOT_FOUND'] });
+openapi.route({
+  method: 'post', path: `${API}/partner/offline`, tags: ['partner'], security: 'bearer', summary: 'Go offline (refused while holding active deliveries)',
+  responses: { ...ok('Profile', PartnerView), 409: { description: 'PARTNER_HAS_ACTIVE_JOBS: complete active deliveries or ask ops to reassign', content: json(ErrorEnvelopeSchema) } },
+  errors: ['NOT_FOUND'],
+});
 openapi.route({
   method: 'post', path: `${API}/partner/location`, tags: ['partner'], security: 'bearer', rateLimited: true,
   summary: 'Location ping (1 per 3 s): updates my active jobs and the customers\' live tracking',
@@ -123,42 +129,43 @@ openapi.route({
 
 // ---------------------------------------------------------------- admin
 openapi.route({
-  method: 'get', path: `${API}/admin/delivery/partners`, tags: ['admin-delivery'], security: 'bearer', summary: 'List partners (ADMIN+MFA)',
+  method: 'get', path: `${API}/admin/delivery/partners`, tags: ['admin-delivery'], security: 'bearer', description: READ, summary: 'List partners (ADMIN+MFA)',
   request: { query: PartnersQuery }, responses: ok('Partners', page(PartnerView, 'PartnerPage')), errors: ['MFA_REQUIRED'],
 });
 for (const [action, reason] of [['approve', false], ['reject', true], ['suspend', true], ['reinstate', false]] as const) {
   openapi.route({
     method: 'post', path: `${API}/admin/delivery/partners/:id/${action}`, tags: ['admin-delivery'], security: 'bearer',
-    summary: `${action[0]!.toUpperCase()}${action.slice(1)} a partner (ADMIN+MFA, OPS; audited)${action === 'suspend' ? ' — forces offline and returns unpicked jobs to dispatch' : ''}`,
+    summary: `${action[0]!.toUpperCase()}${action.slice(1)} a partner (ADMIN+MFA, OPS; audited)${action === 'suspend' ? ' — forces offline, withdraws live offers and returns unpicked jobs to dispatch' : ''}`,
+    description: `${OPS}${action === 'approve' ? ' Re-validates required profile fields and documents for the current vehicle (422 PARTNER_PROFILE_INCOMPLETE).' : ''}`,
     request: reason ? { params: IdParams, body: { content: json(ReasonBody) } } : { params: IdParams },
-    responses: ok('Partner', PartnerView), errors: ['NOT_FOUND', 'PARTNER_INVALID_TRANSITION', 'MFA_REQUIRED'],
+    responses: { ...ok('Partner', PartnerView), ...(action === 'approve' ? incomplete : {}) }, errors: ['NOT_FOUND', 'PARTNER_INVALID_TRANSITION', 'MFA_REQUIRED'],
   });
 }
 openapi.route({
   method: 'get', path: `${API}/admin/delivery/partners/:id/documents/:docId/url`, tags: ['admin-delivery'], security: 'bearer',
-  summary: 'Short-lived (5 min) KYC document URL (audited)', request: { params: DocParams }, responses: ok('URL', DocumentUrlResponse), errors: ['NOT_FOUND', 'MFA_REQUIRED'],
+  description: READ, summary: 'Short-lived (5 min) KYC document URL (audited)', request: { params: DocParams }, responses: ok('URL', DocumentUrlResponse), errors: ['NOT_FOUND', 'MFA_REQUIRED'],
 });
 openapi.route({
-  method: 'get', path: `${API}/admin/delivery/jobs`, tags: ['admin-delivery'], security: 'bearer', summary: 'List delivery jobs (filter status / exception)',
+  method: 'get', path: `${API}/admin/delivery/jobs`, tags: ['admin-delivery'], security: 'bearer', description: READ, summary: 'List delivery jobs (filter status / exception)',
   request: { query: JobsQuery }, responses: ok('Jobs', page(AdminJobView, 'AdminDeliveryJobPage')), errors: ['MFA_REQUIRED'],
 });
 openapi.route({
   method: 'post', path: `${API}/admin/delivery/jobs/:id/assign`, tags: ['admin-delivery'], security: 'bearer',
-  summary: 'Manual assign / reassign to an approved online partner (previous partner unassigned, capacity released)',
+  description: OPS, summary: 'Manual assign / reassign to an approved online partner (previous partner unassigned, capacity released)',
   request: { params: IdParams, body: { content: json(AssignBody) } }, responses: ok('Job', AdminJobView),
   errors: ['NOT_FOUND', 'PARTNER_NOT_APPROVED', 'CONFLICT', 'CAPACITY_EXCEEDED', 'DELIVERY_INVALID_TRANSITION', 'MFA_REQUIRED'],
 });
 openapi.route({
-  method: 'post', path: `${API}/admin/delivery/jobs/:id/unassign`, tags: ['admin-delivery'], security: 'bearer', summary: 'Unassign (back to dispatch)',
+  method: 'post', path: `${API}/admin/delivery/jobs/:id/unassign`, tags: ['admin-delivery'], security: 'bearer', description: OPS, summary: 'Unassign (back to dispatch)',
   request: { params: IdParams, body: { content: json(OptionalReasonBody) } }, responses: ok('Job', AdminJobView), errors: ['NOT_FOUND', 'DELIVERY_INVALID_TRANSITION', 'MFA_REQUIRED'],
 });
 openapi.route({
-  method: 'post', path: `${API}/admin/delivery/jobs/:id/fail`, tags: ['admin-delivery'], security: 'bearer', summary: 'Mark a picked-up delivery failed',
+  method: 'post', path: `${API}/admin/delivery/jobs/:id/fail`, tags: ['admin-delivery'], security: 'bearer', description: OPS, summary: 'Mark a picked-up delivery failed',
   request: { params: IdParams, body: { content: json(ReasonBody) } }, responses: ok('Job', AdminJobView), errors: ['NOT_FOUND', 'DELIVERY_INVALID_TRANSITION', 'MFA_REQUIRED'],
 });
-openapi.route({ method: 'get', path: `${API}/admin/delivery/overview`, tags: ['admin-delivery'], security: 'bearer', summary: 'TMS overview counters', responses: ok('Overview', OverviewResponse), errors: ['MFA_REQUIRED'] });
+openapi.route({ method: 'get', path: `${API}/admin/delivery/overview`, tags: ['admin-delivery'], security: 'bearer', description: READ, summary: 'TMS overview counters', responses: ok('Overview', OverviewResponse), errors: ['MFA_REQUIRED'] });
 openapi.route({
   method: 'post', path: `${API}/admin/delivery/demo/simulate/:jobId`, tags: ['admin-delivery', 'demo'], security: 'bearer',
-  summary: 'DEMO ONLY: simulate 10 location pings pickup → drop (flagged simulated; never changes job state). 404 outside demo.',
+  description: OPS, summary: 'DEMO ONLY: simulate 10 location pings pickup → drop (flagged simulated; never changes job state). 404 outside demo.',
   request: { params: JobIdParams }, responses: { 202: { description: 'Simulation started', content: json(SimulateResponse) } }, errors: ['NOT_FOUND', 'CONFLICT', 'MFA_REQUIRED'],
 });
