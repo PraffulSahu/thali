@@ -25,8 +25,8 @@ const json = <T extends z.ZodType>(schema: T) => ({ 'application/json': { schema
 
 // ---------- schemas ----------
 export const ChannelSchema = z.enum(enumValues(NotificationChannel));
-/** Contracts' NotificationStatus plus the local terminal `SKIPPED` (opted out / blocked / no address / unknown user). */
-export const StatusSchema = z.enum([...enumValues(NotificationStatus), 'SKIPPED']);
+/** Contracts' NotificationStatus (incl. terminal `SKIPPED`: opted out / blocked / no address / unknown user). */
+export const StatusSchema = z.enum(enumValues(NotificationStatus));
 
 export const InAppNotificationView = z
   .object({

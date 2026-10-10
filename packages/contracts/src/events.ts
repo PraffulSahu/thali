@@ -1,6 +1,7 @@
 /** Event catalog (LLD 1.6, 9). Every payload is typed; envelope carries the dedupe id. */
 import type { Actor } from './state-machines.js';
 import type {
+  ChildOrderStatus,
   PaymentPurpose,
   RefundReason,
   RefundStatus,
@@ -112,6 +113,8 @@ export interface EventPayloads {
     restaurantId: string;
     reason: string;
     refundPaise: number;
+    /** Child status before the transition (orders always sets it; optional for events published before it existed). */
+    fromStatus?: ChildOrderStatus;
   };
   'order.cancelled': {
     childOrderId: string;
@@ -121,6 +124,8 @@ export interface EventPayloads {
     actor: Actor;
     reason: string;
     refundPaise: number;
+    /** Child status before the cancellation: marketplace restocks only when cancelled before PREPARING. */
+    fromStatus?: ChildOrderStatus;
   };
   'order.preparing': { childOrderId: string; restaurantId: string; userId: string };
   'order.ready': { childOrderId: string; restaurantId: string; userId: string };
@@ -251,6 +256,8 @@ export const EVENT_STREAMS = {
   orders: 'events.orders',
   payments: 'events.payments',
   delivery: 'events.delivery',
+  /** notifications produces only `audit.recorded`. */
+  notifications: 'events.notifications',
 } as const;
 export type EventStreamService = keyof typeof EVENT_STREAMS;
 export type EventStream = (typeof EVENT_STREAMS)[EventStreamService];

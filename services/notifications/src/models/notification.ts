@@ -1,12 +1,13 @@
 /** `notifications` collection (LLD §3.6). Recipients are stored masked (`to`) + AES-GCM encrypted (`toEnc`). */
 import { Schema, type Connection, type Model, type Types } from 'mongoose';
+import { NotificationStatus, enumValues } from '@thali/contracts';
 
 export const NOTIFICATION_CHANNELS = ['SMS', 'EMAIL', 'IN_APP'] as const;
 /**
- * `SKIPPED` is local (contracts' NotificationStatus has no such value): terminal, nothing was sent because the
- * recipient opted out / is blocked / has no address / is unknown (reason in `skipReason`).
+ * Contracts' NotificationStatus. `SKIPPED` is terminal: nothing was sent because the recipient opted out / is
+ * blocked / has no address / is unknown (reason in `skipReason`).
  */
-export const NOTIFICATION_STATUSES = ['QUEUED', 'SENDING', 'SENT', 'DELIVERED', 'FAILED', 'DEAD', 'SKIPPED'] as const;
+export const NOTIFICATION_STATUSES = enumValues(NotificationStatus);
 
 export interface NotificationDoc {
   _id: Types.ObjectId;
@@ -28,7 +29,7 @@ export interface NotificationDoc {
   /** Rendered in-app content. */
   title?: string | null;
   body?: string | null;
-  status: (typeof NOTIFICATION_STATUSES)[number];
+  status: NotificationStatus;
   attempts: number;
   nextAttemptAt: Date | null;
   provider?: string | null;

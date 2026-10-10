@@ -131,6 +131,7 @@ const notification: Record<NotificationStatus, Entry> = {
   DELIVERED: ['Delivered', 'success'],
   FAILED: ['Failed, retrying', 'warn'],
   DEAD: ['Gave up', 'danger'],
+  SKIPPED: ['Skipped', 'neutral'],
 };
 
 /** LLD §3.2 memberships.status (not an exported contracts enum). */

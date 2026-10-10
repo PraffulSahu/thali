@@ -167,6 +167,8 @@ export const NotificationStatus = {
   DELIVERED: 'DELIVERED',
   FAILED: 'FAILED',
   DEAD: 'DEAD',
+  /** Terminal: nothing was sent (recipient opted out / blocked / no address / unknown user; reason in `skipReason`). */
+  SKIPPED: 'SKIPPED',
 } as const;
 export type NotificationStatus = (typeof NotificationStatus)[keyof typeof NotificationStatus];
 

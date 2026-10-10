@@ -42,7 +42,7 @@ export const commerceHandlerModule: EventHandlerModule = {
         await closeChild(ctx, session, { checkoutId: p.checkoutId, childOrderId: p.childOrderId, restaurantId: p.restaurantId, restock: true });
       },
       'order.cancelled': async (e, session) => {
-        const p = e.payload as typeof e.payload & { fromStatus?: unknown };
+        const p = e.payload; // fromStatus is in @thali/contracts (optional for older events)
         await closeChild(ctx, session, { checkoutId: p.checkoutId, childOrderId: p.childOrderId, restaurantId: p.restaurantId, restock: shouldRestockOnCancel(p) });
       },
       'payment.captured': async (e, session) => {

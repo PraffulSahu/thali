@@ -1,11 +1,11 @@
 /**
- * Local additive extensions of `@thali/contracts` event payloads (Phase 1 rule: define locally,
- * reconcile after the wave — listed under "Contract gaps" in the Task 12 report).
+ * Orders-side strictness on top of `@thali/contracts` event payloads.
  *
- * `fromStatus`: the child status before the rejection/cancellation, so marketplace can restock only
- * when an order was cancelled before PREPARING (LLD §9 `order.cancelled` → marketplace restock).
+ * `fromStatus` (the child status before the rejection/cancellation) now lives in `@thali/contracts`
+ * EventPayloads (optional there, for events published before it existed); orders always sets it, so the
+ * payloads it emits require it.
  */
-import type { ChildOrderStatus, EventPayloads } from '@thali/contracts';
+import type { EventPayloads } from '@thali/contracts';
 
-export type OrderRejectedPayload = EventPayloads['order.rejected'] & { fromStatus: ChildOrderStatus };
-export type OrderCancelledPayload = EventPayloads['order.cancelled'] & { fromStatus: ChildOrderStatus };
+export type OrderRejectedPayload = EventPayloads['order.rejected'] & Required<Pick<EventPayloads['order.rejected'], 'fromStatus'>>;
+export type OrderCancelledPayload = EventPayloads['order.cancelled'] & Required<Pick<EventPayloads['order.cancelled'], 'fromStatus'>>;
