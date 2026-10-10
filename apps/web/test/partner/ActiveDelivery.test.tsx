@@ -3,111 +3,145 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActiveDelivery } from '../../src/features/partner/ActiveDelivery';
-import type { PartnerJob } from '../../src/features/partner/api';
 import { renderWithProviders } from '../utils';
+import { apiError, bodyOf, job, json, revealed, routeFetch } from './fixtures';
 
-const job = (over: Partial<PartnerJob> = {}): PartnerJob => ({
-  id: 'job1',
-  childOrderId: 'co1',
-  status: 'AT_PICKUP',
-  pickup: { name: 'Meghana Foods', address: '12 Koramangala', location: { lat: 12.93, lng: 77.62 } },
-  drop: { name: 'Asha', address: '5 Indiranagar', location: { lat: 12.97, lng: 77.64 }, phoneMasked: '+91 98XXXXX210' },
-  distanceKm: 4.2,
-  estimatedMinutes: 22,
-  estimateSource: 'HAVERSINE_ESTIMATE',
-  prepMinutes: 15,
-  readyEta: null,
-  readyAt: null,
-  codeAttemptsRemaining: 5,
-  navigation: { pickupUrl: '', dropUrl: '' },
-  assignedAt: null,
-  pickedUpAt: null,
-  deliveredAt: null,
-  failureReason: null,
-  createdAt: null,
-  ...over,
-});
+const dial = vi.hoisted(() => vi.fn());
+vi.mock('../../src/features/partner/dial', () => ({ openDialer: dial }));
 
-const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-const fetchMock = vi.fn();
-beforeEach(() => {
-  fetchMock.mockReset();
+let fetchMock: ReturnType<typeof routeFetch>;
+function stub(routes: Parameters<typeof routeFetch>[0]) {
+  fetchMock = routeFetch(routes);
   vi.stubGlobal('fetch', fetchMock);
-});
+}
+beforeEach(() => dial.mockReset());
 afterEach(() => vi.unstubAllGlobals());
 
-describe('ActiveDelivery', () => {
-  it('shows pickup and drop cards with Google Maps navigation links', () => {
-    renderWithProviders(<ActiveDelivery job={job()} />);
-    const pickup = screen.getByRole('link', { name: /navigate to pickup/i });
-    expect(pickup).toHaveAttribute('href', 'https://www.google.com/maps/dir/?api=1&destination=12.93,77.62');
-    const drop = screen.getByRole('link', { name: /navigate to drop/i });
-    expect(drop).toHaveAttribute('href', 'https://www.google.com/maps/dir/?api=1&destination=12.97,77.64');
-    expect(screen.getByText('+91 98XXXXX210')).toBeInTheDocument();
+const typeCode = async (code: string) => {
+  const boxes = screen.getAllByRole('textbox', { name: /digit/i });
+  await userEvent.click(boxes[0]!);
+  await userEvent.keyboard(code);
+};
+
+describe('ActiveDelivery (board 30)', () => {
+  it('before pickup: restaurant destination, drop area + label only, Navigate to the pickup, no drop address', () => {
+    renderWithProviders(<ActiveDelivery job={job()} index={1} total={2} />);
+    expect(screen.getByRole('heading', { name: 'Active delivery 1 of 2' })).toBeInTheDocument();
+    expect(screen.getByText('TH-DEMOMULTI')).toBeInTheDocument();
+    expect(screen.getByText('Green Leaf')).toBeInTheDocument();
+    expect(screen.getByText(/Then drop · HAL 2nd Stage · Home · full address after pickup/)).toBeInTheDocument();
+    expect(screen.queryByText(/12th Main/)).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /navigate to green leaf/i })).toHaveAttribute('href', 'https://www.google.com/maps/dir/?api=1&destination=12.97,77.64');
+    // step bar: "At restaurant" is current
+    expect(screen.getByRole('list', { name: 'Delivery progress' }).querySelector('[aria-current="step"]')).toHaveTextContent('At restaurant');
+    expect(screen.queryByRole('button', { name: /can.t deliver/i })).not.toBeInTheDocument();
   });
 
-  it('a wrong pickup code shows the remaining attempts and keeps the dialog open', async () => {
-    fetchMock.mockResolvedValue(json(400, { error: { code: 'DELIVERY_CODE_INVALID', message: 'Wrong pickup code', details: { attemptsRemaining: 2 }, requestId: 'r1' } }));
-    renderWithProviders(<ActiveDelivery job={job()} />);
-    await userEvent.click(screen.getByRole('button', { name: /enter pickup code/i }));
-    const dialog = await screen.findByRole('dialog');
-    await userEvent.type(within(dialog).getByLabelText(/pickup code/i), '1234');
-    await userEvent.click(within(dialog).getByRole('button', { name: /confirm pickup/i }));
-
-    expect(await within(dialog).findByText(/2 attempts remaining/i)).toBeInTheDocument();
-    expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/deliveries/job1/pickup');
-    expect(JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body))).toEqual({ code: '1234' });
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
-  });
-
-  it('keeps the remaining attempts after close/reopen and refreshes the active jobs', async () => {
-    fetchMock.mockResolvedValue(json(400, { error: { code: 'DELIVERY_CODE_INVALID', message: 'Wrong pickup code', details: { attemptsRemaining: 2 }, requestId: 'r1' } }));
-    const { queryClient } = renderWithProviders(<ActiveDelivery job={job()} />);
-    const spy = vi.spyOn(queryClient, 'invalidateQueries');
-    await userEvent.click(screen.getByRole('button', { name: /enter pickup code/i }));
-    let dialog = await screen.findByRole('dialog');
-    await userEvent.type(within(dialog).getByLabelText(/pickup code/i), '1234');
-    await userEvent.click(within(dialog).getByRole('button', { name: /confirm pickup/i }));
-    expect(await within(dialog).findByText(/2 attempts remaining/i)).toBeInTheDocument();
-    expect(spy).toHaveBeenCalledWith({ queryKey: ['partner', 'active'] });
-
-    await userEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
-    await userEvent.click(screen.getByRole('button', { name: /enter pickup code/i }));
-    dialog = await screen.findByRole('dialog');
-    // job prop still says 5, but the server told us 2
-    expect(within(dialog).getByText(/2 attempts remaining/i)).toBeInTheDocument();
-  });
-
-  it('locks code entry when the server answers 423', async () => {
-    fetchMock.mockResolvedValue(json(423, { error: { code: 'DELIVERY_CODE_LOCKED', message: 'Too many wrong codes. Contact support to continue.', details: { attemptsRemaining: 0 }, requestId: 'r2' } }));
-    renderWithProviders(<ActiveDelivery job={job({ status: 'OUT_FOR_DELIVERY' })} />);
-    await userEvent.click(screen.getByRole('button', { name: /enter delivery code/i }));
-    const dialog = await screen.findByRole('dialog');
-    await userEvent.type(within(dialog).getByLabelText(/delivery code/i), '9999');
-    await userEvent.click(within(dialog).getByRole('button', { name: /confirm delivery/i }));
-    expect(await within(dialog).findByText(/locked/i)).toBeInTheDocument();
-    await waitFor(() => expect(within(dialog).getByLabelText(/delivery code/i)).toBeDisabled());
-  });
-
-  it('marks arrival via the API for an assigned job', async () => {
-    fetchMock.mockResolvedValue(json(200, job({ status: 'AT_PICKUP' })));
+  it('"I\'ve arrived" posts /arrived', async () => {
+    stub({ 'POST /deliveries/job1/arrived': () => json(200, job({ status: 'AT_PICKUP' })) });
     const onChanged = vi.fn();
-    renderWithProviders(<ActiveDelivery job={job({ status: 'ASSIGNED' })} onChanged={onChanged} />);
-    await userEvent.click(screen.getByRole('button', { name: /i've arrived/i }));
-    await waitFor(() => expect(onChanged).toHaveBeenCalled());
-    expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/deliveries/job1/arrived');
+    renderWithProviders(<ActiveDelivery job={job()} onChanged={onChanged} />);
+    await userEvent.click(screen.getByRole('button', { name: 'I’ve arrived' }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({ status: 'AT_PICKUP' })));
   });
 
-  it('fails a delivery with a reason', async () => {
-    fetchMock.mockResolvedValue(json(200, job({ status: 'FAILED', failureReason: 'Customer unreachable' })));
-    renderWithProviders(<ActiveDelivery job={job({ status: 'OUT_FOR_DELIVERY' })} />);
-    await userEvent.click(screen.getByRole('button', { name: /can't deliver/i }));
+  it('pickup: "Restaurant\'s pickup code" — Confirm pickup is disabled until 4 digits, then posts the code', async () => {
+    stub({ 'POST /deliveries/job1/pickup': () => json(200, job({ status: 'PICKED_UP' })) });
+    renderWithProviders(<ActiveDelivery job={job({ status: 'AT_PICKUP' })} />);
+    expect(screen.getByRole('group', { name: 'Restaurant’s pickup code' })).toBeInTheDocument();
+    const confirm = screen.getByRole('button', { name: 'Confirm pickup' });
+    expect(confirm).toBeDisabled();
+    await typeCode('4821');
+    expect(confirm).toBeEnabled();
+    await userEvent.click(confirm);
+    await waitFor(() => expect(bodyOf(fetchMock, 'POST /deliveries/job1/pickup')).toEqual({ code: '4821' }));
+  });
+
+  it('a wrong code shows "Wrong code · N attempts left" from the server and clears the boxes', async () => {
+    stub({ 'POST /deliveries/job1/pickup': () => apiError(400, 'DELIVERY_CODE_INVALID', 'Wrong pickup code', { attemptsRemaining: 2 }) });
+    const { queryClient } = renderWithProviders(<ActiveDelivery job={job({ status: 'AT_PICKUP' })} />);
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    await typeCode('1234');
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm pickup' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Wrong code · 2 attempts left');
+    expect(spy).toHaveBeenCalledWith({ queryKey: ['partner', 'active'] });
+    expect(screen.getAllByRole('textbox', { name: /digit/i }).every((b) => (b as HTMLInputElement).value === '')).toBe(true);
+  });
+
+  it('423 locks code entry with a support message', async () => {
+    stub({ 'POST /deliveries/job1/deliver': () => apiError(423, 'DELIVERY_CODE_LOCKED', 'Too many wrong codes. Contact support to continue.', { attemptsRemaining: 0 }) });
+    renderWithProviders(<ActiveDelivery job={revealed()} />);
+    await typeCode('9999');
+    await userEvent.click(screen.getByRole('button', { name: 'Mark delivered' }));
+    expect(await screen.findByText(/locked after too many wrong tries/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('textbox', { name: /digit/i })[0]).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mark delivered' })).toBeDisabled();
+  });
+
+  it('after pickup: the address is revealed, Navigate goes to the drop, attempts hint shows', () => {
+    renderWithProviders(<ActiveDelivery job={revealed()} />);
+    expect(screen.getByText('Prafful · Home')).toBeInTheDocument();
+    expect(screen.getByText(/#402, 12th Main/)).toBeInTheDocument();
+    expect(screen.getByText('+91 ••••• •3210')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /navigate to the customer/i })).toHaveAttribute('href', 'https://www.google.com/maps/dir/?api=1&destination=12.96,77.65');
+    expect(screen.getByRole('group', { name: 'Customer’s delivery code' })).toBeInTheDocument();
+    expect(screen.getByText('5 attempts left · locks after 5 wrong tries')).toBeInTheDocument();
+  });
+
+  it('PICKED_UP: Start delivery posts /start', async () => {
+    stub({ 'POST /deliveries/job1/start': () => json(200, revealed()) });
+    renderWithProviders(<ActiveDelivery job={revealed({ status: 'PICKED_UP' })} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Start delivery' }));
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/v1/deliveries/job1/start')).toBe(true));
+  });
+
+  it('Mark delivered posts the customer code', async () => {
+    stub({ 'POST /deliveries/job1/deliver': () => json(200, revealed({ status: 'DELIVERED' })) });
+    renderWithProviders(<ActiveDelivery job={revealed()} />);
+    await typeCode('4719');
+    await userEvent.click(screen.getByRole('button', { name: 'Mark delivered' }));
+    await waitFor(() => expect(bodyOf(fetchMock, 'POST /deliveries/job1/deliver')).toEqual({ code: '4719' }));
+  });
+
+  it("Can't deliver asks for a reason and posts /fail", async () => {
+    stub({ 'POST /deliveries/job1/fail': () => json(200, revealed({ status: 'FAILED', failureReason: 'Customer unreachable' })) });
+    renderWithProviders(<ActiveDelivery job={revealed()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Can’t deliver' }));
     const dialog = await screen.findByRole('alertdialog');
     await userEvent.selectOptions(within(dialog).getByLabelText(/reason/i), 'Customer unreachable');
     await userEvent.click(within(dialog).getByRole('button', { name: /mark as failed/i }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(fetchMock.mock.calls[0]![0]).toBe('/api/v1/deliveries/job1/fail');
-    expect(JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body))).toEqual({ reason: 'Customer unreachable' });
+    await waitFor(() => expect(bodyOf(fetchMock, 'POST /deliveries/job1/fail')).toEqual({ reason: 'Customer unreachable' }));
+  });
+
+  it('Call in DEMO mode shows "Calling is simulated in demo" and never dials', async () => {
+    stub({
+      'POST /deliveries/job1/contact': () =>
+        json(200, { target: 'CUSTOMER', mode: 'DEMO', telUrl: null, displayNumber: '+91 ••••• •3210', expiresAt: '2026-10-11T08:10:00Z', note: 'Calling is simulated in demo' }),
+    });
+    renderWithProviders(<ActiveDelivery job={revealed()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Call customer' }));
+    expect(await screen.findByTestId('contact-note')).toHaveTextContent('Calling is simulated in demo');
+    expect(bodyOf(fetchMock, 'POST /deliveries/job1/contact')).toEqual({ target: 'CUSTOMER' });
+    expect(dial).not.toHaveBeenCalled();
+  });
+
+  it('Call in DIRECT mode opens the dialer with telUrl; before pickup it calls the restaurant', async () => {
+    stub({
+      'POST /deliveries/job1/contact': () =>
+        json(200, { target: 'RESTAURANT', mode: 'DIRECT', telUrl: 'tel:+918041234567', displayNumber: '+91 ••••• •4567', expiresAt: '2026-10-11T08:10:00Z', note: null }),
+    });
+    renderWithProviders(<ActiveDelivery job={job()} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Call restaurant' }));
+    await waitFor(() => expect(dial).toHaveBeenCalledWith('tel:+918041234567'));
+    expect(bodyOf(fetchMock, 'POST /deliveries/job1/contact')).toEqual({ target: 'RESTAURANT' });
+  });
+
+  it('at the restaurant both calls are offered; a 409 NOT_CALLABLE_NOW is explained', async () => {
+    stub({ 'POST /deliveries/job1/contact': () => apiError(409, 'CONFLICT', 'You can’t call the customer while the delivery is ASSIGNED', { reason: 'NOT_CALLABLE_NOW' }) });
+    renderWithProviders(<ActiveDelivery job={job({ status: 'AT_PICKUP' })} />);
+    expect(screen.getByRole('button', { name: 'Call restaurant' })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Call customer' }));
+    expect(await screen.findByText(/can’t call the customer/i)).toBeInTheDocument();
+    expect(dial).not.toHaveBeenCalled();
   });
 });

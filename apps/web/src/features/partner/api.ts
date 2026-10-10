@@ -67,16 +67,31 @@ export interface Place {
   address: string;
   location: GeoPoint;
 }
-export interface DropPlace extends Place {
+
+/**
+ * Drop as the ASSIGNED partner sees it (DLV-2). `address`, `location` and `navigation.dropUrl` are null until the
+ * food is picked up (`addressRevealed` true only while PICKED_UP / OUT_FOR_DELIVERY); history shows area + label only.
+ */
+export interface PartnerJobDrop {
+  name: string;
+  /** Locality (falls back to the pincode on old jobs); null when unknown. */
+  area: string | null;
+  /** Address label, e.g. "Home". */
+  label: string | null;
+  address: string | null;
+  location: GeoPoint | null;
+  addressRevealed: boolean;
   phoneMasked: string;
 }
 
 export interface PartnerJob {
   id: string;
   childOrderId: string;
+  childOrderCode: string | null;
+  checkoutCode: string | null;
   status: DeliveryStatusValue;
   pickup: Place;
-  drop: DropPlace;
+  drop: PartnerJobDrop;
   distanceKm: number;
   estimatedMinutes: number;
   estimateSource: string;
@@ -84,7 +99,7 @@ export interface PartnerJob {
   readyEta: string | null;
   readyAt: string | null;
   codeAttemptsRemaining: number;
-  navigation: { pickupUrl: string; dropUrl: string };
+  navigation: { pickupUrl: string; dropUrl: string | null };
   assignedAt: string | null;
   pickedUpAt: string | null;
   deliveredAt: string | null;
@@ -98,6 +113,12 @@ export interface BatchEvaluation {
   extraMinutes: number;
 }
 
+/** Offer drop (DLV-2 privacy): area + rounded pickup→drop distance only. No name, address, label, phone or coordinates. */
+export interface OfferDrop {
+  area: string | null;
+  distanceFromPickupKm: number;
+}
+
 export interface Offer {
   id: string;
   jobId: string;
@@ -109,12 +130,25 @@ export interface Offer {
   job: {
     childOrderId: string;
     pickup: Place;
-    drop: Place;
+    drop: OfferDrop;
+    /** Rounded to 0.1 km. */
     distanceKm: number;
+    /** Whole minutes. */
     estimatedMinutes: number;
     estimateSource: string;
     readyEta: string | null;
   } | null;
+}
+
+export type ContactTarget = 'CUSTOMER' | 'RESTAURANT';
+/** DLV-1 `POST /deliveries/:jobId/contact` result. DEMO never carries a number to dial. */
+export interface ContactResult {
+  target: ContactTarget;
+  mode: 'DIRECT' | 'PROXY' | 'DEMO';
+  telUrl: string | null;
+  displayNumber: string;
+  expiresAt: string;
+  note: string | null;
 }
 
 export interface UploadTicket {
@@ -133,6 +167,17 @@ export interface FinanceSummary {
   holdDays: number;
   totalsByType: Record<string, number>;
   asOf: string;
+  /** PAY-1 earnings window (default: today in IST). Absent on older payments builds. */
+  window?: EarningsWindow;
+}
+export interface EarningsWindow {
+  from: string;
+  to: string;
+  /** Partner: DELIVERY_EARNING only (payouts and adjustments excluded). */
+  earningsPaise: number;
+  entriesByType: Record<string, number>;
+  /** One DELIVERY_EARNING entry per delivered job. */
+  deliveries: number;
 }
 export interface LedgerEntry {
   id: string;
@@ -162,7 +207,8 @@ export const partnerKeys = {
   offers: ['partner', 'offers'] as const,
   active: ['partner', 'active'] as const,
   history: (cursor?: string) => ['partner', 'history', cursor ?? null] as const,
-  summary: ['partner', 'finance', 'summary'] as const,
+  summary: (from?: string) => ['partner', 'finance', 'summary', from ?? 'today'] as const,
+  lastPayout: ['partner', 'finance', 'payouts', 'latest'] as const,
   ledger: (cursor?: string) => ['partner', 'finance', 'ledger', cursor ?? null] as const,
   payouts: (cursor?: string) => ['partner', 'finance', 'payouts', cursor ?? null] as const,
 };
@@ -205,6 +251,8 @@ export const postPartnerLocation = (p: GeoPoint & { accuracyM?: number }) =>
 export const listOffers = () => api<{ items: Offer[] }>('/partner/offers');
 export const acceptOffer = (offerId: string) => api<{ offerId: string; status: 'ACCEPTED'; job: PartnerJob }>(`/deliveries/offers/${offerId}/accept`, { method: 'POST' });
 export const rejectOffer = (offerId: string) => api<unknown>(`/deliveries/offers/${offerId}/reject`, { method: 'POST' });
+export const contactParty = (jobId: string, target: ContactTarget) =>
+  api<ContactResult>(`/deliveries/${jobId}/contact`, { method: 'POST', body: { target } });
 export const listActive = () => api<{ items: PartnerJob[] }>('/deliveries/active');
 export const listHistory = (cursor?: string) => api<Paginated<PartnerJob>>('/deliveries/history', { query: { limit: 20, cursor } });
 export const markArrived = (jobId: string) => api<PartnerJob>(`/deliveries/${jobId}/arrived`, { method: 'POST' });
@@ -214,9 +262,11 @@ export const confirmDelivered = (jobId: string, code: string) => api<PartnerJob>
 export const failDelivery = (jobId: string, reason: string) => api<PartnerJob>(`/deliveries/${jobId}/fail`, { method: 'POST', body: { reason } });
 
 // ---- finance (services/payments)
-export const getSummary = () => api<FinanceSummary>('/finance/partner/summary');
+/** Summary + PAY-1 window. No `from` = today in IST (server default). */
+export const getSummary = (window?: { from?: string; to?: string }) =>
+  api<FinanceSummary>('/finance/partner/summary', { query: { from: window?.from, to: window?.to } });
 export const listLedger = (cursor?: string) => api<Paginated<LedgerEntry>>('/finance/partner/ledger', { query: { limit: 20, cursor } });
-export const listPayouts = (cursor?: string) => api<Paginated<Payout>>('/finance/partner/payouts', { query: { limit: 20, cursor } });
+export const listPayouts = (cursor?: string, limit = 20) => api<Paginated<Payout>>('/finance/partner/payouts', { query: { limit, cursor } });
 
 /** Google Maps directions link (format fixed by the product brief). */
 export function navigationUrl(p: GeoPoint): string {

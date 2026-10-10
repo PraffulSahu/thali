@@ -39,7 +39,7 @@ describe('PartnerLayout', () => {
     expect(await screen.findByText('history page')).toBeInTheDocument();
     expect(watchPosition).toHaveBeenCalledTimes(1);
     expect(clearWatch).not.toHaveBeenCalled();
-    expect(await screen.findByTestId('tracking-strip')).toHaveTextContent(/location sharing starting/i);
+    expect(await screen.findByTestId('tracking-strip')).toHaveTextContent(/starting location sharing/i);
   });
 
   it('does not watch when the partner is offline', async () => {

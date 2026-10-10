@@ -1,17 +1,17 @@
 /**
- * Go online / offline. Going online first asks for geolocation permission and sends the real fix to
- * `POST /partner/online`; denied permission blocks going online with an explanation. While online the
- * tracking hook (owned by PartnerHome) streams locations; this component shows its state and last send time.
+ * Online card (board 30, rows 30-09 / 30-10). Going online first asks for geolocation and sends the real fix to
+ * `POST /partner/online`; denied permission blocks going online with an explanation. While online the layout's
+ * tracking hook posts `POST /partner/location` every ~5 s and this card shows "last sent Ns ago" (or why sharing is
+ * paused). Going offline with a delivery in hand answers 409 PARTNER_HAS_ACTIVE_JOBS: the switch stays on with
+ * "Complete it, or ask Thali ops to reassign it".
  */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
-import { Badge } from '../../components/ui/Badge';
-import { Card } from '../../components/ui/Card';
+import { useEffect, useId, useState } from 'react';
 import { InlineError } from '../../components/ui/ErrorState';
-import { Switch } from '../../components/ui/Checkbox';
 import { RelativeTime } from '../../components/ui/RelativeTime';
-import { useToast } from '../../components/ui/Toast';
+import { Toggle } from '../../components/ui/Toggle';
 import { useGeolocation } from '../../hooks/useGeolocation';
+import { cn } from '../../lib/cn';
 import { ApiError } from '../../lib/errors';
 import { goOffline, goOnline, partnerKeys, type PartnerProfile } from './api';
 import type { LocationTracking } from './useLocationTracking';
@@ -20,6 +20,7 @@ export interface OnlineToggleProps {
   partner: PartnerProfile;
   tracking: LocationTracking;
   activeCount: number;
+  className?: string;
 }
 
 /** Partner-specific copy: unlike customers, partners cannot "drop a pin" instead of sharing location. */
@@ -31,41 +32,69 @@ const GEO_COPY: Record<string, string> = {
 };
 
 const PAUSE_COPY: Record<string, string> = {
-  hidden: 'The tab is in the background or the screen is locked, so your browser has paused location.',
+  hidden: 'Your browser pauses location while this tab is in the background or the screen is locked.',
   unavailable: "Your device can't find a location right now. Check that location services are on.",
   timeout: 'Your device is taking too long to find a location.',
 };
 
-export function OnlineToggle({ partner, tracking, activeCount }: OnlineToggleProps) {
+function OnlineSub({ tracking }: { tracking: LocationTracking }) {
+  const s = tracking.status;
+  if (s === 'active' || s === 'starting') {
+    return (
+      <>
+        <span aria-hidden="true" className="size-[7px] shrink-0 animate-pulse-ok rounded-full bg-ok" />
+        <span>
+          {s === 'starting' ? 'Starting location sharing…' : 'Location sharing active'}
+          {tracking.lastSentAt ? (
+            <>
+              {' · '}
+              <RelativeTime value={tracking.lastSentAt} prefix="last sent" staleAfterSec={30} />
+            </>
+          ) : s === 'active' ? ' · sending your first update' : null}
+        </span>
+      </>
+    );
+  }
+  const text = s === 'paused' ? 'Location paused — keep Thali open' : s === 'denied' ? 'Location blocked — allow it in your browser settings' : 'This browser can’t share your location';
+  return (
+    <>
+      <span aria-hidden="true" className="size-[7px] shrink-0 rounded-full bg-warn" />
+      <span className="font-medium text-warn">
+        {text}
+        {tracking.lastSentAt ? (
+          <span className="font-normal text-fg-3">
+            {' · '}
+            <RelativeTime value={tracking.lastSentAt} prefix="last sent" staleAfterSec={30} />
+          </span>
+        ) : null}
+      </span>
+    </>
+  );
+}
+
+export function OnlineToggle({ partner, tracking, activeCount, className }: OnlineToggleProps) {
   const qc = useQueryClient();
-  const { toast } = useToast();
   const geo = useGeolocation({ highAccuracy: true, timeoutMs: 15_000, maximumAgeMs: 0 });
-  const [blocked, setBlocked] = useState<string | null>(null);
+  const [blocked, setBlocked] = useState(false);
+  const titleId = useId();
 
   const setProfile = (p: PartnerProfile) => qc.setQueryData(partnerKeys.profile, p);
 
   const online = useMutation({
     mutationFn: async () => {
-      setBlocked(null);
+      setBlocked(false);
       const fix = await geo.request();
       if (!fix) return null;
       return goOnline({ lat: fix.lat, lng: fix.lng });
     },
     onSuccess: (p) => {
-      if (p) {
-        setProfile(p);
-        toast({ title: "You're online", description: 'Offers will start appearing here.', tone: 'success' });
-      } else {
-        setBlocked('geo');
-      }
+      if (p) setProfile(p);
+      else setBlocked(true);
     },
   });
   const offline = useMutation({
     mutationFn: goOffline,
-    onSuccess: (p) => {
-      setProfile(p);
-      toast({ title: "You're offline", description: 'Location sharing has stopped.', tone: 'info' });
-    },
+    onSuccess: setProfile,
     onError: (e) => {
       if (e instanceof ApiError && e.code === 'PARTNER_HAS_ACTIVE_JOBS') {
         void qc.invalidateQueries({ queryKey: partnerKeys.active });
@@ -74,85 +103,61 @@ export function OnlineToggle({ partner, tracking, activeCount }: OnlineTogglePro
     },
   });
   const hasActiveError = offline.error instanceof ApiError && offline.error.code === 'PARTNER_HAS_ACTIVE_JOBS';
-  // A 409 PARTNER_HAS_ACTIVE_JOBS keeps the switch locked; once the active deliveries are done (count drops to 0)
-  // clear that stale error so the partner can go offline again.
+  // Once the active deliveries are done, clear a stale 409 so the message disappears.
   const resetOffline = offline.reset;
   useEffect(() => {
     if (activeCount === 0) resetOffline();
   }, [activeCount, resetOffline]);
-  const mustFinish = partner.online && (activeCount > 0 || hasActiveError);
 
   const busy = online.isPending || offline.isPending;
-  const geoProblem = blocked === 'geo' ? (GEO_COPY[geo.status] ?? GEO_COPY.unavailable) : null;
-  const trackingLabel =
-    tracking.status === 'active' ? 'Location sharing active'
-    : tracking.status === 'paused' ? 'Location sharing paused'
-    : tracking.status === 'starting' ? 'Location sharing starting…'
-    : tracking.status === 'denied' ? 'Location sharing blocked'
-    : tracking.status === 'unsupported' ? 'Location sharing unavailable'
-    : null;
+  const geoProblem = blocked ? (GEO_COPY[geo.status] ?? GEO_COPY.unavailable) : null;
+  const isOnline = partner.online;
 
   return (
-    <Card aria-labelledby="online-heading">
-      <h2 id="online-heading" className="sr-only">
-        Availability
-      </h2>
-      <div className="flex items-center justify-between gap-3">
-        <Switch
-          label={partner.online ? 'You are online' : 'You are offline'}
-          description={
-            mustFinish
-              ? 'You have an active delivery. Complete it, or ask Thali ops to reassign it, before going offline.'
-              : partner.online
-                ? 'Switch off to stop receiving offers.'
-                : 'Switch on to receive delivery offers. We will ask to use your location.'
-          }
-          checked={partner.online}
-          disabled={busy || mustFinish}
-          onChange={(e) => {
-            if (e.target.checked) online.mutate();
-            else offline.mutate();
-          }}
-          className="grow"
-        />
-        <Badge tone={partner.online ? 'success' : 'neutral'} dot>
-          {partner.online ? 'Online' : 'Offline'}
-        </Badge>
+    <section
+      aria-labelledby={titleId}
+      className={cn('flex flex-wrap items-center gap-4 rounded-card border border-line bg-card px-5 py-[18px] max-sm:px-4 max-sm:py-3.5', className)}
+    >
+      <div className="flex min-w-[200px] flex-1 flex-col gap-1.5">
+        <h1 id={titleId} className="font-sans text-[26px] font-semibold leading-tight tracking-[-0.035em] max-sm:text-2xl">
+          {isOnline ? 'You’re online' : 'You’re offline'}
+        </h1>
+        <p className="flex items-center gap-2 text-[13.5px] text-fg-3" aria-live="polite" data-testid="tracking-status">
+          {isOnline ? <OnlineSub tracking={tracking} /> : 'Go online to receive offers. We’ll ask for location permission.'}
+        </p>
       </div>
+      <Toggle
+        size="lg"
+        label="Online"
+        checked={isOnline}
+        pending={busy}
+        onChange={(next) => (next ? online.mutate() : offline.mutate())}
+      />
+
+      {isOnline && tracking.status === 'paused' && tracking.pausedReason ? (
+        <p className="basis-full text-[13px] text-fg-2">{PAUSE_COPY[tracking.pausedReason]}</p>
+      ) : null}
+      {isOnline && tracking.status === 'denied' ? (
+        <p className="basis-full text-[13px] text-bad">Customers can’t see you move and offers may stop until you allow location for this site.</p>
+      ) : null}
+      {isOnline && tracking.status === 'unsupported' ? <p className="basis-full text-[13px] text-bad">{GEO_COPY.unsupported}</p> : null}
+      {isOnline && tracking.sendError ? (
+        <p className="basis-full text-[13px] text-warn">Last update didn’t reach Thali: {tracking.sendError} Retrying with your next position.</p>
+      ) : null}
 
       {geoProblem ? (
-        <div role="alert" className="mt-3 rounded-control border border-danger-100 bg-danger-50 p-3 text-sm text-danger-800">
-          <p className="font-semibold">You can't go online without sharing your location.</p>
-          <p className="mt-1">
-            Offers are matched by how close you are to the restaurant. {geoProblem}
-          </p>
+        <div role="alert" className="basis-full rounded-control bg-bad-bg px-3.5 py-3 text-[13.5px] text-fg-2">
+          <p className="font-semibold text-bad">You can’t go online without sharing your location.</p>
+          <p className="mt-1">Offers are matched by how close you are to the restaurant. {geoProblem}</p>
         </div>
       ) : null}
-      <InlineError error={online.error ?? (hasActiveError ? null : offline.error)} className="mt-3" />
-
-      {partner.online && trackingLabel ? (
-        <div className="mt-3 text-sm" aria-live="polite" data-testid="tracking-status">
-          <p className="flex flex-wrap items-center gap-2 font-medium text-slate-900">
-            <Badge tone={tracking.status === 'active' ? 'success' : tracking.status === 'starting' ? 'info' : 'warn'} dot>
-              {trackingLabel}
-            </Badge>
-            {tracking.lastSentAt ? (
-              <span className="font-normal text-slate-600">
-                Last sent <RelativeTime value={tracking.lastSentAt} staleAfterSec={30} />
-              </span>
-            ) : (
-              <span className="font-normal text-slate-600">Nothing sent yet</span>
-            )}
-          </p>
-          {tracking.status === 'paused' && tracking.pausedReason ? <p className="mt-1 text-slate-700">{PAUSE_COPY[tracking.pausedReason]}</p> : null}
-          {tracking.status === 'denied' ? (
-            <p className="mt-1 text-danger-700">Location is blocked for this site. Allow it in your browser settings, otherwise customers cannot see you and offers may stop.</p>
-          ) : null}
-          {tracking.status === 'unsupported' ? <p className="mt-1 text-danger-700">{GEO_COPY.unsupported}</p> : null}
-          {tracking.sendError ? <p className="mt-1 text-warn-800">Last update did not reach Thali: {tracking.sendError} Retrying with your next position.</p> : null}
+      {hasActiveError ? (
+        <div role="alert" className="basis-full rounded-control bg-warn-bg px-3.5 py-3 text-[13.5px] text-fg-2">
+          <p className="font-semibold text-warn">You have an active delivery.</p>
+          <p className="mt-1">Complete it, or ask Thali ops to reassign it, before going offline.</p>
         </div>
       ) : null}
-
-    </Card>
+      <InlineError error={online.error ?? (hasActiveError ? null : offline.error)} className="basis-full" />
+    </section>
   );
 }

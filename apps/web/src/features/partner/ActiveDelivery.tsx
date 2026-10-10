@@ -1,168 +1,301 @@
 /**
- * One active delivery: pickup + drop cards with Google Maps navigation, and the step actions
- *   ASSIGNED -> "I've arrived" -> AT_PICKUP -> pickup code -> PICKED_UP -> "Start delivery" -> OUT_FOR_DELIVERY
- *   -> delivery code -> DELIVERED;  PICKED_UP / OUT_FOR_DELIVERY -> "Can't deliver" (reason) -> FAILED.
- * Every action is a real API call; the server owns the state machine and the code attempt counter.
+ * One active delivery (board 30, rows 30-20 … 30-27), every step a real API call (the server owns the state
+ * machine and the code attempt counter):
+ *   ASSIGNED          "I've arrived"    POST /deliveries/:id/arrived
+ *   AT_PICKUP         pickup code  →    POST /deliveries/:id/pickup {code}     ("Restaurant's pickup code")
+ *   PICKED_UP         "Start delivery"  POST /deliveries/:id/start
+ *   OUT_FOR_DELIVERY  delivery code →   POST /deliveries/:id/deliver {code}    ("Customer's delivery code")
+ *   PICKED_UP / OUT_FOR_DELIVERY  "Can't deliver" (reason) → POST /deliveries/:id/fail {reason}
+ * Navigate goes to the restaurant before pickup and to the customer after (the drop address, coordinates and map
+ * link only exist once the food is picked up — DLV-2). Call = DLV-1 `POST /deliveries/:id/contact {target}`:
+ * DIRECT opens the dialer, DEMO only shows "Calling is simulated in demo" (never a fake call).
  */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
-import { buttonClasses, Button } from '../../components/ui/Button';
-import { Card } from '../../components/ui/Card';
+import { useEffect, useId, useState } from 'react';
+import { Button } from '../../components/ui/Button';
+import { CodeEntry } from '../../components/ui/CodeDigits';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { InlineError } from '../../components/ui/ErrorState';
 import { Icon } from '../../components/ui/Icon';
-import { StatusPill } from '../../components/ui/StatusPill';
+import { PARTNER_STEPS, Stepper } from '../../components/ui/Stepper';
 import { useToast } from '../../components/ui/Toast';
+import { cn } from '../../lib/cn';
 import { ApiError } from '../../lib/errors';
-import { formatDistanceKm, formatMinutes, formatTime } from '../../lib/format';
+import { formatTime, plural } from '../../lib/format';
 import {
-  confirmDelivered, confirmPickup, failDelivery, markArrived, navigationUrl, partnerKeys, startDelivery,
-  type GeoPoint, type PartnerJob,
+  confirmDelivered, confirmPickup, contactParty, failDelivery, markArrived, navigationUrl, partnerKeys, startDelivery,
+  type ContactResult, type ContactTarget, type PartnerJob,
 } from './api';
-import { CodeEntryDialog, type CodeKind } from './CodeEntryDialog';
-import { EstimateBadge } from './OfferCard';
+import { openDialer } from './dial';
+import { CODE_MAX_ATTEMPTS, dropTitle, isPrePickup, partnerStep } from './format';
 
-export const FAIL_REASONS = ['Customer unreachable', 'Wrong or incomplete address', 'Customer refused the order', 'Vehicle breakdown or accident'];
+/** Design-spec 30-27: Customer unreachable / Address not found / Other (+ text; "Other" is added by ConfirmDialog). */
+export const FAIL_REASONS = ['Customer unreachable', 'Address not found'];
 
-function StopCard({ title, name, address, point, linkLabel, current, extra }: {
-  title: string; name: string; address: string; point: GeoPoint; linkLabel: string; current: boolean; extra?: React.ReactNode;
-}) {
-  return (
-    <section aria-label={title} className={`rounded-control border p-3 ${current ? 'border-brand-500 bg-brand-50' : 'border-slate-200 bg-surface'}`}>
-      <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-slate-600">
-        <Icon name={title === 'Pickup' ? 'store' : 'home'} size={14} />
-        {title}
-        {current ? <span className="rounded-pill bg-brand-600 px-2 py-0.5 text-[0.6875rem] text-white">Next stop</span> : null}
-      </p>
-      <p className="mt-1 font-semibold text-slate-900">{name}</p>
-      <p className="text-sm text-slate-700">{address}</p>
-      {extra}
-      <a
-        href={navigationUrl(point)}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label={`${linkLabel} (opens Google Maps)`}
-        className={buttonClasses('secondary', 'md', false, 'mt-3 w-full sm:w-auto')}
-      >
-        <Icon name="map" size={18} />
-        {linkLabel}
-        <Icon name="external" size={14} />
-      </a>
-    </section>
-  );
+const outlineLink =
+  'inline-flex h-10 items-center justify-center gap-2 rounded-pill border border-line bg-card px-4 text-sm font-bold text-fg transition-colors hover:border-line-2 [@media(pointer:coarse)]:min-h-touch';
+
+function attemptsFrom(e: unknown): number | null {
+  if (!(e instanceof ApiError)) return null;
+  const d = e.details as { attemptsRemaining?: unknown } | undefined;
+  return typeof d?.attemptsRemaining === 'number' ? d.attemptsRemaining : null;
 }
 
 export interface ActiveDeliveryProps {
   job: PartnerJob;
+  /** 1-based position and total, for "Active delivery 1 of 2". */
+  index?: number;
+  total?: number;
   /** Called after any successful step with the updated job. */
   onChanged?: (job: PartnerJob) => void;
 }
 
-export function ActiveDelivery({ job, onChanged }: ActiveDeliveryProps) {
+export function ActiveDelivery({ job, index = 1, total = 1, onChanged }: ActiveDeliveryProps) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const [codeKind, setCodeKind] = useState<CodeKind | null>(null);
+  const headingId = useId();
+  const [code, setCode] = useState('');
+  const [codeError, setCodeError] = useState<string | null>(null);
   const [failing, setFailing] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
-  // Attempts reported by the last wrong-code response; kept across dialog close/reopen until the refetched job catches up.
+  const [contact, setContact] = useState<ContactResult | null>(null);
+  // Attempts from the last wrong-code answer; kept until the refetched job catches up.
   const [knownLeft, setKnownLeft] = useState<number | null>(null);
   useEffect(() => {
     setKnownLeft(null);
+    setCode('');
+    setCodeError(null);
+    setContact(null);
   }, [job.codeAttemptsRemaining, job.status]);
 
-  const done = (next: PartnerJob, message?: string) => {
+  const status = job.status;
+  const pre = isPrePickup(status);
+  const left = knownLeft ?? job.codeAttemptsRemaining;
+  const locked = left <= 0;
+  const codeKind = status === 'AT_PICKUP' ? 'pickup' : status === 'OUT_FOR_DELIVERY' ? 'delivery' : null;
+  const canFail = status === 'PICKED_UP' || status === 'OUT_FOR_DELIVERY';
+
+  const done = (next: PartnerJob, message: string) => {
     setActionError(null);
-    if (message) toast({ title: message, tone: next.status === 'FAILED' ? 'warn' : 'success' });
+    toast({ title: message, tone: next.status === 'FAILED' ? 'warn' : 'success' });
     void qc.invalidateQueries({ queryKey: partnerKeys.active });
     void qc.invalidateQueries({ queryKey: partnerKeys.profile });
+    if (next.status === 'DELIVERED') void qc.invalidateQueries({ queryKey: ['partner', 'finance'] });
     onChanged?.(next);
   };
 
-  const arrived = useMutation({ mutationFn: () => markArrived(job.id), onSuccess: (j) => done(j, 'Marked as arrived'), onError: setActionError });
-  const start = useMutation({ mutationFn: () => startDelivery(job.id), onSuccess: (j) => done(j, 'Delivery started'), onError: setActionError });
+  const step = useMutation({
+    mutationFn: async (): Promise<[PartnerJob, string]> => {
+      switch (status) {
+        case 'ASSIGNED':
+          return [await markArrived(job.id), 'Marked as arrived'];
+        case 'AT_PICKUP':
+          return [await confirmPickup(job.id, code), 'Pickup confirmed'];
+        case 'PICKED_UP':
+          return [await startDelivery(job.id), 'Delivery started'];
+        case 'OUT_FOR_DELIVERY':
+          return [await confirmDelivered(job.id, code), 'Delivered. Nice work!'];
+        default:
+          throw new Error('Nothing to do for this delivery right now.');
+      }
+    },
+    onMutate: () => {
+      setActionError(null);
+      setCodeError(null);
+    },
+    onSuccess: ([next, message]) => done(next, message),
+    onError: (e) => {
+      if (e instanceof ApiError && e.code === 'DELIVERY_CODE_LOCKED') {
+        setKnownLeft(0);
+        setCode('');
+        void qc.invalidateQueries({ queryKey: partnerKeys.active });
+      } else if (e instanceof ApiError && e.code === 'DELIVERY_CODE_INVALID') {
+        const next = attemptsFrom(e) ?? Math.max(0, left - 1);
+        setKnownLeft(next);
+        setCode('');
+        setCodeError(`Wrong code · ${plural(next, 'attempt')} left`);
+        void qc.invalidateQueries({ queryKey: partnerKeys.active });
+      } else {
+        setActionError(e);
+      }
+    },
+  });
 
-  const status = job.status;
-  const nextStop = status === 'PICKED_UP' || status === 'OUT_FOR_DELIVERY' ? 'drop' : 'pickup';
-  const canFail = status === 'PICKED_UP' || status === 'OUT_FOR_DELIVERY';
+  const call = useMutation({
+    mutationFn: (target: ContactTarget) => contactParty(job.id, target),
+    onMutate: () => setContact(null),
+    onSuccess: (res) => {
+      setContact(res);
+      if (res.mode !== 'DEMO' && res.telUrl) openDialer(res.telUrl);
+    },
+  });
+
+  // Destination: the restaurant before pickup, the customer after.
+  const navUrl = pre
+    ? job.navigation.pickupUrl || navigationUrl(job.pickup.location)
+    : job.navigation.dropUrl ?? (job.drop.location ? navigationUrl(job.drop.location) : null);
+  const targets: ContactTarget[] = status === 'ASSIGNED' ? ['RESTAURANT'] : status === 'AT_PICKUP' ? ['RESTAURANT', 'CUSTOMER'] : canFail ? ['CUSTOMER'] : [];
   const ready = job.readyAt ? `Food ready since ${formatTime(job.readyAt)}` : job.readyEta ? `Expected ready around ${formatTime(job.readyEta)}` : null;
+  const dropArea = job.drop.area ?? 'Area not shared';
+  const code4 = /^\d{4}$/.test(code);
+  const primary =
+    status === 'ASSIGNED' ? 'I’ve arrived' : status === 'AT_PICKUP' ? 'Confirm pickup' : status === 'PICKED_UP' ? 'Start delivery' : status === 'OUT_FOR_DELIVERY' ? 'Mark delivered' : null;
+  const primaryDisabled = codeKind !== null && (!code4 || locked);
+  const ref = job.childOrderCode ?? job.checkoutCode;
 
   return (
-    <Card as="article" aria-label={`Delivery ${job.childOrderId}`} className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-base font-semibold text-slate-900">Order {job.childOrderId}</h3>
-        <StatusPill kind="delivery" status={status} />
-      </div>
-      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-600">
-        <span className="tabular-nums">{formatDistanceKm(job.distanceKm)}</span>
-        <span className="tabular-nums">about {formatMinutes(job.estimatedMinutes)}</span>
-        <EstimateBadge source={job.estimateSource} />
-      </p>
-
-      <div className="grid gap-3 md:grid-cols-2">
-        <StopCard
-          title="Pickup"
-          name={job.pickup.name}
-          address={job.pickup.address}
-          point={job.pickup.location}
-          linkLabel="Navigate to pickup"
-          current={nextStop === 'pickup'}
-          extra={ready ? <p className="mt-1 text-sm text-slate-600">{ready}</p> : null}
-        />
-        <StopCard
-          title="Drop"
-          name={job.drop.name}
-          address={job.drop.address}
-          point={job.drop.location}
-          linkLabel="Navigate to drop"
-          current={nextStop === 'drop'}
-          extra={<p className="mt-1 text-sm text-slate-600">Customer phone <span className="tabular-nums">{job.drop.phoneMasked}</span></p>}
-        />
-      </div>
-
-      <div className="flex flex-col gap-2 sm:flex-row">
-        {status === 'ASSIGNED' ? (
-          <Button onClick={() => arrived.mutate()} loading={arrived.isPending} icon="check">
-            I've arrived at the restaurant
-          </Button>
-        ) : null}
-        {status === 'AT_PICKUP' ? <Button onClick={() => setCodeKind('pickup')}>Enter pickup code</Button> : null}
-        {status === 'PICKED_UP' ? (
-          <Button onClick={() => start.mutate()} loading={start.isPending} icon="bike">
-            Start delivery
-          </Button>
-        ) : null}
-        {status === 'OUT_FOR_DELIVERY' ? <Button onClick={() => setCodeKind('delivery')}>Enter delivery code</Button> : null}
-        {canFail ? (
-          <Button variant="danger" onClick={() => setFailing(true)}>
-            Can't deliver
-          </Button>
+    <section aria-labelledby={headingId} className="overflow-hidden rounded-card border border-line bg-card" data-testid="active-delivery">
+      <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-4 max-sm:px-4">
+        <h2 id={headingId} className="font-sans text-[15px] font-semibold tracking-normal">
+          Active delivery {index} of {total}
+        </h2>
+        {ref ? (
+          <span className="font-mono text-xs text-fg-3">
+            <span className="sr-only">Order </span>
+            {ref}
+          </span>
         ) : null}
       </div>
-      <InlineError error={actionError} />
 
-      <CodeEntryDialog
-        open={codeKind !== null}
-        onClose={() => setCodeKind(null)}
-        kind={codeKind ?? 'pickup'}
-        attemptsRemaining={knownLeft ?? job.codeAttemptsRemaining}
-        onAttemptsChange={setKnownLeft}
-        onSubmit={async (code) => {
-          let next: PartnerJob;
-          try {
-            next = codeKind === 'delivery' ? await confirmDelivered(job.id, code) : await confirmPickup(job.id, code);
-          } catch (e) {
-            // A wrong (400) or locked (423) code changed the server-side attempt counter: refresh the job.
-            if (e instanceof ApiError && (e.status === 400 || e.status === 423)) void qc.invalidateQueries({ queryKey: partnerKeys.active });
-            throw e;
-          }
-          done(next, codeKind === 'delivery' ? 'Delivered. Nice work!' : 'Pickup confirmed');
-        }}
-      />
+      <Stepper label="Delivery progress" steps={PARTNER_STEPS} current={partnerStep(status)} responsive={false} className="px-5 pt-4 max-sm:px-4" />
+
+      <div className="flex flex-wrap items-end justify-between gap-6 px-5 py-[18px] max-sm:px-4">
+        <div className="flex min-w-[220px] flex-1 flex-col gap-1.5">
+          {pre ? (
+            <>
+              <span className="lbl">Pickup</span>
+              <p className="text-xl font-semibold tracking-[-0.02em]">{job.pickup.name}</p>
+              <p className="text-[13.5px] leading-normal text-fg-3">
+                {job.pickup.address}
+                {ready ? (
+                  <>
+                    <br />
+                    {ready}
+                  </>
+                ) : null}
+              </p>
+              <p className="mt-1 flex items-start gap-2 text-[13px] text-fg-3">
+                <span aria-hidden="true" className="mt-[5px] size-2 shrink-0 rounded-[2px] bg-acc" />
+                <span>
+                  Then drop · {dropTitle(dropArea, job.drop.label)} · full address after pickup
+                </span>
+              </p>
+            </>
+          ) : (
+            <>
+              <span className="lbl">Drop</span>
+              <p className="text-xl font-semibold tracking-[-0.02em]">{dropTitle(job.drop.name, job.drop.label)}</p>
+              <p className="text-[13.5px] leading-normal text-fg-3">
+                {job.drop.address ?? `${dropArea} · address not available`}
+                <br />
+                <span className="tabular-nums">{job.drop.phoneMasked}</span>
+              </p>
+            </>
+          )}
+          <div className="mt-1.5 flex flex-wrap gap-2">
+            {navUrl ? (
+              <a
+                href={navUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label={`Navigate to ${pre ? job.pickup.name : 'the customer'} (opens Google Maps)`}
+                className={outlineLink}
+              >
+                <Icon name="navigation" size={15} />
+                Navigate
+              </a>
+            ) : null}
+            {targets.map((t) => (
+              <Button
+                key={t}
+                variant="outline"
+                icon="phone"
+                className="border-line! not-disabled:hover:border-line-2!"
+                onClick={() => call.mutate(t)}
+                loading={call.isPending && call.variables === t}
+                disabled={call.isPending}
+                aria-label={t === 'CUSTOMER' ? 'Call customer' : 'Call restaurant'}
+              >
+                {targets.length > 1 ? (t === 'CUSTOMER' ? 'Call customer' : 'Call restaurant') : 'Call'}
+              </Button>
+            ))}
+          </div>
+          <div aria-live="polite">
+            {contact ? (
+              <p className={cn('mt-2 rounded-control px-3 py-2 text-[13px]', contact.mode === 'DEMO' || !contact.telUrl ? 'bg-info-bg text-fg-2' : 'bg-fill text-fg-2')} data-testid="contact-note">
+                {contact.mode === 'DEMO' || !contact.telUrl ? (
+                  <>
+                    <strong className="font-semibold text-info">{contact.note ?? 'Calling is simulated in demo'}</strong>
+                    {' · '}
+                    {contact.target === 'CUSTOMER' ? 'Customer' : 'Restaurant'} <span className="tabular-nums">{contact.displayNumber}</span>
+                  </>
+                ) : (
+                  <>
+                    Calling the {contact.target === 'CUSTOMER' ? 'customer' : 'restaurant'} · <span className="tabular-nums">{contact.displayNumber}</span>
+                    {' · '}
+                    <a href={contact.telUrl} className="font-semibold underline underline-offset-2">
+                      Call again
+                    </a>
+                  </>
+                )}
+              </p>
+            ) : null}
+            <InlineError error={call.error} className="mt-2" />
+          </div>
+        </div>
+
+        {codeKind ? (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!primaryDisabled && !step.isPending) step.mutate();
+            }}
+          >
+            <CodeEntry
+              length={4}
+              value={code}
+              onChange={(v) => {
+                setCode(v);
+                if (codeError) setCodeError(null);
+              }}
+              label={codeKind === 'pickup' ? 'Restaurant’s pickup code' : 'Customer’s delivery code'}
+              disabled={locked || step.isPending}
+              error={locked ? 'Locked after too many wrong tries. Contact Thali support to continue this delivery.' : codeError ?? undefined}
+              hint={`${plural(left, 'attempt')} left · locks after ${CODE_MAX_ATTEMPTS} wrong tries`}
+            />
+            <button type="submit" hidden tabIndex={-1} aria-hidden="true" />
+          </form>
+        ) : null}
+      </div>
+
+      <div className="px-5 pb-[18px] max-sm:px-4">
+        <InlineError error={actionError} className="mb-3" />
+        {primary ? (
+          <div className="flex flex-wrap gap-2 max-sm:sticky max-sm:bottom-[calc(56px+env(safe-area-inset-bottom))] max-sm:z-10 max-sm:-mx-4 max-sm:border-t max-sm:border-line max-sm:bg-card max-sm:px-4 max-sm:py-3">
+            <Button
+              shape="block"
+              size="lg"
+              className="flex-[1_1_240px]"
+              onClick={() => step.mutate()}
+              disabled={primaryDisabled}
+              loading={step.isPending}
+            >
+              {primary}
+            </Button>
+            {canFail ? (
+              <Button variant="ghost" size="lg" onClick={() => setFailing(true)}>
+                Can’t deliver
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
       <ConfirmDialog
         open={failing}
         onClose={() => setFailing(false)}
-        title="Mark delivery as failed?"
-        description="Only do this if you cannot complete the handover. Support is told and the customer is notified."
+        title="Can’t deliver this order?"
+        description="Only do this if you cannot complete the handover. Thali support is told and the customer is notified."
         confirmLabel="Mark as failed"
         tone="danger"
         reason={{ label: 'Reason', options: FAIL_REASONS, minLength: 3, maxLength: 500 }}
@@ -171,6 +304,6 @@ export function ActiveDelivery({ job, onChanged }: ActiveDeliveryProps) {
           done(next, 'Delivery marked as failed');
         }}
       />
-    </Card>
+    </section>
   );
 }

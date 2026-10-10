@@ -1,15 +1,16 @@
 /**
  * Partner area layout (route element for every /partner/* page). It owns the ONE location watch so sharing keeps
  * running while an online partner browses history, earnings or onboarding, and stops when they go offline or leave
- * the partner area. Pages read the state with `usePartnerTracking()`.
+ * the partner area. Pages read the state with `usePartnerTracking()`. Off the home page a slim strip keeps the
+ * sharing state visible ("Location sharing active · last sent 4s ago").
  */
 import { useQuery } from '@tanstack/react-query';
 import { createContext, useContext } from 'react';
-import { Outlet, useLocation } from 'react-router';
-import { Badge } from '../../components/ui/Badge';
+import { Link, Outlet, useLocation } from 'react-router';
 import { RelativeTime } from '../../components/ui/RelativeTime';
+import { cn } from '../../lib/cn';
 import { profileQueryOptions } from './api';
-import { useLocationTracking, type LocationTracking } from './useLocationTracking';
+import { useLocationTracking, type LocationTracking, type TrackingStatus } from './useLocationTracking';
 
 const OFF: LocationTracking = { status: 'off', lastSentAt: null, sendError: null, pausedReason: null };
 const TrackingContext = createContext<LocationTracking>(OFF);
@@ -18,12 +19,12 @@ export function usePartnerTracking(): LocationTracking {
   return useContext(TrackingContext);
 }
 
-const LABEL: Record<string, string> = {
+export const TRACKING_LABEL: Partial<Record<TrackingStatus, string>> = {
   active: 'Location sharing active',
-  paused: 'Location sharing paused',
-  starting: 'Location sharing starting…',
-  denied: 'Location sharing blocked',
-  unsupported: 'Location sharing unavailable',
+  paused: 'Location paused — keep Thali open',
+  starting: 'Starting location sharing…',
+  denied: 'Location blocked in your browser',
+  unsupported: 'This browser can’t share location',
 };
 
 export default function PartnerLayout() {
@@ -32,17 +33,29 @@ export default function PartnerLayout() {
   const online = profile.data?.status === 'APPROVED' && profile.data.online;
   const tracking = useLocationTracking({ enabled: Boolean(online) });
   const onHome = pathname.replace(/\/+$/, '') === '/partner';
+  const label = TRACKING_LABEL[tracking.status];
+  const ok = tracking.status === 'active';
 
   return (
     <TrackingContext.Provider value={tracking}>
-      {online && !onHome && LABEL[tracking.status] ? (
-        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-control bg-surface-muted px-3 py-2 text-sm" role="status" aria-live="polite" data-testid="tracking-strip">
-          <Badge tone={tracking.status === 'active' ? 'success' : tracking.status === 'starting' ? 'info' : 'warn'} dot>
-            {LABEL[tracking.status]}
-          </Badge>
-          <span className="text-slate-600">
-            {tracking.lastSentAt ? <>Last sent <RelativeTime value={tracking.lastSentAt} staleAfterSec={30} /></> : 'Nothing sent yet'}
+      {online && !onHome && label ? (
+        <div
+          className={cn(
+            'mb-[18px] flex flex-wrap items-center gap-x-2 gap-y-1 rounded-field border border-line px-4 py-2.5 text-[13px]',
+            ok ? 'bg-card text-fg-2' : 'bg-warn-bg text-warn',
+          )}
+          role="status"
+          aria-live="polite"
+          data-testid="tracking-strip"
+        >
+          <span aria-hidden="true" className={cn('size-[7px] rounded-full', ok ? 'animate-pulse-ok bg-ok' : 'bg-warn')} />
+          <span className="font-medium">You’re online · {label}</span>
+          <span className={ok ? 'text-fg-3' : ''}>
+            {tracking.lastSentAt ? <RelativeTime value={tracking.lastSentAt} prefix="· last sent" staleAfterSec={30} /> : '· nothing sent yet'}
           </span>
+          <Link to="/partner" className="ml-auto font-semibold text-fg underline underline-offset-2">
+            Back to home
+          </Link>
         </div>
       ) : null}
       <Outlet />
