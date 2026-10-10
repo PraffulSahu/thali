@@ -45,7 +45,9 @@ export default defineConfig({
         include,
         exclude,
         testTimeout: kind === 'unit' ? 10_000 : 30_000,
-        hookTimeout: kind === 'unit' ? 10_000 : 30_000,
+        // Integration hooks create Mongo databases/indexes, Redis consumers and app instances; on a loaded dev VM
+        // with several suites in parallel these can take well over 30 s (*.int.test.ts run in 'int' and 'all').
+        hookTimeout: kind === 'unit' ? 10_000 : 120_000,
       },
     })),
   },
