@@ -12,11 +12,18 @@ export const couponRedemptionSchema = new Schema(
     status: { type: String, enum: REDEMPTION_STATUSES, required: true, default: 'HELD' },
     discountPaise: { type: Number, required: true, min: 0 },
     expiresAt: { type: Date, required: true },
+    /**
+     * Set (true) while a redemption of a firstOrderOnly coupon is HELD or REDEEMED, unset on release.
+     * The partial unique index below makes "one first-order coupon per user" atomic, even across
+     * different first-order coupons redeemed concurrently.
+     */
+    firstOrderGuard: { type: Boolean },
   },
   { timestamps: true, collection: 'coupon_redemptions' },
 );
 couponRedemptionSchema.index({ checkoutId: 1 }, { unique: true });
 couponRedemptionSchema.index({ couponId: 1, userId: 1, status: 1 });
+couponRedemptionSchema.index({ userId: 1 }, { unique: true, partialFilterExpression: { firstOrderGuard: true }, name: 'first_order_guard' });
 
 export type CouponRedemptionDoc = InferSchemaType<typeof couponRedemptionSchema>;
 export type CouponRedemptionModel = Model<CouponRedemptionDoc>;

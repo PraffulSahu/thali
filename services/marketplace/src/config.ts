@@ -23,6 +23,8 @@ export const MarketplaceConfigShape = {
 
   STORAGE_PROVIDER: z.literal('s3').default('s3'),
   S3_ENDPOINT: z.preprocess((v) => (v === '' ? undefined : v), z.url().optional()),
+  /** Browser-reachable endpoint for presigned URLs (compose: http://localhost:9000 while S3_ENDPOINT=http://minio:9000). */
+  S3_PUBLIC_ENDPOINT: z.preprocess((v) => (v === '' ? undefined : v), z.url().optional()),
   S3_REGION: z.string().default('us-east-1'),
   S3_ACCESS_KEY_ID: z.string().optional(),
   S3_SECRET_ACCESS_KEY: z.string().optional(),
@@ -55,6 +57,10 @@ export const MarketplaceConfigShape = {
   /** Extension applied when orders reports the checkout still AWAITING_PAYMENT. */
   RESERVATION_EXTEND_SEC: z.coerce.number().int().min(30).default(300),
   RESERVATION_SWEEP_INTERVAL_MS: z.coerce.number().int().min(1000).default(60000),
+  /** Back-off before re-checking a hold the sweeper could not resolve (orders down / unknown status). */
+  RESERVATION_RECHECK_SEC: z.coerce.number().int().min(1).default(60),
+  /** A PENDING_PAYMENT membership idle this long is reconciled with payments (CANCELLED unless captured). */
+  MEMBERSHIP_PENDING_TTL_SEC: z.coerce.number().int().min(60).default(900),
   INTERNAL_HTTP_TIMEOUT_MS: z.coerce.number().int().min(100).default(3000),
 };
 

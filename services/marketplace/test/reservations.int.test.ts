@@ -212,6 +212,39 @@ describe('coupon holds', () => {
     expect(await h.models.CouponRedemption.countDocuments({ checkoutId })).toBe(0);
   });
 
+  it('first-order-only: a HELD/REDEEMED redemption of ANY first-order coupon disqualifies another (sequential + concurrent)', async () => {
+    const a = await seedCoupon(h, { firstOrderOnly: true });
+    const b = await seedCoupon(h, { firstOrderOnly: true });
+    const it1 = await seedItem(h, rid);
+    const lines = [{ restaurantId: rid, itemId: it1, qty: 1 }];
+    const userId = oid();
+    const first = await reserve({ userId, lines, couponCode: a.code, couponDiscountPaise: 100 });
+    expect(first.status).toBe(200);
+    const stacked = await reserve({ userId, lines, couponCode: b.code, couponDiscountPaise: 100 });
+    expect(stacked.status).toBe(422);
+    expect(stacked.body.error).toMatchObject({ code: 'COUPON_INVALID', details: { reason: 'FIRST_ORDER_ONLY' } });
+    const v = await request(srv.url).post('/internal/coupons/validate').set(bearer(tok)).send({ code: b.code, userId, itemsSubtotalPaise: 30000 });
+    expect(v.body.error.details.reason).toBe('FIRST_ORDER_ONLY');
+
+    // released hold frees the first-order right again
+    await h.ctx.conn.transaction(async (session) => {
+      const { releaseReservation } = await import('../src/domain/reservations.js');
+      await releaseReservation(h.ctx, session, first.body.checkoutId, 'EXPIRED');
+    });
+    expect((await reserve({ userId, lines, couponCode: b.code, couponDiscountPaise: 100 })).status).toBe(200);
+
+    // concurrent: two different first-order coupons for a fresh user → exactly one
+    const c1 = await seedCoupon(h, { firstOrderOnly: true });
+    const c2 = await seedCoupon(h, { firstOrderOnly: true });
+    const fresh = oid();
+    const res = await Promise.all([
+      reserve({ userId: fresh, lines, couponCode: c1.code, couponDiscountPaise: 100 }),
+      reserve({ userId: fresh, lines, couponCode: c2.code, couponDiscountPaise: 100 }),
+    ]);
+    expect(res.map((r) => r.status).sort()).toEqual([200, 422]);
+    expect(await h.models.CouponRedemption.countDocuments({ userId: fresh, firstOrderGuard: true })).toBe(1);
+  });
+
   it('inactive / expired coupon → 422 COUPON_INVALID', async () => {
     const it1 = await seedItem(h, rid);
     const lines = [{ restaurantId: rid, itemId: it1, qty: 1 }];

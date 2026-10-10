@@ -13,6 +13,8 @@ export interface FakeOrders extends OrdersClient {
   statsCalls: { restaurantId: string; from: string; to: string }[];
   /** When true every call throws an upstream error. */
   fail: boolean;
+  /** Checkout ids whose status lookup throws (per-row failures). */
+  failIds: Set<string>;
 }
 
 const upstream = () => new DomainError('UPSTREAM_UNAVAILABLE', 'orders down');
@@ -26,9 +28,10 @@ export function fakeOrders(): FakeOrders {
     childCalls: [],
     statsCalls: [],
     fail: false,
+    failIds: new Set(),
     async getCheckoutStatus(id) {
       f.statusCalls.push(id);
-      if (f.fail) throw upstream();
+      if (f.fail || f.failIds.has(id)) throw upstream();
       return f.checkouts.get(id) ?? null;
     },
     async getChildOrder(id) {
@@ -60,6 +63,9 @@ export function fakeOrders(): FakeOrders {
 export interface FakePayments extends PaymentsClient {
   calls: CreateIntentRequest[];
   intents: Map<string, PaymentIntentView>;
+  /** Provider truth returned by reconcile, by paymentIntentId (default CREATED, 0 captured). */
+  reconciled: Map<string, { status: string; capturedPaise: number }>;
+  reconcileCalls: string[];
   fail: boolean;
 }
 
@@ -67,6 +73,8 @@ export function fakePayments(): FakePayments {
   const f: FakePayments = {
     calls: [],
     intents: new Map(),
+    reconciled: new Map(),
+    reconcileCalls: [],
     fail: false,
     async createIntent(req) {
       f.calls.push(req);
@@ -87,6 +95,16 @@ export function fakePayments(): FakePayments {
         f.intents.set(key, intent);
       }
       return intent;
+    },
+    async getByReference(purpose, referenceId) {
+      if (f.fail) throw new DomainError('UPSTREAM_UNAVAILABLE', 'payments down');
+      return f.intents.get(`${purpose}:${referenceId}`) ?? null;
+    },
+    async reconcile(id) {
+      f.reconcileCalls.push(id);
+      if (f.fail) throw new DomainError('UPSTREAM_UNAVAILABLE', 'payments down');
+      const r = f.reconciled.get(id) ?? { status: 'CREATED', capturedPaise: 0 };
+      return { paymentIntentId: id, ...r };
     },
   };
   return f;

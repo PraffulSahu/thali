@@ -7,7 +7,8 @@
  *  - Invalid → 422 COUPON_INVALID with `details.reason` (NOT_FOUND | INACTIVE | NOT_STARTED | EXPIRED |
  *    MIN_ORDER | FIRST_ORDER_ONLY | NO_DISCOUNT); exhausted → 422 COUPON_LIMIT_REACHED
  *    (`details.reason` TOTAL_LIMIT | PER_USER_LIMIT). Per-user usage counts HELD + REDEEMED.
- *  - "First order" = the user has no COMMITTED stock reservation (every placed checkout commits one).
+ *  - First-order-only: disqualified by any COMMITTED stock reservation (every placed checkout commits
+ *    one) OR any HELD/REDEEMED redemption of any firstOrderOnly coupon (`firstOrderGuard`, unique per user).
  */
 import type { ClientSession } from 'mongoose';
 import { bpsOf, DomainError } from '@thali/contracts';
@@ -44,6 +45,14 @@ export async function hasPlacedOrder(ctx: AppContext, userId: string, session?: 
   return !!(await q);
 }
 
+/** True when the user may no longer use a firstOrderOnly coupon. */
+export async function firstOrderUsed(ctx: AppContext, userId: string, session?: ClientSession): Promise<boolean> {
+  if (await hasPlacedOrder(ctx, userId, session)) return true;
+  const q = ctx.models.CouponRedemption.exists({ userId, firstOrderGuard: true });
+  if (session) q.session(session);
+  return !!(await q);
+}
+
 export async function userRedemptionCount(ctx: AppContext, couponId: unknown, userId: string, session?: ClientSession): Promise<number> {
   const q = ctx.models.CouponRedemption.countDocuments({ couponId, userId, status: { $in: ['HELD', 'REDEEMED'] } });
   if (session) q.session(session);
@@ -61,7 +70,7 @@ export async function validateCoupon(ctx: AppContext, input: { code: string; use
   if (input.itemsSubtotalPaise < (c.minOrderPaise ?? 0)) {
     throw couponInvalid('MIN_ORDER', `Add items worth ₹${((c.minOrderPaise ?? 0) / 100).toFixed(2)} or more to use this coupon`, { minOrderPaise: c.minOrderPaise ?? 0 });
   }
-  if (c.firstOrderOnly && (await hasPlacedOrder(ctx, input.userId))) throw couponInvalid('FIRST_ORDER_ONLY', 'This coupon is valid on your first order only');
+  if (c.firstOrderOnly && (await firstOrderUsed(ctx, input.userId))) throw couponInvalid('FIRST_ORDER_ONLY', 'This coupon is valid on your first order only');
   if (totalExhausted(c)) throw couponLimit('TOTAL_LIMIT', 'This coupon has been fully used');
   if (c.perUserLimit != null && (await userRedemptionCount(ctx, c._id, input.userId)) >= c.perUserLimit) {
     throw couponLimit('PER_USER_LIMIT', 'You have already used this coupon');
@@ -96,7 +105,7 @@ export async function availableCoupons(ctx: AppContext, userId: string) {
   const live = rows.filter((c) => !totalExhausted(c));
   if (!live.length) return [];
   const [placed, used] = await Promise.all([
-    hasPlacedOrder(ctx, userId),
+    firstOrderUsed(ctx, userId),
     ctx.models.CouponRedemption.aggregate<{ _id: unknown; n: number }>([
       { $match: { userId, couponId: { $in: live.map((c) => c._id) }, status: { $in: ['HELD', 'REDEEMED'] } } },
       { $group: { _id: '$couponId', n: { $sum: 1 } } },

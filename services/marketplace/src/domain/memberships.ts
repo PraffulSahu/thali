@@ -5,6 +5,10 @@
  *  - Purchase: PENDING_PAYMENT membership (one per user+plan, reused) → payments
  *    `POST /internal/payment-intents {purpose:'MEMBERSHIP', referenceId: membershipId}` (idempotent per
  *    reference). Nothing is emitted until `payment.captured` (purpose MEMBERSHIP) activates it.
+ *  - `payment.failed` is mirror-only: the membership stays PENDING_PAYMENT (failure recorded) so a retry
+ *    reuses the same membership and payment intent. A pending membership idle for
+ *    MEMBERSHIP_PENDING_TTL_SEC is reconciled with payments (by-reference → reconcile): CAPTURED →
+ *    activate, otherwise CANCELLED (a later capture still activates it).
  *  - Activation: PENDING_PAYMENT|CANCELLED → ACTIVE iff the captured amount equals the snapshot price;
  *    `startsAt = now` (or the end of a still-active membership), `endsAt = startsAt + durationDays`;
  *    emits `membership.activated` in the same transaction. Re-deliveries are no-ops.
@@ -14,7 +18,7 @@
  */
 import { Types, type ClientSession } from 'mongoose';
 import { DomainError, type EventPayloads } from '@thali/contracts';
-import { emitEvent } from '@thali/service-kit';
+import { emitEvent, withTransaction } from '@thali/service-kit';
 import type { AppContext } from '../context.js';
 import type { MembershipDoc } from '../models/membership.js';
 import type { MembershipPlanDoc } from '../models/membership-plan.js';
@@ -109,7 +113,10 @@ export async function purchaseMembership(ctx: AppContext, userId: string, planId
     try {
       pending = await ctx.models.Membership.findOneAndUpdate(
         { userId, planId: plan._id, status: 'PENDING_PAYMENT' },
-        { $setOnInsert: { userId, planId: plan._id, planSnapshot: snapshot, status: 'PENDING_PAYMENT', freeDeliveriesUsed: 0, freeDeliveriesHeld: 0, usage: [] } },
+        {
+          $setOnInsert: { userId, planId: plan._id, planSnapshot: snapshot, status: 'PENDING_PAYMENT', freeDeliveriesUsed: 0, freeDeliveriesHeld: 0, usage: [] },
+          $set: { lastAttemptAt: ctx.now() },
+        },
         { upsert: true, new: true },
       ).lean<MembershipLean>();
     } catch (e) {
@@ -125,7 +132,11 @@ export async function purchaseMembership(ctx: AppContext, userId: string, planId
     ctx.logger.warn({ err, membershipId: String(pending._id) }, 'membership payment intent failed');
     throw new DomainError('PAYMENT_PROVIDER_UNAVAILABLE', 'Payments are temporarily unavailable, please retry');
   }
-  const updated = await ctx.models.Membership.findOneAndUpdate({ _id: pending._id }, { $set: { paymentIntentId: payment.paymentIntentId } }, { new: true }).lean<MembershipLean>();
+  const updated = await ctx.models.Membership.findOneAndUpdate(
+    { _id: pending._id },
+    { $set: { paymentIntentId: payment.paymentIntentId, lastAttemptAt: ctx.now() } },
+    { new: true },
+  ).lean<MembershipLean>();
   return { membership: membershipView(updated ?? pending), payment };
 }
 
@@ -162,14 +173,73 @@ export async function activateMembership(ctx: AppContext, session: ClientSession
   return 'ACTIVATED';
 }
 
-/** `payment.failed` (purpose MEMBERSHIP). A later capture on the same provider order still activates. */
+/**
+ * `payment.failed` (purpose MEMBERSHIP) — mirror only: stays PENDING_PAYMENT so a retry reuses the same
+ * membership + intent (payments allows a later successful attempt on the same provider order).
+ */
 export async function failMembershipPayment(ctx: AppContext, session: ClientSession, p: EventPayloads['payment.failed']) {
   if (!Types.ObjectId.isValid(p.referenceId)) return;
   await ctx.models.Membership.updateOne(
     { _id: new Types.ObjectId(p.referenceId), status: 'PENDING_PAYMENT' },
-    { $set: { status: 'CANCELLED', statusReason: `PAYMENT_FAILED: ${p.reason}`.slice(0, 200) } },
+    { $set: { lastPaymentFailure: { reason: p.reason.slice(0, 200), paymentIntentId: p.paymentIntentId, at: ctx.now() } } },
     { session },
   );
+}
+
+export interface PendingSweepResult {
+  activated: number;
+  cancelled: number;
+  skipped: number;
+}
+
+/**
+ * PENDING_PAYMENT memberships idle for MEMBERSHIP_PENDING_TTL_SEC: ask payments for the intent by
+ * reference, reconcile it with the provider; CAPTURED → activate (same path as payment.captured),
+ * anything else (or no intent) → CANCELLED. Payments unreachable → back off (`nextCheckAt`).
+ */
+export async function sweepPendingMemberships(ctx: AppContext, opts: { batch?: number; signal?: AbortSignal } = {}): Promise<PendingSweepResult> {
+  const out: PendingSweepResult = { activated: 0, cancelled: 0, skipped: 0 };
+  const now = ctx.now();
+  const cutoff = new Date(now.getTime() - ctx.config.MEMBERSHIP_PENDING_TTL_SEC * 1000);
+  const rows = await ctx.models.Membership.find({
+    status: 'PENDING_PAYMENT',
+    $and: [
+      { $or: [{ lastAttemptAt: { $lte: cutoff } }, { lastAttemptAt: { $exists: false }, createdAt: { $lte: cutoff } }] },
+      { $or: [{ nextCheckAt: { $exists: false } }, { nextCheckAt: null }, { nextCheckAt: { $lte: now } }] },
+    ],
+  })
+    .sort({ lastAttemptAt: 1, _id: 1 })
+    .limit(opts.batch ?? 100)
+    .lean<MembershipLean[]>();
+
+  for (const m of rows) {
+    if (opts.signal?.aborted) break;
+    const id = String(m._id);
+    let captured: { paymentIntentId: string; amountPaise: number } | null = null;
+    try {
+      const intent = await ctx.payments.getByReference('MEMBERSHIP', id);
+      if (intent) {
+        const rec = await ctx.payments.reconcile(intent.paymentIntentId);
+        if (rec.status === 'CAPTURED') captured = { paymentIntentId: rec.paymentIntentId, amountPaise: rec.capturedPaise };
+      }
+    } catch (err) {
+      ctx.logger.warn({ err, membershipId: id }, 'pending membership sweep: payments unavailable; will retry');
+      await ctx.models.Membership.updateOne({ _id: m._id }, { $set: { nextCheckAt: new Date(now.getTime() + ctx.config.RESERVATION_RECHECK_SEC * 1000) } });
+      out.skipped++;
+      continue;
+    }
+    if (captured) {
+      const res = await withTransaction(ctx.conn, (session) =>
+        activateMembership(ctx, session, { paymentIntentId: captured.paymentIntentId, purpose: 'MEMBERSHIP', referenceId: id, userId: m.userId, amountPaise: captured.amountPaise, providerPaymentId: 'reconciled' }),
+      );
+      if (res === 'ACTIVATED') out.activated++;
+      else out.skipped++;
+    } else {
+      const upd = await ctx.models.Membership.updateOne({ _id: m._id, status: 'PENDING_PAYMENT' }, { $set: { status: 'CANCELLED', statusReason: 'PAYMENT_NOT_COMPLETED' } });
+      if (upd.modifiedCount) out.cancelled++;
+    }
+  }
+  return out;
 }
 
 export interface BenefitsInput {

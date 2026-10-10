@@ -42,6 +42,12 @@ export const membershipSchema = new Schema(
     startsAt: { type: Date },
     endsAt: { type: Date },
     paymentIntentId: { type: String },
+    /** Last purchase attempt (start/retry); the pending sweeper waits MEMBERSHIP_PENDING_TTL_SEC after it. */
+    lastAttemptAt: { type: Date },
+    /** Mirror of the latest payment.failed (the membership stays PENDING_PAYMENT so a retry reuses it). */
+    lastPaymentFailure: { type: new Schema({ reason: String, paymentIntentId: String, at: Date }, { _id: false }) },
+    /** Pending sweeper back-off when payments could not be reached. */
+    nextCheckAt: { type: Date },
     freeDeliveriesUsed: { type: Number, default: 0 },
     freeDeliveriesHeld: { type: Number, default: 0 },
     usage: { type: [usageSchema], default: [] },
@@ -51,6 +57,7 @@ export const membershipSchema = new Schema(
 membershipSchema.index({ userId: 1, status: 1 });
 membershipSchema.index({ endsAt: 1 });
 membershipSchema.index({ planId: 1 });
+membershipSchema.index({ status: 1, lastAttemptAt: 1 });
 /** At most one pending purchase per user+plan (concurrent purchases reuse it). */
 membershipSchema.index({ userId: 1, planId: 1 }, { unique: true, partialFilterExpression: { status: 'PENDING_PAYMENT' } });
 

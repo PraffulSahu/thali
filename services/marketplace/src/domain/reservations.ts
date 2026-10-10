@@ -29,7 +29,7 @@ import { DomainError } from '@thali/contracts';
 import { withTransaction } from '@thali/service-kit';
 import type { AppContext } from '../context.js';
 import type { StockReservationDoc } from '../models/stock-reservation.js';
-import { assertCouponLive, couponInvalid, couponLimit, hasPlacedOrder, normalizeCode, userRedemptionCount, type CouponLean } from './coupons.js';
+import { assertCouponLive, couponInvalid, couponLimit, firstOrderUsed, normalizeCode, userRedemptionCount, type CouponLean } from './coupons.js';
 
 export type ReservationLean = StockReservationDoc & { _id: Types.ObjectId };
 
@@ -120,7 +120,7 @@ export async function reserve(ctx: AppContext, input: ReserveInput): Promise<Res
         couponCode = normalizeCode(input.couponCode);
         const c = await ctx.models.Coupon.findOne({ code: couponCode }).session(session).lean<CouponLean>();
         assertCouponLive(c, now);
-        if (c.firstOrderOnly && (await hasPlacedOrder(ctx, input.userId, session))) throw couponInvalid('FIRST_ORDER_ONLY', 'This coupon is valid on your first order only');
+        if (c.firstOrderOnly && (await firstOrderUsed(ctx, input.userId, session))) throw couponInvalid('FIRST_ORDER_ONLY', 'This coupon is valid on your first order only');
         if (c.perUserLimit != null && (await userRedemptionCount(ctx, c._id, input.userId, session)) >= c.perUserLimit) {
           throw couponLimit('PER_USER_LIMIT', 'You have already used this coupon');
         }
@@ -135,7 +135,18 @@ export async function reserve(ctx: AppContext, input: ReserveInput): Promise<Res
         );
         if (upd.modifiedCount !== 1) throw couponLimit('TOTAL_LIMIT', 'This coupon has been fully used');
         await ctx.models.CouponRedemption.create(
-          [{ couponId: c._id, code: c.code, userId: input.userId, checkoutId: input.checkoutId, status: 'HELD', discountPaise: input.couponDiscountPaise, expiresAt }],
+          [
+            {
+              couponId: c._id,
+              code: c.code,
+              userId: input.userId,
+              checkoutId: input.checkoutId,
+              status: 'HELD',
+              discountPaise: input.couponDiscountPaise,
+              expiresAt,
+              ...(c.firstOrderOnly ? { firstOrderGuard: true } : {}),
+            },
+          ],
           { session },
         );
         couponId = c._id;
@@ -183,7 +194,12 @@ export async function reserve(ctx: AppContext, input: ReserveInput): Promise<Res
       return resultOf({ checkoutId: input.checkoutId, status: 'HELD', expiresAt });
     });
   } catch (e) {
-    if ((e as { code?: number })?.code === 11000) {
+    const dup = e as { code?: number; keyPattern?: Record<string, unknown> };
+    if (dup?.code === 11000 && dup.keyPattern && 'userId' in dup.keyPattern) {
+      // first_order_guard: a concurrent checkout of this user holds another first-order coupon
+      throw couponInvalid('FIRST_ORDER_ONLY', 'This coupon is valid on your first order only');
+    }
+    if (dup?.code === 11000) {
       const winner = await ctx.models.StockReservation.findOne({ checkoutId: input.checkoutId }).lean<ReservationLean>();
       if (winner) return replay(winner, input.userId);
     }
@@ -199,7 +215,11 @@ async function maybeReleaseCoupon(ctx: AppContext, session: ClientSession, r: Pi
   if (!r.couponId || !children.length) return;
   const closed = new Set(r.closedChildIds ?? []);
   if (!children.every((c) => closed.has(c))) return;
-  const red = await ctx.models.CouponRedemption.findOneAndUpdate({ checkoutId: r.checkoutId, status: 'REDEEMED' }, { $set: { status: 'RELEASED' } }, { session });
+  const red = await ctx.models.CouponRedemption.findOneAndUpdate(
+    { checkoutId: r.checkoutId, status: 'REDEEMED' },
+    { $set: { status: 'RELEASED' }, $unset: { firstOrderGuard: 1 } },
+    { session },
+  );
   if (red) await ctx.models.Coupon.updateOne({ _id: red.couponId }, { $inc: { usedCount: -1 } }, { session });
 }
 
@@ -250,7 +270,11 @@ export async function releaseReservation(ctx: AppContext, session: ClientSession
   for (const l of r.lines.filter((x) => x.tracked)) {
     await ctx.models.MenuItem.updateOne({ _id: oid(l.itemId) }, { $inc: { reservedQty: -l.qty } }, { session });
   }
-  const red = await ctx.models.CouponRedemption.findOneAndUpdate({ checkoutId, status: 'HELD' }, { $set: { status: 'RELEASED' } }, { session });
+  const red = await ctx.models.CouponRedemption.findOneAndUpdate(
+    { checkoutId, status: 'HELD' },
+    { $set: { status: 'RELEASED' }, $unset: { firstOrderGuard: 1 } },
+    { session },
+  );
   if (red) await ctx.models.Coupon.updateOne({ _id: red.couponId }, { $inc: { heldCount: -1 } }, { session });
   if (r.membershipId) {
     const n = r.membershipFreeDeliveries ?? 0;

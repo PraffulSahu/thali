@@ -117,15 +117,76 @@ describe('activation via payment events', () => {
     expect(me.body.history.map((x: { id: string }) => x.id)).toContain(membershipId);
   });
 
-  it('payment.failed (MEMBERSHIP) → CANCELLED; CHECKOUT-purpose events are ignored', async () => {
+  it('payment.failed is mirror-only: stays PENDING_PAYMENT; retry reuses membership + intent; captured-after-failed activates once', async () => {
     const planId = await seedPlan(h);
     const userId = oid();
     const res = await purchase(userId, planId, 'purchase-key-0102');
     const membershipId = res.body.membership.id as string;
+    const intentId = res.body.payment.paymentIntentId as string;
     const ignored = await publishEvent(h, 'payments', 'payment.captured', { paymentIntentId: oid(), purpose: 'CHECKOUT', referenceId: membershipId, userId, amountPaise: 9900, providerPaymentId: 'p' });
-    const failed = await publishEvent(h, 'payments', 'payment.failed', { paymentIntentId: oid(), purpose: 'MEMBERSHIP', referenceId: membershipId, userId, reason: 'card declined' });
+    const failed = await publishEvent(h, 'payments', 'payment.failed', { paymentIntentId: intentId, purpose: 'MEMBERSHIP', referenceId: membershipId, userId, reason: 'card declined' });
     await processed(h, ignored.id, failed.id);
-    expect((await h.models.Membership.findById(membershipId).lean())!.status).toBe('CANCELLED');
+    const m = (await h.models.Membership.findById(membershipId).lean())!;
+    expect(m.status).toBe('PENDING_PAYMENT');
+    expect(m.lastPaymentFailure).toMatchObject({ reason: 'card declined', paymentIntentId: intentId });
+
+    const callsBefore = h.payments.calls.length;
+    const retry = await purchase(userId, planId, 'purchase-key-0102-retry');
+    expect(retry.status).toBe(201);
+    expect(retry.body.membership.id).toBe(membershipId);
+    expect(retry.body.payment.paymentIntentId).toBe(intentId);
+    expect(h.payments.calls.slice(callsBefore)).toEqual([{ purpose: 'MEMBERSHIP', referenceId: membershipId, userId, amountPaise: 9900 }]);
+    expect(await h.models.Membership.countDocuments({ userId })).toBe(1);
+
+    const cap = { paymentIntentId: intentId, purpose: 'MEMBERSHIP' as const, referenceId: membershipId, userId, amountPaise: 9900, providerPaymentId: 'pay_retry' };
+    const c1 = await publishEvent(h, 'payments', 'payment.captured', cap);
+    const c2 = await publishEvent(h, 'payments', 'payment.captured', cap);
+    await processed(h, c1.id, c2.id);
+    expect((await h.models.Membership.findById(membershipId).lean())!.status).toBe('ACTIVE');
+    expect((await h.events('membership.activated')).filter((e) => e.payload.membershipId === membershipId)).toHaveLength(1);
+    expect(await h.models.Membership.countDocuments({ userId })).toBe(1);
+  });
+
+  it('pending sweeper: idle PENDING_PAYMENT reconciled via payments — captured → ACTIVE, otherwise CANCELLED; payments down → untouched', async () => {
+    const { sweepPendingMemberships } = await import('../src/domain/memberships.js');
+    const stale = new Date(Date.now() - 20 * 60_000);
+    const mk = async (key: string) => {
+      const userId = oid();
+      const r = await purchase(userId, await seedPlan(h), key);
+      await h.models.Membership.updateOne({ _id: r.body.membership.id }, { $set: { lastAttemptAt: stale } });
+      return { userId, id: r.body.membership.id as string, intentId: r.body.payment.paymentIntentId as string };
+    };
+    const unpaid = await mk('purchase-key-0201');
+    const paid = await mk('purchase-key-0202');
+    const fresh = await purchase(oid(), await seedPlan(h), 'purchase-key-0203'); // within TTL
+    const noIntent = await h.models.Membership.create({
+      userId: oid(), planId: await seedPlan(h), planSnapshot: { name: 'x', pricePaise: 9900, durationDays: 30, benefits: { freeDeliveryMinOrderPaise: 0, freeDeliveriesPerPeriod: 1, extraDiscountBps: 0, extraDiscountCapPaise: 0 }, terms: '' },
+      status: 'PENDING_PAYMENT', lastAttemptAt: stale,
+    });
+    h.payments.reconciled.set(paid.intentId, { status: 'CAPTURED', capturedPaise: 9900 });
+
+    h.payments.fail = true;
+    try {
+      const down = await sweepPendingMemberships(h.ctx);
+      expect(down.skipped).toBeGreaterThanOrEqual(3);
+    } finally {
+      h.payments.fail = false;
+    }
+    expect((await h.models.Membership.findById(unpaid.id).lean())!.status).toBe('PENDING_PAYMENT');
+    await h.models.Membership.updateMany({}, { $unset: { nextCheckAt: 1 } }); // skip the back-off
+
+    const out = await sweepPendingMemberships(h.ctx);
+    expect(out).toMatchObject({ activated: 1, cancelled: 2 });
+    expect((await h.models.Membership.findById(unpaid.id).lean())!.status).toBe('CANCELLED');
+    expect((await h.models.Membership.findById(String(noIntent._id)).lean())!.status).toBe('CANCELLED');
+    expect((await h.models.Membership.findById(paid.id).lean())!.status).toBe('ACTIVE');
+    expect((await h.events('membership.activated')).filter((e) => e.payload.membershipId === paid.id)).toHaveLength(1);
+    expect((await h.models.Membership.findById(fresh.body.membership.id).lean())!.status).toBe('PENDING_PAYMENT');
+
+    // a capture that lands after the sweeper cancelled still activates
+    const late = await publishEvent(h, 'payments', 'payment.captured', { paymentIntentId: unpaid.intentId, purpose: 'MEMBERSHIP', referenceId: unpaid.id, userId: unpaid.userId, amountPaise: 9900, providerPaymentId: 'late' });
+    await processed(h, late.id);
+    expect((await h.models.Membership.findById(unpaid.id).lean())!.status).toBe('ACTIVE');
   });
 
   it('captured amount different from the plan price does not activate', async () => {
@@ -198,6 +259,16 @@ describe('admin plans CRUD', () => {
     expect((await request(h.app).post('/api/v1/admin/marketplace/plans').set(bearer(admin)).send({ ...body, pricePaise: -1 })).status).toBe(400);
     await waitFor(async () => (await h.events('audit.recorded')).some((e) => e.payload.action === 'plan.update'));
     expect((await request(h.app).delete(`/api/v1/admin/marketplace/plans/${c.body.id}`).set(bearer(admin))).status).toBe(204);
+  });
+
+  it('PATCH of one plan field leaves the others (incl. active:false) unchanged', async () => {
+    const admin = await h.adminToken();
+    const body = { name: 'Quiet', pricePaise: 4900, durationDays: 7, benefits: { freeDeliveryMinOrderPaise: 0, freeDeliveriesPerPeriod: 1, extraDiscountBps: 0, extraDiscountCapPaise: 0 }, terms: 'Weekly.', active: false };
+    const c = await request(h.app).post('/api/v1/admin/marketplace/plans').set(bearer(admin)).send(body);
+    expect(c.status).toBe(201);
+    const p = await request(h.app).patch(`/api/v1/admin/marketplace/plans/${c.body.id}`).set(bearer(admin)).send({ name: 'Quiet Week' });
+    expect(p.status).toBe(200);
+    expect(p.body).toEqual({ ...c.body, name: 'Quiet Week' });
   });
 
   it('a plan with memberships cannot be deleted', async () => {

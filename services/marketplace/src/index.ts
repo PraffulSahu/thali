@@ -59,7 +59,8 @@ async function main() {
     intervalMs: config.RESERVATION_SWEEP_INTERVAL_MS,
     run: async ({ signal }) => {
       const out = await sweepExpiredReservations(ctx, { signal });
-      if (out.extended + out.committed + out.released + out.skipped + out.membershipsExpired > 0) logger.info(out, 'reservation sweep');
+      const p = out.pendingMemberships;
+      if (out.extended + out.committed + out.released + out.skipped + out.membershipsExpired + p.activated + p.cancelled + p.skipped > 0) logger.info(out, 'reservation sweep');
     },
   });
 

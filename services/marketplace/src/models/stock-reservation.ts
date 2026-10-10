@@ -41,6 +41,8 @@ export const stockReservationSchema = new Schema(
     releaseReason: { type: String },
     /** Number of times the sweeper extended the hold because orders still awaited payment. */
     extensions: { type: Number, default: 0 },
+    /** Sweeper back-off: an unresolved hold is not re-checked before this time (prevents starvation). */
+    nextCheckAt: { type: Date },
   },
   { timestamps: true, collection: 'stock_reservations' },
 );

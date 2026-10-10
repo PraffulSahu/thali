@@ -22,21 +22,35 @@ const admin = () => requireAuth({ roles: ['ADMIN'], mfa: true });
 const IdParams = z.object({ id: z.string().min(1).max(64) });
 
 // ---- coupons ----
+// Field definitions carry NO defaults: Zod 4 still applies `.default()` inside `.partial()`, so a PATCH
+// schema derived from defaulted fields would silently reset active/limits. Defaults live on create only.
+const couponFieldDefs = {
+  code: z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]{3,30}$/, '3–30 chars: A-Z, 0-9, _ or -'),
+  description: z.string().trim().max(300),
+  type: z.enum(['FLAT', 'PERCENT']),
+  valuePaise: PaiseSchema,
+  valueBps: z.number().int().min(1).max(10000),
+  maxDiscountPaise: PaiseSchema.nullable(),
+  minOrderPaise: PaiseSchema,
+  validFrom: z.coerce.date(),
+  validTo: z.coerce.date(),
+  totalLimit: z.number().int().min(1).nullable().describe('null = unlimited'),
+  perUserLimit: z.number().int().min(1),
+  active: z.boolean(),
+  firstOrderOnly: z.boolean(),
+};
 const CouponFields = z
   .object({
-    code: z.string().trim().toUpperCase().regex(/^[A-Z0-9_-]{3,30}$/, '3–30 chars: A-Z, 0-9, _ or -'),
-    description: z.string().trim().max(300).default(''),
-    type: z.enum(['FLAT', 'PERCENT']),
-    valuePaise: PaiseSchema.optional(),
-    valueBps: z.number().int().min(1).max(10000).optional(),
-    maxDiscountPaise: PaiseSchema.nullable().optional(),
-    minOrderPaise: PaiseSchema.default(0),
-    validFrom: z.coerce.date(),
-    validTo: z.coerce.date(),
-    totalLimit: z.number().int().min(1).nullable().default(null).describe('null = unlimited'),
-    perUserLimit: z.number().int().min(1).default(1),
-    active: z.boolean().default(true),
-    firstOrderOnly: z.boolean().default(false),
+    ...couponFieldDefs,
+    description: couponFieldDefs.description.default(''),
+    valuePaise: couponFieldDefs.valuePaise.optional(),
+    valueBps: couponFieldDefs.valueBps.optional(),
+    maxDiscountPaise: couponFieldDefs.maxDiscountPaise.optional(),
+    minOrderPaise: couponFieldDefs.minOrderPaise.default(0),
+    totalLimit: couponFieldDefs.totalLimit.default(null),
+    perUserLimit: couponFieldDefs.perUserLimit.default(1),
+    active: couponFieldDefs.active.default(true),
+    firstOrderOnly: couponFieldDefs.firstOrderOnly.default(false),
   })
   .strict();
 
@@ -49,7 +63,7 @@ function couponRules(c: CouponInput, path = 'body') {
   if (issues.length) throw new DomainError('VALIDATION_FAILED', issues[0]!.message, undefined, { issues });
 }
 const CouponCreate = CouponFields;
-const CouponPatch = CouponFields.omit({ code: true }).partial().strict();
+const CouponPatch = z.object(couponFieldDefs).omit({ code: true }).partial().strict();
 
 export const CouponAdminView = z
   .object({
@@ -93,25 +107,24 @@ function couponAdminView(c: CouponLean) {
   };
 }
 
-// ---- plans ----
-const PlanFields = z
-  .object({
-    name: z.string().trim().min(1).max(80),
-    pricePaise: PaiseSchema,
-    durationDays: z.number().int().min(1).max(366),
-    benefits: z
-      .object({
-        freeDeliveryMinOrderPaise: PaiseSchema,
-        freeDeliveriesPerPeriod: z.number().int().min(0).max(1000),
-        extraDiscountBps: z.number().int().min(0).max(10000),
-        extraDiscountCapPaise: PaiseSchema,
-      })
-      .strict(),
-    terms: z.string().trim().min(1).max(20000),
-    active: z.boolean().default(true),
-  })
-  .strict();
-const PlanPatch = PlanFields.partial().strict();
+// ---- plans ---- (defaults on create only; see the coupon note above)
+const planFieldDefs = {
+  name: z.string().trim().min(1).max(80),
+  pricePaise: PaiseSchema,
+  durationDays: z.number().int().min(1).max(366),
+  benefits: z
+    .object({
+      freeDeliveryMinOrderPaise: PaiseSchema,
+      freeDeliveriesPerPeriod: z.number().int().min(0).max(1000),
+      extraDiscountBps: z.number().int().min(0).max(10000),
+      extraDiscountCapPaise: PaiseSchema,
+    })
+    .strict(),
+  terms: z.string().trim().min(1).max(20000),
+  active: z.boolean(),
+};
+const PlanFields = z.object({ ...planFieldDefs, active: planFieldDefs.active.default(true) }).strict();
+const PlanPatch = z.object(planFieldDefs).partial().strict();
 
 // ---- overview ----
 const OverviewView = z

@@ -221,6 +221,31 @@ describe('reservation expiry sweeper', () => {
     expect(await item(h, s.a)).toMatchObject({ reservedQty: 2 });
   });
 
+  it('stuck rows back off instead of starving newer ones (more stuck rows than the batch)', async () => {
+    const stuck = [await setup(), await setup(), await setup()];
+    const newer = await setup();
+    for (const [i, s] of stuck.entries()) {
+      await past(s.checkoutId, (30 - i) * 60_000); // oldest first
+      h.orders.failIds.add(s.checkoutId);
+    }
+    await past(newer.checkoutId, 10 * 60_000);
+    h.orders.checkouts.set(newer.checkoutId, { id: newer.checkoutId, status: 'EXPIRED', paymentIntentId: null });
+    try {
+      const run1 = await sweepExpiredReservations(h.ctx, { batch: 2 });
+      expect(run1).toMatchObject({ skipped: 2, released: 0 });
+      const run2 = await sweepExpiredReservations(h.ctx, { batch: 2 });
+      expect(run2).toMatchObject({ skipped: 1, released: 1 }); // third stuck row + the newer row
+      expect((await reservation(newer.checkoutId))!.status).toBe('RELEASED');
+      const backedOff = (await reservation(stuck[0]!.checkoutId))!;
+      expect(backedOff.status).toBe('HELD');
+      expect(new Date(backedOff.nextCheckAt!).getTime()).toBeGreaterThan(Date.now());
+      const run3 = await sweepExpiredReservations(h.ctx, { batch: 2 });
+      expect(run3.skipped + run3.released + run3.committed + run3.extended).toBe(0); // all stuck rows backing off
+    } finally {
+      for (const s of stuck) h.orders.failIds.delete(s.checkoutId);
+    }
+  });
+
   it('marks lapsed ACTIVE memberships EXPIRED', async () => {
     const id = await seedActiveMembership(h, oid(), { endsAt: new Date(Date.now() - 1000) });
     await sweepExpiredReservations(h.ctx);

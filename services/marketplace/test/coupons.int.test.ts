@@ -128,6 +128,20 @@ describe('admin coupons CRUD', () => {
     expect((await request(h.app).get('/api/v1/admin/marketplace/coupons').set(bearer(await h.adminToken({ mfa: false })))).status).toBe(403);
   });
 
+  it('PATCH of one field leaves every other field unchanged (no defaults re-applied)', async () => {
+    const admin = await h.adminToken();
+    const c = await request(h.app)
+      .post('/api/v1/admin/marketplace/coupons')
+      .set(bearer(admin))
+      .send({ ...base, code: 'KEEPME1', active: false, totalLimit: 7, perUserLimit: 3, firstOrderOnly: true, minOrderPaise: 12345 });
+    expect(c.status).toBe(201);
+    const p = await request(h.app).patch(`/api/v1/admin/marketplace/coupons/${c.body.id}`).set(bearer(admin)).send({ description: 'Just the text' });
+    expect(p.status).toBe(200);
+    expect(p.body).toEqual({ ...c.body, description: 'Just the text' });
+    const unlimited = await request(h.app).patch(`/api/v1/admin/marketplace/coupons/${c.body.id}`).set(bearer(admin)).send({ totalLimit: null });
+    expect(unlimited.body).toEqual({ ...c.body, description: 'Just the text', totalLimit: null });
+  });
+
   it('validation: PERCENT needs valueBps, FLAT needs valuePaise, validTo after validFrom', async () => {
     const admin = await h.adminToken();
     const post = (b: Record<string, unknown>) => request(h.app).post('/api/v1/admin/marketplace/coupons').set(bearer(admin)).send(b);
