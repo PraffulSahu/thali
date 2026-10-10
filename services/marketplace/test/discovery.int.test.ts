@@ -188,12 +188,21 @@ describe('discovery filters, sorting, rating, search', () => {
     }
   });
 
-  it('paused restaurants are not listed', async () => {
-    await h3.models.Restaurant.updateOne({ _id: c }, { $set: { pausedUntil: new Date(Date.now() + 3600_000) } });
+  // ADR-34 (design overrules PRD C-2): paused restaurants are LISTED as "Not accepting orders", after open ones
+  it('paused restaurants are listed last with closedReason PAUSED; openNow excludes them', async () => {
+    const until = new Date(Date.now() + 3600_000);
+    await h3.models.Restaurant.updateOne({ _id: a }, { $set: { pausedUntil: until } });
     try {
-      expect(await ids({})).toEqual([a, b]);
+      expect(await ids({})).toEqual([b, c, a]);
+      const res = await request(h3.app).get('/api/v1/discovery/restaurants').query({ ...drop });
+      const alpha = res.body.items.find((i: { id: string }) => i.id === a);
+      expect(alpha).toMatchObject({ open: false, closedReason: 'PAUSED', acceptingOrders: false, pausedUntil: until.toISOString(), closesAt: null });
+      const bravo = res.body.items.find((i: { id: string }) => i.id === b);
+      expect(bravo).toMatchObject({ open: true, closedReason: null, acceptingOrders: true, pausedUntil: null });
+      expect(res.body.counts).toEqual({ total: 3, open: 2 });
+      expect(await ids({ openNow: 'true' })).toEqual([b, c]);
     } finally {
-      await h3.models.Restaurant.updateOne({ _id: c }, { $unset: { pausedUntil: 1 } });
+      await h3.models.Restaurant.updateOne({ _id: a }, { $unset: { pausedUntil: 1 } });
     }
   });
 

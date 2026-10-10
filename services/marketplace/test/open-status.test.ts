@@ -101,3 +101,30 @@ describe('isOpenAt (Review Focus #1: overnight hours + IST day boundary)', () =>
     expect(gap.nextOpenAt?.toISOString()).toBe(ist('2026-10-14T19:00:00').toISOString());
   });
 });
+
+describe('closesAtFor (MKT-12)', () => {
+  it('same-day slot: end of the slot', async () => {
+    const { closesAtFor } = await import('../src/domain/open-status.js');
+    const hours = [{ day: 1, open: '10:00', close: '23:30' }];
+    expect(closesAtFor(hours, ist('2026-10-12T13:30:00'))?.toISOString()).toBe(ist('2026-10-12T23:30:00').toISOString());
+    expect(closesAtFor(hours, ist('2026-10-12T09:00:00'))).toBeUndefined(); // closed now
+  });
+
+  it('overnight slot: closes after midnight (from either side of midnight)', async () => {
+    const { closesAtFor } = await import('../src/domain/open-status.js');
+    const hours = [{ day: 1, open: '18:00', close: '02:00' }];
+    expect(closesAtFor(hours, ist('2026-10-12T22:00:00'))?.toISOString()).toBe(ist('2026-10-13T02:00:00').toISOString());
+    expect(closesAtFor(hours, ist('2026-10-13T01:00:00'))?.toISOString()).toBe(ist('2026-10-13T02:00:00').toISOString());
+  });
+
+  it('contiguous slots merge; 24×7 never closes (undefined)', async () => {
+    const { closesAtFor } = await import('../src/domain/open-status.js');
+    const chained = [
+      { day: 1, open: '18:00', close: '00:00' },
+      { day: 2, open: '00:00', close: '03:00' },
+    ];
+    expect(closesAtFor(chained, ist('2026-10-12T20:00:00'))?.toISOString()).toBe(ist('2026-10-13T03:00:00').toISOString());
+    const allDay = [0, 1, 2, 3, 4, 5, 6].map((day) => ({ day, open: '00:00', close: '00:00' }));
+    expect(closesAtFor(allDay, ist('2026-10-12T20:00:00'))).toBeUndefined();
+  });
+});

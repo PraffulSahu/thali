@@ -89,6 +89,8 @@ export async function createHarness(name: string, env: Record<string, string> = 
     S3_SECRET_ACCESS_KEY: process.env.TEST_S3_SECRET_ACCESS_KEY ?? 'thali-dev-secret',
     S3_PUBLIC_BASE_URL: 'http://localhost:9000/thali-public',
     REQUIRED_DOCUMENT_TYPES: '',
+    // listing cache off by default (tests mutate Mongo directly); discovery-cache tests turn it on
+    DISCOVERY_CACHE_TTL_SEC: '0',
     ...env,
   });
   await ensureMarketplaceIndexes(db.conn);

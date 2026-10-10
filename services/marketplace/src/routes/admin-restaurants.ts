@@ -5,6 +5,8 @@ import { DomainError, RestaurantStatusSchema, type RestaurantStatus } from '@tha
 import { auditEvent, buildPage, cursorFilter, PAGE_SORT, requireAuth, validate, withTransaction } from '@thali/service-kit';
 import { Types } from 'mongoose';
 import type { AppContext, RouteModule } from '../context.js';
+import { bumpDiscoveryEpoch } from '../domain/discovery-cache.js';
+import { assertCanBePureVeg } from '../domain/onboarding.js';
 import { restaurantView, type RestaurantLean } from '../domain/restaurant-view.js';
 import { transitionRestaurant } from '../domain/transitions.js';
 import { API, json, OptionalReasonBody, ReasonBody, RestaurantIdParams, RestaurantView, userIdOf } from './common.js';
@@ -19,6 +21,7 @@ const ListQuery = z.object({
   cursor: z.string().max(200).optional(),
 });
 const DocParams = RestaurantIdParams.extend({ docId: z.string().min(1).max(64) });
+const AdminPatchBody = z.object({ pureVeg: z.boolean() }).strict().meta({ id: 'AdminRestaurantPatch' });
 
 type Action = 'approve' | 'reject' | 'suspend' | 'reinstate';
 const ACTIONS: Record<Action, { from: RestaurantStatus; to: RestaurantStatus; reasonRequired: boolean }> = {
@@ -36,6 +39,37 @@ const oid = (id: string) => {
 };
 
 async function act(ctx: AppContext, req: Request, id: string, action: Action, reason?: string) {
+  const out = await actTxn(ctx, req, id, action, reason);
+  await bumpDiscoveryEpoch(ctx.redis);
+  return out;
+}
+
+/** MKT-4 admin override of the pure-veg flag (same menu rule as the owner; audited). */
+async function setPureVeg(ctx: AppContext, req: Request, id: string, pureVeg: boolean) {
+  const out = await withTransaction(ctx.conn, async (session) => {
+    const doc = await ctx.models.Restaurant.findById(oid(id)).session(session);
+    if (!doc) throw notFound();
+    if (pureVeg && doc.pureVeg !== true) await assertCanBePureVeg(ctx, id, session);
+    const before = doc.pureVeg;
+    doc.pureVeg = pureVeg;
+    await doc.save({ session });
+    await auditEvent(ctx.conn, session, {
+      service: 'marketplace',
+      actorId: userIdOf(req),
+      actorRole: 'ADMIN',
+      action: 'restaurant.pure_veg_set',
+      targetType: 'restaurant',
+      targetId: String(doc._id),
+      summary: `pureVeg "${doc.name}": ${before ?? 'unset'} → ${pureVeg}`,
+      ip: req.ip,
+    });
+    return doc;
+  });
+  await bumpDiscoveryEpoch(ctx.redis);
+  return out;
+}
+
+async function actTxn(ctx: AppContext, req: Request, id: string, action: Action, reason?: string) {
   const rule = ACTIONS[action];
   const adminId = userIdOf(req);
   return withTransaction(ctx.conn, async (session) => {
@@ -68,7 +102,7 @@ async function act(ctx: AppContext, req: Request, id: string, action: Action, re
 export const adminRestaurantRoutes: RouteModule = {
   name: 'admin-restaurants',
   register(r, ctx) {
-    const view = (d: Parameters<typeof restaurantView>[0]) => restaurantView(d, ctx.storage);
+    const view = (d: Parameters<typeof restaurantView>[0]) => restaurantView(d, ctx.imageUrl);
 
     const vList = validate({ query: ListQuery });
     r.get(P, admin(), vList, async (req, res) => {
@@ -85,6 +119,12 @@ export const adminRestaurantRoutes: RouteModule = {
       const doc = await ctx.models.Restaurant.findById(oid(vId.get(req).params.id));
       if (!doc) throw notFound();
       res.json(view(doc));
+    });
+
+    const vPatch = validate({ params: RestaurantIdParams, body: AdminPatchBody });
+    r.patch(`${P}/:id`, admin(), vPatch, async (req, res) => {
+      const { params, body } = vPatch.get(req);
+      res.json(view(await setPureVeg(ctx, req, params.id, body.pureVeg)));
     });
 
     for (const action of Object.keys(ACTIONS) as Action[]) {
@@ -137,6 +177,12 @@ export const adminRestaurantRoutes: RouteModule = {
       responses: { 200: { description: 'Page', content: json(z.object({ items: z.array(RestaurantView), nextCursor: z.string().nullable() })) } }, errors: ['MFA_REQUIRED'],
     });
     api.route({ method: 'get', path: `${P}/:id`, tags, security: s, summary: 'Restaurant detail (documents, status history)', request: { params: RestaurantIdParams }, responses: { 200: { description: 'Restaurant', content: json(RestaurantView) } }, errors: ['NOT_FOUND', 'MFA_REQUIRED'] });
+    api.route({
+      method: 'patch', path: `${P}/:id`, tags, security: s, summary: 'Admin override of the pure-veg flag (422 PURE_VEG_VIOLATION while non-veg items exist; audited)',
+      request: { params: RestaurantIdParams, body: { content: json(AdminPatchBody) } },
+      responses: { 200: { description: 'Updated restaurant', content: json(RestaurantView) } },
+      errors: ['NOT_FOUND', 'PURE_VEG_VIOLATION', 'MFA_REQUIRED', 'CONCURRENT_MODIFICATION'],
+    });
     for (const [action, rule] of Object.entries(ACTIONS)) {
       api.route({
         method: 'post', path: `${P}/:id/${action}`, tags, security: s,

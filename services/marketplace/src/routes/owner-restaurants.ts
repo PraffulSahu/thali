@@ -42,6 +42,7 @@ export const ProfileBody = z
     hours: HoursSchema.optional(),
     packagingFeePaise: PaiseSchema.optional(),
     avgPrepMinutes: z.number().int().min(5).max(120).optional(),
+    pureVeg: z.boolean().optional().describe('Pure-veg kitchen (MKT-4). true is refused (422 PURE_VEG_VIOLATION, details.itemIds/optionIds) while non-veg items or options exist.'),
     images: z.object({ cover: ImageKey, logo: ImageKey }).strict().optional(),
   })
   .strict()
@@ -71,7 +72,7 @@ const P = `${API}/owner/restaurants`;
 export const ownerRestaurantRoutes: RouteModule = {
   name: 'owner-restaurants',
   register(r, ctx) {
-    const view = (d: Parameters<typeof restaurantView>[0]) => restaurantView(d, ctx.storage);
+    const view = (d: Parameters<typeof restaurantView>[0]) => restaurantView(d, ctx.imageUrl);
     const vId = validate({ params: RestaurantIdParams });
 
     const vCreate = validate({ body: CreateBody });
@@ -154,7 +155,7 @@ export const ownerRestaurantRoutes: RouteModule = {
     api.route({
       method: 'patch', path: `${P}/:id`, tags, security: 'bearer',
       summary: 'Update profile. Changing businessEmail resets verification (back to VERIFICATION_PENDING if not yet approved). Image keys must come from the uploads presign and pass content verification.',
-      request: { params, body: { content: json(ProfileBody) } }, responses: R, errors: ['NOT_FOUND', 'FILE_INVALID', 'CONCURRENT_MODIFICATION'],
+      request: { params, body: { content: json(ProfileBody) } }, responses: R, errors: ['NOT_FOUND', 'FILE_INVALID', 'CONCURRENT_MODIFICATION', 'PURE_VEG_VIOLATION'],
     });
     api.route({
       method: 'post', path: `${P}/:id/submit`, tags, security: 'bearer',

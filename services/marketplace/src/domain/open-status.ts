@@ -144,3 +144,56 @@ export function isOpenAt(restaurant: OpenStatusInput, date: Date): OpenStatus {
   const next = nextSlotStart(hours, date, tz);
   return next ? { open: false, reason: 'OUTSIDE_HOURS', nextOpenAt: next } : { open: false, reason: 'OUTSIDE_HOURS' };
 }
+
+/** Latest end among the slots that contain `t` (slot = [start, start + duration)), or undefined. */
+function slotEndContaining(hours: HoursSlot[], t: Date, tz: string): Date | undefined {
+  const p = localParts(t, tz);
+  let best: Date | undefined;
+  for (const k of [-1, 0]) {
+    const day = new Date(Date.UTC(p.y, p.mo - 1, p.d + k));
+    const dow = day.getUTCDay();
+    for (const s of hours) {
+      if (s.day !== dow) continue;
+      const o = toMin(s.open);
+      const c = toMin(s.close);
+      const dur = o < c ? c - o : 1440 - o + c; // overnight; equal → 24 h
+      const start = zonedToUtc(day.getUTCFullYear(), day.getUTCMonth() + 1, day.getUTCDate(), o, tz);
+      const end = new Date(start.getTime() + dur * 60_000);
+      if (start.getTime() <= t.getTime() && t.getTime() < end.getTime() && (!best || end > best)) best = end;
+    }
+  }
+  return best;
+}
+
+/**
+ * MKT-12: when the current open period ends (contiguous slots merged, overnight aware), or undefined
+ * when the hours are closed at `date` or never close within the next 8 days (e.g. 24×7).
+ */
+export function closesAtFor(hours: HoursSlot[], date: Date, tz = DEFAULT_TIMEZONE): Date | undefined {
+  if (!hours.length || !isWithinHours(hours, date, tz)) return undefined;
+  const horizon = date.getTime() + 8 * 86_400_000;
+  let t = date;
+  for (let i = 0; i < 64; i++) {
+    const end = slotEndContaining(hours, t, tz);
+    if (!end || end.getTime() <= t.getTime()) return undefined;
+    if (end.getTime() > horizon) return undefined;
+    if (!isWithinHours(hours, end, tz)) return end;
+    t = end;
+  }
+  return undefined;
+}
+
+/** Discovery/page status block (MKT-3, MKT-12). `closedReason` null when open. */
+export function statusBlock(restaurant: OpenStatusInput, date: Date) {
+  const s = isOpenAt(restaurant, date);
+  const paused = restaurant.pausedUntil && restaurant.pausedUntil.getTime() > date.getTime() ? restaurant.pausedUntil : null;
+  const closesAt = s.open ? closesAtFor(restaurant.hours ?? [], date, restaurant.timezone || DEFAULT_TIMEZONE) : undefined;
+  return {
+    open: s.open,
+    closedReason: (s.open ? null : (s.reason ?? null)) as ClosedReason | null,
+    nextOpenAt: s.nextOpenAt ?? null,
+    pausedUntil: paused,
+    acceptingOrders: s.open,
+    closesAt: closesAt ?? null,
+  };
+}

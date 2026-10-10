@@ -24,14 +24,19 @@ export const DiscoveryItemView = z
     slug: z.string(),
     name: z.string(),
     cuisines: z.array(z.string()),
+    locality: z.string().nullable().describe('Neighbourhood, e.g. "Indiranagar" (MKT-5)'),
     imageUrl: z.string().nullable(),
-    isVeg: z.enum(['PURE_VEG', 'MIXED']).optional(),
-    open: z.boolean(),
+    isVeg: z.enum(['PURE_VEG', 'MIXED']).optional().describe('From the declared pureVeg flag (else the whole menu); absent when the menu is empty'),
+    open: z.boolean().describe('Within hours and not paused'),
     nextOpenAt: z.string().optional(),
-    distanceKm: z.number().describe('Road distance estimate from the geo provider'),
+    closedReason: z.enum(['PAUSED', 'OUTSIDE_HOURS']).nullable().describe('PAUSED = "Not accepting orders" (MKT-3); null when open'),
+    pausedUntil: z.string().nullable(),
+    acceptingOrders: z.boolean().describe('An order can be placed right now (= open)'),
+    closesAt: z.string().nullable().describe('End of the current open period (overnight aware); null when closed or open around the clock (MKT-12)'),
+    distanceKm: z.number().describe('Road distance estimate (haversine × road factor)'),
     deliveryFeePaise: z.number().int(),
     etaMinutes: z.number().int().describe('avgPrepMinutes + travel estimate'),
-    etaSource: z.enum(['GOOGLE', 'DEMO_HAVERSINE', 'HAVERSINE_FALLBACK']).describe('DEMO_HAVERSINE = demo estimate (label it in the UI)'),
+    etaSource: z.enum(['GOOGLE', 'DEMO_HAVERSINE', 'HAVERSINE_FALLBACK']).describe('Listing estimates are haversine (DEMO_HAVERSINE in demo, HAVERSINE_FALLBACK in production) — label them EST.'),
     rating: RatingView,
     priceBand: z.number().int().min(1).max(3).nullable(),
     isDemo: z.boolean(),
@@ -39,6 +44,12 @@ export const DiscoveryItemView = z
   })
   .meta({ id: 'DiscoveryRestaurant' });
 const AreaView = z.object({ id: z.string(), name: z.string(), minOrderPaise: z.number().int() }).meta({ id: 'ServiceAreaSummary' });
+const Counts = z
+  .object({ total: z.number().int(), open: z.number().int() })
+  .describe('MKT-2: after q/veg/price/cuisine filters, before openNow and pagination ("4 open now · 6 deliver here")');
+const Facets = z
+  .object({ cuisines: z.array(z.object({ slug: z.string(), count: z.number().int() })) })
+  .describe('MKT-11: restaurants per cuisine slug after q/veg/price filters (cuisine and openNow filters not applied)');
 
 const D = `${API}/discovery`;
 
@@ -65,12 +76,12 @@ export const discoveryRoutes: RouteModule = {
     const tags = ['discovery'];
     api.route({
       method: 'get', path: `${D}/restaurants`, tags, rateLimited: true,
-      summary: 'Restaurants that deliver to the drop point (APPROVED, not paused, drop in an active service area and within the restaurant radius)',
+      summary: 'Restaurants that deliver to the drop point (APPROVED, drop in an active service area and within the restaurant radius). Paused restaurants are listed with closedReason PAUSED; open restaurants sort first.',
       request: { query: DiscoveryQuery },
       responses: {
         200: {
           description: 'Deliverable restaurants. Drop outside every active area → { items: [], serviceable: false }.',
-          content: json(z.object({ items: z.array(DiscoveryItemView), nextCursor: z.string().nullable(), serviceable: z.boolean(), serviceArea: AreaView.nullable() })),
+          content: json(z.object({ items: z.array(DiscoveryItemView), nextCursor: z.string().nullable(), serviceable: z.boolean(), serviceArea: AreaView.nullable(), counts: Counts, facets: Facets })),
         },
       },
     });

@@ -5,11 +5,16 @@
  */
 import { DomainError } from '@thali/contracts';
 import { withTransaction } from '@thali/service-kit';
-import { Types } from 'mongoose';
+import { Types, type ClientSession } from 'mongoose';
 import type { AppContext } from '../context.js';
 import type { MenuItemDoc } from '../models/menu-item.js';
+import { bumpDiscoveryEpoch } from './discovery-cache.js';
+import { recomputeMenuStats } from './menu-stats.js';
 import { findOwned, restaurantPrefix } from './onboarding.js';
 import { verifyAttachment } from './uploads.js';
+
+/** MKT-9: at most this many "Recommended" items per restaurant. */
+export const MAX_FEATURED_ITEMS = 6;
 
 export interface OptionInput { id?: string; name: string; pricePaise: number; isVeg: boolean; available?: boolean }
 export interface GroupInput { id?: string; name: string; minSelect: number; maxSelect: number; options: OptionInput[] }
@@ -25,6 +30,7 @@ export interface ItemInput {
   stockQty?: number;
   customizationGroups?: GroupInput[];
   tags?: string[];
+  featured?: boolean;
 }
 
 type ItemLean = MenuItemDoc & { _id: Types.ObjectId; createdAt?: Date; updatedAt?: Date };
@@ -45,8 +51,9 @@ export function itemOwnerView(ctx: AppContext, i: ItemLean) {
     pricePaise: i.pricePaise,
     isVeg: i.isVeg,
     imageKey: i.imageKey ?? null,
-    imageUrl: i.imageKey ? ctx.storage.publicUrl(i.imageKey) : null,
+    imageUrl: ctx.imageUrl(i.imageKey),
     available: !!i.available,
+    featured: !!i.featured,
     trackStock: !!i.trackStock,
     stockQty: i.stockQty ?? 0,
     reservedQty: i.reservedQty ?? 0,
@@ -87,6 +94,38 @@ const toGroups = (groups: GroupInput[]) =>
       available: o.available ?? true,
     })),
   }));
+
+/** MKT-4: a pure-veg restaurant cannot carry a non-veg item or option. */
+function assertPureVeg(pureVeg: boolean | null | undefined, item: { id?: string; isVeg?: boolean; customizationGroups?: { options: { id?: string; isVeg: boolean }[] }[] }) {
+  if (pureVeg !== true) return;
+  if (item.isVeg === false) {
+    throw new DomainError('PURE_VEG_VIOLATION', 'This is a pure-veg restaurant: non-veg items are not allowed', undefined, item.id ? { itemId: item.id } : {});
+  }
+  for (const g of item.customizationGroups ?? []) {
+    const bad = g.options.find((o) => o.isVeg === false);
+    if (bad) {
+      throw new DomainError('PURE_VEG_VIOLATION', 'This is a pure-veg restaurant: non-veg options are not allowed', undefined, {
+        ...(item.id ? { itemId: item.id } : {}),
+        ...(bad.id ? { optionId: bad.id } : {}),
+      });
+    }
+  }
+}
+
+/** MKT-9: featured cap, checked inside the write transaction. */
+async function assertFeaturedCap(ctx: AppContext, session: ClientSession, rid: string, exceptItemId?: Types.ObjectId) {
+  const filter: Record<string, unknown> = { restaurantId: new Types.ObjectId(rid), featured: true };
+  if (exceptItemId) filter._id = { $ne: exceptItemId };
+  const n = await ctx.models.MenuItem.countDocuments(filter).session(session);
+  if (n >= MAX_FEATURED_ITEMS) {
+    throw new DomainError('VALIDATION_FAILED', `At most ${MAX_FEATURED_ITEMS} items can be recommended`, undefined, {
+      issues: [{ path: 'body.featured', message: `At most ${MAX_FEATURED_ITEMS} recommended items per restaurant` }],
+    });
+  }
+}
+
+/** Every menu write ends here: stats in the same transaction (MKT-13). */
+const syncStats = (ctx: AppContext, rid: string, session: ClientSession) => recomputeMenuStats(ctx.conn, rid, session);
 
 // ---- categories ----
 export async function listCategories(ctx: AppContext, rid: string, userId: string) {
@@ -145,10 +184,13 @@ export async function getItem(ctx: AppContext, rid: string, userId: string, item
 }
 
 export async function createItem(ctx: AppContext, rid: string, userId: string, input: ItemInput & { categoryId: string; name: string; pricePaise: number; isVeg: boolean }) {
-  await findOwned(ctx, rid, userId);
+  const restaurant = await findOwned(ctx, rid, userId);
+  assertPureVeg(restaurant.pureVeg, input);
   await assertCategory(ctx, rid, input.categoryId);
   await assertImage(ctx, rid, input.imageKey);
-  const doc = await ctx.models.MenuItem.create({
+  const created = await withTransaction(ctx.conn, async (session) => {
+    if (input.featured) await assertFeaturedCap(ctx, session, rid);
+    const [doc] = await ctx.models.MenuItem.create([{
     restaurantId: rid,
     categoryId: input.categoryId,
     name: input.name,
@@ -162,21 +204,32 @@ export async function createItem(ctx: AppContext, rid: string, userId: string, i
     reservedQty: 0,
     customizationGroups: toGroups(input.customizationGroups ?? []),
     tags: input.tags ?? [],
+    featured: input.featured ?? false,
+    }], { session });
+    await syncStats(ctx, rid, session);
+    return doc!;
   });
-  return itemOwnerView(ctx, doc.toObject() as ItemLean);
+  await bumpDiscoveryEpoch(ctx.redis);
+  return itemOwnerView(ctx, created.toObject() as ItemLean);
 }
 
 export async function updateItem(ctx: AppContext, rid: string, userId: string, itemId: string, input: ItemInput) {
-  await findOwned(ctx, rid, userId);
+  const restaurant = await findOwned(ctx, rid, userId);
   const _id = oid(itemId);
   const before = await ctx.models.MenuItem.findOne({ _id, restaurantId: rid }).lean<ItemLean>();
   if (!before) throw notFound();
+  assertPureVeg(restaurant.pureVeg, {
+    id: itemId,
+    isVeg: input.isVeg ?? before.isVeg,
+    customizationGroups: input.customizationGroups ?? (before.customizationGroups ?? []).map((g) => ({ options: (g.options ?? []).map((o) => ({ id: String((o as { _id?: unknown })._id), isVeg: o.isVeg })) })),
+  });
   if (input.categoryId) await assertCategory(ctx, rid, input.categoryId);
   await assertImage(ctx, rid, input.imageKey, before.imageKey); // storage I/O stays outside the txn
   const { customizationGroups, imageKey, stockQty, ...rest } = input;
   const updated = await withTransaction(ctx.conn, async (session) => {
     const doc = await ctx.models.MenuItem.findOne({ _id, restaurantId: rid }).session(session);
     if (!doc) throw notFound();
+    if (rest.featured && !doc.featured) await assertFeaturedCap(ctx, session, rid, _id);
     doc.set(rest);
     if (imageKey === null) doc.set('imageKey', undefined);
     else if (imageKey !== undefined) doc.set('imageKey', imageKey);
@@ -194,15 +247,22 @@ export async function updateItem(ctx: AppContext, rid: string, userId: string, i
         throw new DomainError('CONFLICT', `stockQty cannot be below the reserved quantity (${live?.reservedQty ?? 0})`);
       }
     }
+    await syncStats(ctx, rid, session);
     return ctx.models.MenuItem.findById(_id).session(session).lean<ItemLean>();
   });
+  await bumpDiscoveryEpoch(ctx.redis);
   return itemOwnerView(ctx, updated!);
 }
 
 export async function deleteItem(ctx: AppContext, rid: string, userId: string, itemId: string) {
   await findOwned(ctx, rid, userId);
-  const r = await ctx.models.MenuItem.deleteOne({ _id: oid(itemId), restaurantId: rid });
-  if (!r.deletedCount) throw notFound();
+  const _id = oid(itemId);
+  await withTransaction(ctx.conn, async (session) => {
+    const r = await ctx.models.MenuItem.deleteOne({ _id, restaurantId: rid }, { session });
+    if (!r.deletedCount) throw notFound();
+    await syncStats(ctx, rid, session);
+  });
+  await bumpDiscoveryEpoch(ctx.redis);
 }
 
 /**
@@ -227,11 +287,16 @@ export async function setAvailability(
   }
   const filter: Record<string, unknown> = { _id, restaurantId: rid };
   if (input.stockQty !== undefined) filter.$expr = { $gte: [input.stockQty, '$reservedQty'] };
-  const updated = await ctx.models.MenuItem.findOneAndUpdate(filter, { $set, $inc: { __v: 1 } }, { new: true }).lean<ItemLean>();
-  if (!updated) {
-    const existing = await ctx.models.MenuItem.findOne({ _id, restaurantId: rid }).lean<ItemLean>();
-    if (!existing) throw notFound();
-    throw new DomainError('CONFLICT', `stockQty cannot be below the reserved quantity (${existing.reservedQty})`);
-  }
+  const updated = await withTransaction(ctx.conn, async (session) => {
+    const doc = await ctx.models.MenuItem.findOneAndUpdate(filter, { $set, $inc: { __v: 1 } }, { new: true, session }).lean<ItemLean>();
+    if (!doc) {
+      const existing = await ctx.models.MenuItem.findOne({ _id, restaurantId: rid }).session(session).lean<ItemLean>();
+      if (!existing) throw notFound();
+      throw new DomainError('CONFLICT', `stockQty cannot be below the reserved quantity (${existing.reservedQty})`);
+    }
+    if (input.available !== undefined) await syncStats(ctx, rid, session);
+    return doc;
+  });
+  await bumpDiscoveryEpoch(ctx.redis);
   return itemOwnerView(ctx, updated);
 }

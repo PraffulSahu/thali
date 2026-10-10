@@ -8,6 +8,7 @@ import { auditEvent, encryptField, withTransaction } from '@thali/service-kit';
 import { Types } from 'mongoose';
 import type { AppContext } from '../context.js';
 import { emitRestaurantSubmitted, emitRestaurantUpdated } from '../events/restaurant-events.js';
+import { bumpDiscoveryEpoch } from './discovery-cache.js';
 import { issueVerification } from './email-verification.js';
 import type { RestaurantHydrated } from './restaurant-view.js';
 import { transitionRestaurant } from './transitions.js';
@@ -21,12 +22,13 @@ export interface ProfileInput {
   cuisines?: string[];
   phone?: string;
   businessEmail?: string;
-  address?: { line1: string; line2?: string; city: string; pincode: string };
+  address?: { line1: string; line2?: string; locality?: string; city: string; pincode: string };
   location?: { lat: number; lng: number };
   deliveryRadiusKm?: number;
   hours?: HoursSlot[];
   packagingFeePaise?: number;
   avgPrepMinutes?: number;
+  pureVeg?: boolean;
   images?: { cover?: string | null; logo?: string | null };
 }
 
@@ -56,7 +58,7 @@ export async function findOwned(ctx: AppContext, id: string, ownerUserId: string
 }
 
 function applyProfile(doc: RestaurantHydrated, p: ProfileInput) {
-  const simple = ['businessName', 'name', 'description', 'cuisines', 'phone', 'deliveryRadiusKm', 'packagingFeePaise', 'avgPrepMinutes'] as const;
+  const simple = ['businessName', 'name', 'description', 'cuisines', 'phone', 'deliveryRadiusKm', 'packagingFeePaise', 'avgPrepMinutes', 'pureVeg'] as const;
   for (const k of simple) if (p[k] !== undefined) doc.set(k, p[k]);
   if (p.address) doc.set('address', p.address);
   if (p.location) doc.set('location', { type: 'Point', coordinates: [p.location.lng, p.location.lat] });
@@ -90,8 +92,35 @@ export async function createRestaurant(ctx: AppContext, ownerUserId: string, inp
   throw new DomainError('CONFLICT', 'Could not allocate a slug');
 }
 
+/**
+ * MKT-4: refuse `pureVeg = true` while the menu has non-veg items or options (any availability).
+ * 422 PURE_VEG_VIOLATION `{ itemIds, optionIds }` (first 50 each).
+ */
+export async function assertCanBePureVeg(ctx: AppContext, restaurantId: string, session?: import('mongoose').ClientSession) {
+  const rid = new Types.ObjectId(restaurantId);
+  const q = ctx.models.MenuItem.find(
+    { restaurantId: rid, $or: [{ isVeg: false }, { 'customizationGroups.options.isVeg': false }] },
+    { isVeg: 1, customizationGroups: 1 },
+  ).limit(50);
+  if (session) q.session(session);
+  const bad = await q.lean();
+  if (!bad.length) return;
+  const itemIds = bad.filter((i) => i.isVeg === false).map((i) => String(i._id));
+  const optionIds = bad.flatMap((i) => (i.customizationGroups ?? []).flatMap((g) => (g.options ?? []).filter((o) => o.isVeg === false).map((o) => String((o as { _id?: unknown })._id))));
+  throw new DomainError('PURE_VEG_VIOLATION', 'Remove or change the non-veg items and options before marking this restaurant pure veg', undefined, {
+    itemIds,
+    optionIds: optionIds.slice(0, 50),
+  });
+}
+
 /** Owner PATCH. Changing businessEmail resets verification (LLD 4.6). Emits `restaurant.updated`. */
 export async function updateRestaurant(ctx: AppContext, id: string, ownerUserId: string, patch: ProfileInput) {
+  const out = await updateRestaurantTxn(ctx, id, ownerUserId, patch);
+  await bumpDiscoveryEpoch(ctx.redis);
+  return out;
+}
+
+async function updateRestaurantTxn(ctx: AppContext, id: string, ownerUserId: string, patch: ProfileInput) {
   const current = await findOwned(ctx, id, ownerUserId);
   // verify newly referenced images before the transaction (storage I/O)
   for (const k of ['cover', 'logo'] as const) {
@@ -103,6 +132,7 @@ export async function updateRestaurant(ctx: AppContext, id: string, ownerUserId:
   return withTransaction(ctx.conn, async (session) => {
     const doc = await findOwned(ctx, id, ownerUserId, session);
     const { businessEmail, ...rest } = patch;
+    if (rest.pureVeg === true && doc.pureVeg !== true) await assertCanBePureVeg(ctx, id, session);
     applyProfile(doc, rest);
     if (businessEmail !== undefined && businessEmail !== doc.businessEmail) {
       doc.businessEmail = businessEmail;
@@ -206,6 +236,7 @@ export async function setHours(ctx: AppContext, id: string, ownerUserId: string,
   const doc = await findOwned(ctx, id, ownerUserId);
   doc.set('hours', hours);
   await doc.save();
+  await bumpDiscoveryEpoch(ctx.redis);
   return doc;
 }
 
@@ -213,6 +244,7 @@ export async function setPause(ctx: AppContext, id: string, ownerUserId: string,
   const doc = await findOwned(ctx, id, ownerUserId);
   doc.set('pausedUntil', minutes === null ? undefined : new Date(ctx.now().getTime() + minutes * 60_000));
   await doc.save();
+  await bumpDiscoveryEpoch(ctx.redis);
   return doc;
 }
 

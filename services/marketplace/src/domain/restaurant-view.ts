@@ -1,6 +1,5 @@
 /** API views of restaurants (no token hashes, no encrypted settlement data). */
 import type { HydratedDocument } from 'mongoose';
-import type { StorageProvider } from '@thali/service-kit';
 import type { RestaurantDoc } from '../models/restaurant.js';
 import { toLatLng } from './serviceability.js';
 
@@ -15,8 +14,17 @@ export function ratingOf(r: { ratingSum?: number | null; ratingCount?: number | 
   return { average: Math.round(((r.ratingSum ?? 0) / count) * 10) / 10, count };
 }
 
+/** Image ref → public URL (`ctx.imageUrl`, MKT-10 `resolveImageUrl`). */
+export type ImageUrlFn = (ref: string | null | undefined) => string | null;
+
+/** `address` view incl. MKT-5 `locality` (omitted when unset). */
+export function addressView(a: RestaurantLean['address']) {
+  if (!a?.line1) return null;
+  return { line1: a.line1, ...(a.line2 ? { line2: a.line2 } : {}), ...(a.locality ? { locality: a.locality } : {}), city: a.city!, pincode: a.pincode! };
+}
+
 /** Owner / admin view of a restaurant. */
-export function restaurantView(input: RestaurantHydrated | RestaurantLean, storage: StorageProvider) {
+export function restaurantView(input: RestaurantHydrated | RestaurantLean, imageUrl: ImageUrlFn) {
   const r = ('toObject' in input && typeof input.toObject === 'function' ? input.toObject() : input) as RestaurantLean;
   return {
     id: String(r._id),
@@ -42,7 +50,7 @@ export function restaurantView(input: RestaurantHydrated | RestaurantLean, stora
     emailVerification: r.emailVerification && !r.emailVerification.usedAt
       ? { sentAt: iso(r.emailVerification.sentAt), expiresAt: iso(r.emailVerification.expiresAt) }
       : null,
-    address: r.address ? { line1: r.address.line1, ...(r.address.line2 ? { line2: r.address.line2 } : {}), city: r.address.city, pincode: r.address.pincode } : null,
+    address: addressView(r.address),
     location: r.location?.coordinates?.length === 2 ? toLatLng(r.location) : null,
     deliveryRadiusKm: r.deliveryRadiusKm ?? 6,
     hours: (r.hours ?? []).map((s) => ({ day: s.day, open: s.open, close: s.close })),
@@ -51,8 +59,8 @@ export function restaurantView(input: RestaurantHydrated | RestaurantLean, stora
     images: {
       cover: r.images?.cover ?? null,
       logo: r.images?.logo ?? null,
-      coverUrl: r.images?.cover ? storage.publicUrl(r.images.cover) : null,
-      logoUrl: r.images?.logo ? storage.publicUrl(r.images.logo) : null,
+      coverUrl: imageUrl(r.images?.cover),
+      logoUrl: imageUrl(r.images?.logo),
     },
     documents: (r.documents ?? []).map((d) => ({
       id: String((d as { _id?: unknown })._id),
@@ -62,6 +70,7 @@ export function restaurantView(input: RestaurantHydrated | RestaurantLean, stora
       uploadedAt: iso(d.uploadedAt),
     })),
     settlement: r.settlement?.last4 ? { accountHolder: r.settlement.accountHolder, ifsc: r.settlement.ifsc, last4: r.settlement.last4 } : null,
+    pureVeg: r.pureVeg === true,
     packagingFeePaise: r.packagingFeePaise ?? 0,
     avgPrepMinutes: r.avgPrepMinutes ?? 20,
     commissionBps: r.commissionBps ?? 1800,

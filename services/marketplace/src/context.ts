@@ -36,6 +36,10 @@ export interface MarketplaceDeps {
 export interface AppContext extends Omit<MarketplaceDeps, 'now'> {
   models: Models;
   now: () => Date;
+  /** Allowlisted external image hosts (EXTERNAL_IMAGE_HOSTS, parsed once). */
+  imageHosts: readonly string[];
+  /** MKT-10: image ref (storage key or allowlisted https URL) → public URL, or null. */
+  imageUrl: (ref: string | null | undefined) => string | null;
 }
 
 /**

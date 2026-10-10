@@ -29,7 +29,8 @@ export const restaurantSchema = new Schema(
       type: new Schema({ windowStart: { type: Date, required: true }, count: { type: Number, required: true }, lastSentAt: { type: Date, required: true } }, { _id: false }),
     },
     address: {
-      type: new Schema({ line1: String, line2: String, city: String, pincode: String }, { _id: false }),
+      // MKT-5: `locality` = neighbourhood shown next to the name ("Indiranagar")
+      type: new Schema({ line1: String, line2: String, locality: String, city: String, pincode: String }, { _id: false }),
     },
     location: { type: PointSchema },
     deliveryRadiusKm: { type: Number, default: 6 },
@@ -61,16 +62,37 @@ export const restaurantSchema = new Schema(
         { _id: false },
       ),
     },
+    /**
+     * MKT-4: owner-declared pure-veg kitchen (admin can override). No default on purpose: restaurants that
+     * never declared it are classified from their whole menu (`effectivePureVeg`).
+     */
+    pureVeg: { type: Boolean },
     packagingFeePaise: { type: Number, default: 0, min: 0 },
     avgPrepMinutes: { type: Number, default: 20, min: 1 },
     commissionBps: { type: Number, default: 1800, min: 0, max: 10000 },
     ratingSum: { type: Number, default: 0 },
     ratingCount: { type: Number, default: 0 },
     isDemo: { type: Boolean, default: false },
+    /** MKT-13: denormalised menu numbers (domain/menu-stats.ts), written in the menu-write transaction. */
+    menuStats: {
+      type: new Schema(
+        {
+          itemCount: { type: Number, default: 0 },
+          availableItemCount: { type: Number, default: 0 },
+          nonVegCount: { type: Number, default: 0 },
+          avgItemPricePaise: { type: Number, default: null },
+          priceBand: { type: Number, default: null },
+          updatedAt: { type: Date },
+        },
+        { _id: false },
+      ),
+    },
   },
   { timestamps: true, optimisticConcurrency: true, collection: 'restaurants' },
 );
 restaurantSchema.index({ location: '2dsphere' });
+/** MKT-13: discovery candidate query (`status: 'APPROVED'` + `$geoWithin`). */
+restaurantSchema.index({ status: 1, location: '2dsphere' });
 restaurantSchema.index({ status: 1, createdAt: -1, _id: -1 });
 restaurantSchema.index({ name: 'text', cuisines: 'text', description: 'text' });
 restaurantSchema.index({ 'emailVerification.tokenHash': 1 }, { sparse: true });

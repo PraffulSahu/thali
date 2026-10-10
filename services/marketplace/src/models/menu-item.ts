@@ -30,13 +30,17 @@ export const menuItemSchema = new Schema(
     reservedQty: { type: Number, default: 0, min: 0 },
     customizationGroups: { type: [groupSchema], default: [] },
     tags: { type: [String], default: [] },
+    /** MKT-9: owner-picked "Recommended" dish (≤ MAX_FEATURED_ITEMS per restaurant). */
+    featured: { type: Boolean, default: false },
     /** Demo seed data (APP_MODE=demo). */
     isDemo: { type: Boolean, default: false },
   },
   { timestamps: true, optimisticConcurrency: true, collection: 'menu_items' },
 );
 menuItemSchema.index({ restaurantId: 1, categoryId: 1 });
+/** Discovery item search (MKT-13: `$text` + `restaurantId $in`). */
 menuItemSchema.index({ name: 'text', description: 'text', tags: 'text' });
+menuItemSchema.index({ restaurantId: 1, featured: 1 });
 
 export type MenuItemDoc = InferSchemaType<typeof menuItemSchema>;
 export type MenuItemModel = Model<MenuItemDoc>;

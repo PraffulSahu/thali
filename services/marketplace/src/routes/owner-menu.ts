@@ -51,6 +51,7 @@ const ItemFields = {
   stockQty: z.number().int().min(0).optional(),
   customizationGroups: z.array(CustomizationGroupInput).max(10).optional(),
   tags: z.array(z.string().trim().min(1).max(30)).max(10).optional(),
+  featured: z.boolean().optional().describe('Show in "Recommended" (max 6 per restaurant → 422 VALIDATION_FAILED)'),
 };
 const ItemCreateBody = z.object(ItemFields).strict().meta({ id: 'MenuItemCreate' });
 const ItemPatchBody = z.object(ItemFields).partial().strict().meta({ id: 'MenuItemPatch' });
@@ -78,6 +79,7 @@ const OwnerItemView = z
     imageKey: z.string().nullable(),
     imageUrl: z.string().nullable(),
     available: z.boolean(),
+    featured: z.boolean(),
     trackStock: z.boolean(),
     stockQty: z.number(),
     reservedQty: z.number(),
@@ -160,9 +162,9 @@ export const ownerMenuRoutes: RouteModule = {
     api.route({ method: 'patch', path: `${P}/categories/:categoryId`, tags, security: s, summary: 'Update category', request: { params: CatParams, body: { content: json(CategoryPatchBody) } }, responses: { 200: { description: 'Updated', content: json(CategoryView) } }, errors: [...nf] });
     api.route({ method: 'delete', path: `${P}/categories/:categoryId`, tags, security: s, summary: 'Delete an empty category', request: { params: CatParams }, responses: { 204: { description: 'Deleted' } }, errors: ['NOT_FOUND', 'CONFLICT'] });
     api.route({ method: 'get', path: `${P}/items`, tags, security: s, summary: 'List items', request: { params: RestaurantIdParams, query: ItemsQuery }, responses: { 200: { description: 'Items', content: json(z.object({ items: z.array(OwnerItemView) })) } }, errors: [...nf] });
-    api.route({ method: 'post', path: `${P}/items`, tags, security: s, summary: 'Create item (customization groups: minSelect ≤ maxSelect ≤ options.length)', request: { params: RestaurantIdParams, body: { content: json(ItemCreateBody) } }, responses: { 201: { description: 'Created', content: json(OwnerItemView) } }, errors: ['NOT_FOUND', 'FILE_INVALID'] });
+    api.route({ method: 'post', path: `${P}/items`, tags, security: s, summary: 'Create item (customization groups: minSelect ≤ maxSelect ≤ options.length). Pure-veg restaurants reject non-veg items/options (422 PURE_VEG_VIOLATION).', request: { params: RestaurantIdParams, body: { content: json(ItemCreateBody) } }, responses: { 201: { description: 'Created', content: json(OwnerItemView) } }, errors: ['NOT_FOUND', 'FILE_INVALID', 'PURE_VEG_VIOLATION', 'VALIDATION_FAILED'] });
     api.route({ method: 'get', path: `${P}/items/:itemId`, tags, security: s, summary: 'Get item', request: { params: ItemParams }, responses: { 200: { description: 'Item', content: json(OwnerItemView) } }, errors: [...nf] });
-    api.route({ method: 'patch', path: `${P}/items/:itemId`, tags, security: s, summary: 'Update item (send existing group/option ids to keep them stable)', request: { params: ItemParams, body: { content: json(ItemPatchBody) } }, responses: { 200: { description: 'Updated', content: json(OwnerItemView) } }, errors: ['NOT_FOUND', 'CONFLICT', 'FILE_INVALID', 'CONCURRENT_MODIFICATION'] });
+    api.route({ method: 'patch', path: `${P}/items/:itemId`, tags, security: s, summary: 'Update item (send existing group/option ids to keep them stable). Pure-veg restaurants reject non-veg items/options (422 PURE_VEG_VIOLATION).', request: { params: ItemParams, body: { content: json(ItemPatchBody) } }, responses: { 200: { description: 'Updated', content: json(OwnerItemView) } }, errors: ['NOT_FOUND', 'CONFLICT', 'FILE_INVALID', 'CONCURRENT_MODIFICATION', 'PURE_VEG_VIOLATION', 'VALIDATION_FAILED'] });
     api.route({ method: 'patch', path: `${P}/items/:itemId/availability`, tags, security: s, summary: 'Toggle availability / set tracked stock (cannot go below reserved)', request: { params: ItemParams, body: { content: json(AvailabilityBody) } }, responses: { 200: { description: 'Updated', content: json(OwnerItemView) } }, errors: ['NOT_FOUND', 'CONFLICT'] });
     api.route({ method: 'delete', path: `${P}/items/:itemId`, tags, security: s, summary: 'Delete item', request: { params: ItemParams }, responses: { 204: { description: 'Deleted' } }, errors: [...nf] });
   },

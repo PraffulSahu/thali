@@ -256,6 +256,8 @@ describe('restaurant onboarding', () => {
       commissionBps: 1800,
       packagingFeePaise: 0,
       avgPrepMinutes: 20,
+      pureVeg: false, // no menu yet, not declared
+      images: { coverUrl: null, logoUrl: null },
     });
     expect((await request(h.app).get(`/internal/restaurants/${id}`).set(bearer(token))).status).toBe(401);
     expect((await request(h.app).get(`/internal/restaurants/${newId()}`).set(bearer(await h.internalToken('orders')))).status).toBe(404);

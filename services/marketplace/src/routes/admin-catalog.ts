@@ -5,7 +5,7 @@
 import type { Request } from 'express';
 import { z } from 'zod';
 import { DomainError, PaiseSchema } from '@thali/contracts';
-import { auditEvent, requireAuth, validate, withTransaction } from '@thali/service-kit';
+import { auditEvent, isAllowedImageHost, requireAuth, validate, withTransaction } from '@thali/service-kit';
 import { Types, type Model } from 'mongoose';
 import type { AppContext, RouteModule } from '../context.js';
 import { slugify } from '../domain/onboarding.js';
@@ -16,7 +16,20 @@ import { API, json, PresignView, UploadBody, userIdOf } from './common.js';
 const A = `${API}/admin/marketplace`;
 const admin = () => requireAuth({ roles: ['ADMIN'], mfa: true });
 const IdParams = z.object({ id: z.string().min(1).max(64) });
-const CatalogKey = z.string().trim().regex(/^catalog\/[A-Za-z0-9/_.-]+$/, 'Use a key from the admin uploads presign (catalog/...)').max(300);
+const CatalogUploadKey = z.string().trim().regex(/^catalog\/[A-Za-z0-9/_.-]+$/, 'Use a key from the admin uploads presign (catalog/...)').max(300);
+/** MKT-10: an uploaded catalog key, or an absolute https URL on an EXTERNAL_IMAGE_HOSTS host (host checked per request). */
+const CatalogKey = z
+  .union([CatalogUploadKey, z.url({ protocol: /^https$/ }).max(500)])
+  .describe('catalog/... key from the uploads presign, or https URL on an allowlisted image host');
+
+/** 400 VALIDATION_FAILED for an https image ref whose host is not allowlisted. */
+function assertImageRef(ctx: AppContext, ref: unknown) {
+  if (typeof ref !== 'string' || !/^https:\/\//i.test(ref)) return;
+  const host = new URL(ref).hostname;
+  if (!isAllowedImageHost(host, ctx.imageHosts)) {
+    throw new DomainError('VALIDATION_FAILED', `Image host ${host} is not allowed`, undefined, { issues: [{ path: 'body.imageKey', message: 'Image host is not in EXTERNAL_IMAGE_HOSTS' }] });
+  }
+}
 
 // ---- schemas ----
 const CuisineCreate = z.object({
@@ -42,7 +55,7 @@ const BannerFields = z.object({
 const BannerCreate = BannerFields.refine((b) => b.activeTo > b.activeFrom, { message: 'activeTo must be after activeFrom', path: ['activeTo'] });
 const BannerPatch = BannerFields.partial();
 const BannerAdminView = z.object({
-  id: z.string(), title: z.string(), imageKey: z.string(), imageUrl: z.string(), linkType: z.string(), linkValue: z.string(),
+  id: z.string(), title: z.string(), imageKey: z.string(), imageUrl: z.string().nullable(), linkType: z.string(), linkValue: z.string(),
   activeFrom: z.string(), activeTo: z.string(), active: z.boolean(), isDemo: z.boolean(),
 });
 
@@ -93,7 +106,7 @@ const specs: CrudSpec[] = [
   {
     name: 'cuisine', path: `${A}/cuisines`, tag: 'admin-catalog', create: CuisineCreate, patch: CuisinePatch, viewSchema: CuisineAdminView,
     model: (ctx) => ctx.models.Cuisine,
-    view: (ctx, c) => ({ id: String(c._id), name: c.name, slug: c.slug, imageKey: c.imageKey ?? null, imageUrl: c.imageKey ? ctx.storage.publicUrl(c.imageKey) : null, sortOrder: c.sortOrder ?? 0, active: c.active !== false }),
+    view: (ctx, c) => ({ id: String(c._id), name: c.name, slug: c.slug, imageKey: c.imageKey ?? null, imageUrl: ctx.imageUrl(c.imageKey), sortOrder: c.sortOrder ?? 0, active: c.active !== false }),
     prepare: (b, existing) => (existing ? b : { ...b, slug: b.slug ?? slugify(b.name) }),
     label: (c) => c.name,
   },
@@ -101,7 +114,7 @@ const specs: CrudSpec[] = [
     name: 'banner', path: `${A}/banners`, tag: 'admin-catalog', create: BannerCreate, patch: BannerPatch, viewSchema: BannerAdminView,
     model: (ctx) => ctx.models.Banner,
     view: (ctx, b) => ({
-      id: String(b._id), title: b.title, imageKey: b.imageKey, imageUrl: ctx.storage.publicUrl(b.imageKey), linkType: b.linkType, linkValue: b.linkValue,
+      id: String(b._id), title: b.title, imageKey: b.imageKey, imageUrl: ctx.imageUrl(b.imageKey), linkType: b.linkType, linkValue: b.linkValue,
       activeFrom: iso(b.activeFrom), activeTo: iso(b.activeTo), active: b.active !== false, isDemo: !!b.isDemo,
     }),
     label: (b) => b.title,
@@ -151,6 +164,7 @@ export const adminCatalogRoutes: RouteModule = {
       const vCreate = validate({ body: spec.create });
       r.post(spec.path, admin(), vCreate, async (req, res) => {
         const body = vCreate.get(req).body as Record<string, unknown>;
+        assertImageRef(ctx, body.imageKey);
         const result = await audited(ctx, req, spec, 'create', async (session) => {
           const [doc] = await Model.create([spec.prepare ? spec.prepare(body) : body], { session });
           return { id: String(doc._id), label: spec.label(doc), result: spec.view(ctx, doc.toObject()) };
@@ -160,6 +174,7 @@ export const adminCatalogRoutes: RouteModule = {
       const vPatch = validate({ params: IdParams, body: spec.patch });
       r.patch(`${spec.path}/:id`, admin(), vPatch, async (req, res) => {
         const { params, body } = vPatch.get(req);
+        assertImageRef(ctx, (body as Record<string, unknown>).imageKey);
         const result = await audited(ctx, req, spec, 'update', async (session) => {
           const doc = await Model.findById(oid(params.id)).session(session);
           if (!doc) throw new DomainError('NOT_FOUND', `${spec.name} not found`);

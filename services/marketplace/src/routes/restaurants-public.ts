@@ -24,6 +24,9 @@ const PublicItem = z
     isVeg: z.boolean(),
     imageUrl: z.string().nullable(),
     available: z.boolean().describe('false when toggled off or tracked stock is exhausted'),
+    unavailableReason: z.enum(['SOLD_OUT', 'UNAVAILABLE']).nullable().describe('SOLD_OUT = tracked stock exhausted ("Sold out today"); UNAVAILABLE = toggled off (MKT-6)'),
+    stockLeft: z.number().int().nullable().describe('Only for tracked stock with 5 or fewer left'),
+    featured: z.boolean().describe('Owner-recommended (MKT-9)'),
     customizationGroups: z.array(z.object({ id: z.string(), name: z.string(), minSelect: z.number(), maxSelect: z.number(), options: z.array(PublicOption) })),
     tags: z.array(z.string()),
   })
@@ -38,14 +41,19 @@ const RestaurantPage = z
       cuisines: z.array(z.string()),
       imageUrl: z.string().nullable(),
       logoUrl: z.string().nullable(),
-      address: z.object({ line1: z.string(), line2: z.string().optional(), city: z.string(), pincode: z.string() }).nullable(),
+      address: z.object({ line1: z.string(), line2: z.string().optional(), locality: z.string().optional(), city: z.string(), pincode: z.string() }).nullable(),
+      locality: z.string().nullable().describe('MKT-5'),
       location: z.object({ lat: z.number(), lng: z.number() }).nullable(),
       hours: z.array(z.object({ day: z.number(), open: z.string(), close: z.string() })),
       timezone: z.string(),
       open: z.boolean(),
       closedReason: z.enum(['PAUSED', 'OUTSIDE_HOURS', 'NOT_APPROVED']).optional(),
       nextOpenAt: z.string().optional(),
+      pausedUntil: z.string().nullable(),
+      acceptingOrders: z.boolean().describe('An order can be placed right now (= open)'),
+      closesAt: z.string().nullable().describe('End of the current open period; null when closed or open around the clock (MKT-12)'),
       isVeg: z.enum(['PURE_VEG', 'MIXED']).optional(),
+      pureVeg: z.boolean(),
       priceBand: z.number().nullable(),
       rating: RatingView,
       packagingFeePaise: z.number(),
@@ -64,6 +72,7 @@ const RestaurantPage = z
       })
       .nullable()
       .describe('Present when lat/lng are given'),
+    recommended: z.array(PublicItem).describe('Owner-featured items (≤ 6), available first (MKT-9)'),
     menu: z.array(z.object({ id: z.string(), name: z.string(), sortOrder: z.number(), items: z.array(PublicItem) })),
   })
   .meta({ id: 'RestaurantPage' });
@@ -92,7 +101,7 @@ export const restaurantsPublicRoutes: RouteModule = {
     r.get(`${API}/cuisines`, async (_req, res) => {
       const rows = await ctx.models.Cuisine.find({ active: true }).sort({ sortOrder: 1, name: 1 }).lean();
       res.json({
-        items: rows.map((c) => ({ id: String(c._id), name: c.name, slug: c.slug, imageUrl: c.imageKey ? ctx.storage.publicUrl(c.imageKey) : null, sortOrder: c.sortOrder ?? 0 })),
+        items: rows.map((c) => ({ id: String(c._id), name: c.name, slug: c.slug, imageUrl: ctx.imageUrl(c.imageKey), sortOrder: c.sortOrder ?? 0 })),
       });
     });
 
@@ -100,10 +109,11 @@ export const restaurantsPublicRoutes: RouteModule = {
       const now = ctx.now();
       const rows = await ctx.models.Banner.find({ active: true, activeFrom: { $lte: now }, activeTo: { $gt: now } }).sort({ activeFrom: -1 }).limit(20).lean();
       res.json({
-        items: rows.map((b) => ({
+        // a banner whose image ref does not resolve (non-allowlisted URL) is not shown
+        items: rows.filter((b) => ctx.imageUrl(b.imageKey)).map((b) => ({
           id: String(b._id),
           title: b.title,
-          imageUrl: ctx.storage.publicUrl(b.imageKey),
+          imageUrl: ctx.imageUrl(b.imageKey)!,
           linkType: b.linkType,
           linkValue: b.linkValue,
           activeFrom: b.activeFrom.toISOString(),

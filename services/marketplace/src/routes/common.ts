@@ -62,6 +62,7 @@ export const RestaurantView = z
     images: z.object({ cover: z.string().nullable(), logo: z.string().nullable(), coverUrl: z.string().nullable(), logoUrl: z.string().nullable() }),
     documents: z.array(z.object({ id: z.string(), type: z.string(), key: z.string(), verified: z.boolean(), uploadedAt: z.string().nullable() })),
     settlement: z.object({ accountHolder: z.string(), ifsc: z.string(), last4: z.string() }).nullable(),
+    pureVeg: z.boolean().describe('Owner-declared pure-veg kitchen (MKT-4)'),
     packagingFeePaise: PaiseSchema,
     avgPrepMinutes: z.number(),
     commissionBps: z.number(),
