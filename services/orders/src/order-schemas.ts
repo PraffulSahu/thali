@@ -365,6 +365,11 @@ export const OrdersOverview = z
       rejected: z.number().int(),
       cancelled: z.number().int(),
       gmvPaise: z.number().int(),
+      byStatus: z
+        .record(ChildOrderStatusSchema, z.number().int())
+        .meta({ description: 'Child orders placed today (IST) by their current status — every status key present' }),
+      refundedPaise: z.number().int().meta({ description: 'Refunds that succeeded today (child refund mirror entries)' }),
+      refundPendingPaise: z.number().int().meta({ description: 'Outstanding refund (requested − refunded) of children placed today whose refund is REQUESTED / PROCESSING' }),
     }),
     activeByStatus: z.record(z.string(), z.number().int()),
     awaitingAcceptance: z.number().int(),
@@ -372,6 +377,7 @@ export const OrdersOverview = z
     deliveryFailed: z.number().int(),
     refundsPending: z.number().int(),
     refundsFailed: z.number().int(),
+    support: z.object({ open: z.number().int(), inProgress: z.number().int() }).meta({ description: 'Support ticket counts (sidebar badge)' }),
   })
   .meta({ id: 'OrdersOverview' });
 

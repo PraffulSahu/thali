@@ -9,6 +9,13 @@
  *  - grossPaise: Σ (itemsSubtotal + packaging) over DELIVERED children
  *  - netRevenuePaise: Σ restaurant earning − commission over DELIVERED children, exactly as the
  *    payments ledger posts it (items − coupon − membership + packaging − bpsOf(items, commissionBps))
+ *
+ * Admin overview "today" (since IST midnight) additions for the redesign (ORD-2):
+ *  - today.byStatus: children placed today by CURRENT status (all 13 keys) — the status bar cohort
+ *  - today.refundedPaise: Σ child refund mirror entries (`refunds[]`) SUCCEEDED today (entry `updatedAt`)
+ *  - today.refundPendingPaise: Σ (requested − refunded) over children placed today whose refund is
+ *    still REQUESTED / PROCESSING (FAILED is counted by `refundsFailed`, not as pending)
+ *  - support: open / in-progress ticket counts (admin sidebar badge)
  */
 import { bpsOf, enumValues, ChildOrderStatus } from '@thali/contracts';
 import type { OrdersContext } from '../context.js';
@@ -83,7 +90,8 @@ const ACTIVE: ChildOrderStatus[] = ['PLACED', 'ACCEPTED', 'PREPARING', 'READY_FO
 export async function ordersOverview(ctx: OrdersContext, now = new Date()) {
   const since = istDayStart(now);
   const { ChildOrder: C, CheckoutGroup: G } = ctx.models;
-  const [active, placed, delivered, rejected, cancelled, overdue, refundsPending, refundsFailed, gmv] = await Promise.all([
+  const { SupportTicket: T } = ctx.models;
+  const [active, placed, delivered, rejected, cancelled, overdue, refundsPending, refundsFailed, gmv, todayByStatus, refunded, pending, ticketsOpen, ticketsInProgress] = await Promise.all([
     C.aggregate<{ _id: ChildOrderStatus; n: number }>([{ $match: { status: { $in: ACTIVE } } }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
     C.countDocuments({ placedAt: { $gte: since } }),
     C.countDocuments({ deliveredAt: { $gte: since } }),
@@ -96,7 +104,27 @@ export async function ordersOverview(ctx: OrdersContext, now = new Date()) {
       { $match: { placedAt: { $gte: since } } },
       { $group: { _id: null, n: { $sum: 1 }, gmv: { $sum: '$pricing.totalPaise' } } },
     ]),
+    C.aggregate<{ _id: ChildOrderStatus; n: number }>([{ $match: { placedAt: { $gte: since } } }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
+    C.aggregate<{ _id: null; paise: number }>([
+      { $match: { 'refunds.updatedAt': { $gte: since } } },
+      { $unwind: '$refunds' },
+      { $match: { 'refunds.status': 'SUCCEEDED', 'refunds.updatedAt': { $gte: since } } },
+      { $group: { _id: null, paise: { $sum: '$refunds.amountPaise' } } },
+    ]),
+    C.aggregate<{ _id: null; paise: number }>([
+      { $match: { placedAt: { $gte: since }, refundStatus: { $in: ['REQUESTED', 'PROCESSING'] } } },
+      {
+        $group: {
+          _id: null,
+          paise: { $sum: { $max: [0, { $subtract: [{ $ifNull: ['$refundRequestedPaise', 0] }, { $ifNull: ['$refundedPaise', 0] }] }] } },
+        },
+      },
+    ]),
+    T.countDocuments({ status: 'OPEN' }),
+    T.countDocuments({ status: 'IN_PROGRESS' }),
   ]);
+  const byStatus = zeroByStatus();
+  for (const s of todayByStatus) byStatus[s._id] = s.n;
   const activeByStatus = Object.fromEntries(ACTIVE.map((s) => [s, 0])) as Record<string, number>;
   for (const a of active) activeByStatus[a._id] = a.n;
   return {
@@ -109,6 +137,9 @@ export async function ordersOverview(ctx: OrdersContext, now = new Date()) {
       rejected,
       cancelled,
       gmvPaise: gmv[0]?.gmv ?? 0,
+      byStatus,
+      refundedPaise: refunded[0]?.paise ?? 0,
+      refundPendingPaise: pending[0]?.paise ?? 0,
     },
     activeByStatus,
     awaitingAcceptance: activeByStatus.PLACED ?? 0,
@@ -116,5 +147,6 @@ export async function ordersOverview(ctx: OrdersContext, now = new Date()) {
     deliveryFailed: activeByStatus.DELIVERY_FAILED ?? 0,
     refundsPending,
     refundsFailed,
+    support: { open: ticketsOpen, inProgress: ticketsInProgress },
   };
 }

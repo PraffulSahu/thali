@@ -223,6 +223,13 @@ ChildOrderSchema.index({ restaurantOwnerId: 1, createdAt: -1 });
 ChildOrderSchema.index({ userId: 1, createdAt: -1 });
 ChildOrderSchema.index({ status: 1, acceptBy: 1 });
 ChildOrderSchema.index({ 'customerContact.phoneLast4': 1 });
+// gap-analysis §5.2.9: overview "today" counts, owner stats window, unfiltered admin list, refunds today
+ChildOrderSchema.index({ placedAt: 1 });
+ChildOrderSchema.index({ deliveredAt: 1 });
+ChildOrderSchema.index({ refundStatus: 1 });
+ChildOrderSchema.index({ restaurantId: 1, placedAt: -1 });
+ChildOrderSchema.index({ createdAt: -1, _id: -1 });
+ChildOrderSchema.index({ 'refunds.updatedAt': 1 });
 
 export const childOrderModel = (conn: Connection): Model<ChildOrder> =>
   (conn.models.ChildOrder as Model<ChildOrder> | undefined) ?? conn.model<ChildOrder>('ChildOrder', ChildOrderSchema);
