@@ -24,7 +24,7 @@
 - Every route registered in the service's OpenAPI registry (request/response schemas, security, errors). Swagger at `/docs`, spec at `/openapi.json` per service; aggregated at gateway `/api/docs`.
 - Validation with Zod at every boundary; `requireAuth`/ownership on every non-public route; internal routes use `requireInternal`.
 - `APP_MODE=demo|sandbox|production`; production refuses mock providers / demo flags at startup.
-- Tests use real MongoDB replica set + Redis from `docker-compose.infra.yml` (`mongodb://localhost:27017/?replicaSet=rs0&directConnection=true`, `redis://localhost:6379`) with unique DB names and a unique `EVENT_STREAM_PREFIX`/Redis key prefix per test file — tests must be safe to run in parallel with other services' tests.
+- Tests use real MongoDB replica set + Redis from `docker-compose.infra.yml` (`mongodb://localhost:27018/?replicaSet=rs0&directConnection=true`, `redis://localhost:6379`) with unique DB names and a unique `EVENT_STREAM_PREFIX`/Redis key prefix per test file — tests must be safe to run in parallel with other services' tests.
 - Implementers commit their own task's changes (conventional message, `git add <explicit paths>` only — never `git add -A`, never `git stash`/`checkout`/`reset`/`rebase`). Phase 1 service tasks run in parallel worktrees: commit on the worktree's branch.
 - No placeholder UI: every button calls a real API; every screen handles loading / empty / error / forbidden / session-expired states.
 - Demo data and mock providers must be visibly labeled (`isDemo`, `estimateSource`, `simulated`, mode banner).
