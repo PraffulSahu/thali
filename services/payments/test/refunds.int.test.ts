@@ -224,6 +224,7 @@ describe('refund lifecycle', () => {
     expect(h.fake.refund).toHaveBeenCalledTimes(1); // never auto-retried
 
     const token = await adminToken(h.keys);
+    h.orders.add({ id: childOrderId, checkoutGroupId: checkoutId, totalPaise: 10_000 });
     const replacement = await request(h.app)
       .post('/api/v1/admin/finance/refunds')
       .set('authorization', `Bearer ${token}`)
@@ -434,5 +435,73 @@ describe('manual admin refunds', () => {
     expect((await request(h.app).post('/api/v1/admin/finance/refunds').set('authorization', `Bearer ${noMfa}`).set('idempotency-key', `k-${randomBytes(6).toString('hex')}`).send(body)).status).toBe(403);
     const audit = await outboxModel(h.ctx.conn).countDocuments({ 'envelope.type': 'audit.recorded', 'envelope.payload.targetId': a.body.id });
     expect(audit).toBe(1);
+  });
+
+  describe('child-scoped manual refunds (childOrderId)', () => {
+    const post = async (body: Record<string, unknown>) =>
+      request(h.app)
+        .post('/api/v1/admin/finance/refunds')
+        .set('authorization', `Bearer ${await adminToken(h.keys)}`)
+        .set('idempotency-key', `idem-${randomBytes(6).toString('hex')}`)
+        .send({ note: 'n', ...body });
+
+    it('caps at the child total minus committed (non-FAILED) refunds for that child → 422 REFUND_EXCEEDS_REMAINING', async () => {
+      const { intent, checkoutId } = await capturedIntent(30_000);
+      const child = h.orders.add({ id: oid(), checkoutGroupId: checkoutId, restaurantId: 'rA', totalPaise: 10_000 });
+      const first = await post({ paymentIntentId: intent.id, childOrderId: child.id, amountPaise: 6_000 });
+      expect(first.status).toBe(201);
+      expect(first.body.restaurantId).toBe('rA'); // defaulted from the child
+      const over = await post({ paymentIntentId: intent.id, childOrderId: child.id, amountPaise: 4_001 });
+      expect(over.status).toBe(422);
+      expect(over.body.error.code).toBe('REFUND_EXCEEDS_REMAINING');
+      expect(over.body.error.details).toMatchObject({ childOrderId: child.id, childTotalPaise: 10_000, committedPaise: 6_000, remainingPaise: 4_000 });
+      // a FAILED refund does not count against the child
+      await h.ctx.models.Refund.updateOne({ _id: first.body.id }, { $set: { status: 'FAILED' } });
+      expect((await post({ paymentIntentId: intent.id, childOrderId: child.id, amountPaise: 10_000 })).status).toBe(201);
+      expect((await post({ paymentIntentId: intent.id, childOrderId: child.id, amountPaise: 1 })).status).toBe(422);
+      // payment still had room (30k captured) — the child cap is what refused it
+      expect((await intentDoc(intent.id)).refundReservedPaise).toBeLessThan(30_000);
+    });
+
+    it("also honours what orders already committed for the child (refund requested by orders, not yet seen here)", async () => {
+      const { intent, checkoutId } = await capturedIntent(30_000);
+      const child = h.orders.add({ id: oid(), checkoutGroupId: checkoutId, totalPaise: 10_000, committedRefundPaise: 7_000 });
+      const over = await post({ paymentIntentId: intent.id, childOrderId: child.id, amountPaise: 3_001 });
+      expect(over.status).toBe(422);
+      expect(over.body.error.code).toBe('REFUND_EXCEEDS_REMAINING');
+      expect((await post({ paymentIntentId: intent.id, childOrderId: child.id, amountPaise: 3_000 })).status).toBe(201);
+    });
+
+    it("refuses a child from another checkout, a restaurant that is not the child's, and an unknown child → 422 REFUND_TARGET_MISMATCH", async () => {
+      const { intent, checkoutId } = await capturedIntent(30_000);
+      const foreign = h.orders.add({ id: oid(), checkoutGroupId: oid(), totalPaise: 10_000 });
+      const a = await post({ paymentIntentId: intent.id, childOrderId: foreign.id, amountPaise: 100 });
+      expect(a.status).toBe(422);
+      expect(a.body.error).toMatchObject({ code: 'REFUND_TARGET_MISMATCH', details: { reason: 'CHILD_NOT_IN_PAYMENT' } });
+
+      const mine = h.orders.add({ id: oid(), checkoutGroupId: checkoutId, restaurantId: 'rA', totalPaise: 10_000 });
+      const b = await post({ paymentIntentId: intent.id, childOrderId: mine.id, restaurantId: 'rB', amountPaise: 100, chargeRestaurantPaise: 100 });
+      expect(b.status).toBe(422);
+      expect(b.body.error).toMatchObject({ code: 'REFUND_TARGET_MISMATCH', details: { reason: 'RESTAURANT_MISMATCH' } });
+
+      const c = await post({ paymentIntentId: intent.id, childOrderId: oid(), amountPaise: 100 });
+      expect(c.status).toBe(422);
+      expect(c.body.error).toMatchObject({ code: 'REFUND_TARGET_MISMATCH', details: { reason: 'CHILD_NOT_FOUND' } });
+
+      expect(await h.ctx.models.Refund.countDocuments({ paymentIntentId: intent.id })).toBe(0);
+      expect((await intentDoc(intent.id)).refundReservedPaise).toBe(0);
+      // the matching restaurant is accepted
+      expect((await post({ paymentIntentId: intent.id, childOrderId: mine.id, restaurantId: 'rA', amountPaise: 100 })).status).toBe(201);
+    });
+
+    it('concurrent child refunds never exceed the child cap', async () => {
+      const { intent, checkoutId } = await capturedIntent(50_000);
+      const child = h.orders.add({ id: oid(), checkoutGroupId: checkoutId, totalPaise: 10_000 });
+      const results = await Promise.all([1, 2, 3, 4].map(() => post({ paymentIntentId: intent.id, childOrderId: child.id, amountPaise: 4_000 })));
+      expect(results.filter((r) => r.status === 201)).toHaveLength(2);
+      expect(results.filter((r) => r.status === 422).every((r) => r.body.error.code === 'REFUND_EXCEEDS_REMAINING')).toBe(true);
+      const sum = (await refundsFor(child.id)).reduce((s, r) => s + r.amountPaise, 0);
+      expect(sum).toBe(8_000);
+    });
   });
 });

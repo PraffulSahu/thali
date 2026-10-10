@@ -1,7 +1,8 @@
 /**
  * Internal order routes (service tokens; binding shapes in service-context.md):
  *   GET /internal/orders/child/:id → { id, code, checkoutGroupId, userId, restaurantId,
- *       restaurantOwnerId, status, deliveredAt }        (marketplace ratings, notifications, …)
+ *       restaurantOwnerId, status, deliveredAt, totalPaise, committedRefundPaise }
+ *       (marketplace ratings, notifications, payments manual-refund caps, …)
  *   GET /internal/orders/stats?restaurantId&from&to → RestaurantStats   (marketplace dashboard)
  */
 import express from 'express';
@@ -10,6 +11,7 @@ import { DomainError } from '@thali/contracts';
 import { requireInternal, validate, type OpenApi } from '@thali/service-kit';
 import type { OrdersContext } from '../context.js';
 import type { ChildOrder } from '../models/child-order.js';
+import { committedRefundPaise } from '../domain/refunds.js';
 import { restaurantStats } from '../domain/stats.js';
 import { InternalChildOrder, InternalChildParams, RestaurantStatsView, StatsQuery, json } from '../order-schemas.js';
 import type { RouteModule } from './types.js';
@@ -33,6 +35,8 @@ function register(app: express.Express, ctx: OrdersContext): void {
       restaurantOwnerId: c.restaurantOwnerId,
       status: c.status,
       deliveredAt: c.deliveredAt ? new Date(c.deliveredAt).toISOString() : null,
+      totalPaise: c.breakdown.totalPaise,
+      committedRefundPaise: committedRefundPaise(c),
     });
   });
 

@@ -17,7 +17,7 @@ afterAll(async () => {
   await h.cleanup();
 });
 
-const internalGet = async (path: string, from: 'marketplace' | 'notifications' | 'identity' = 'marketplace') =>
+const internalGet = async (path: string, from: 'marketplace' | 'notifications' | 'identity' | 'payments' = 'marketplace') =>
   request(h.app).get(path).set('authorization', `Bearer ${await h.internalToken(from)}`);
 
 describe('GET /internal/orders/child/:id', () => {
@@ -34,7 +34,11 @@ describe('GET /internal/orders/child/:id', () => {
       restaurantOwnerId: p.s.a.ownerUserId,
       status: 'PLACED',
       deliveredAt: null,
+      totalPaise: p.a.total,
+      committedRefundPaise: 0,
     });
+    // payments uses it to cap manual refunds per child
+    expect((await internalGet(`/internal/orders/child/${p.a.id}`, 'payments')).status).toBe(200);
     expect((await internalGet(`/internal/orders/child/${p.a.id}`, 'notifications')).status).toBe(200);
     expect((await internalGet(`/internal/orders/child/${oid()}`)).status).toBe(404);
     expect((await internalGet('/internal/orders/child/not-an-id')).status).toBe(404);

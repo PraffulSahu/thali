@@ -4,7 +4,7 @@
 import type { Connection } from 'mongoose';
 import type { Logger } from 'pino';
 import { initEventCollections, recordProviderError, type Redis } from '@thali/service-kit';
-import { createMarketplaceClient, type MarketplaceClient } from './clients.js';
+import { createMarketplaceClient, createOrdersClient, type MarketplaceClient, type OrdersClient } from './clients.js';
 import type { PaymentsConfig } from './config.js';
 import { ledgerEntryModel } from './models/ledger-entry.js';
 import { paymentEventModel } from './models/payment-event.js';
@@ -34,6 +34,7 @@ export interface PaymentsContext {
   redis: Redis;
   provider: PaymentProvider;
   marketplace: MarketplaceClient;
+  orders: OrdersClient;
   models: Models;
   /** Service clock (injectable for tests). */
   now: () => Date;
@@ -46,6 +47,7 @@ export interface CreateContextDeps {
   redis: Redis;
   provider?: PaymentProvider;
   marketplace?: MarketplaceClient;
+  orders?: OrdersClient;
   now?: () => Date;
 }
 
@@ -72,7 +74,11 @@ export function createContext(deps: CreateContextDeps): PaymentsContext {
     redis: deps.redis,
     provider: deps.provider ?? createProvider(deps.config, deps.conn, deps.redis),
     marketplace:
-      deps.marketplace ?? createMarketplaceClient({ baseUrl: deps.config.MARKETPLACE_URL, secret: deps.config.INTERNAL_SERVICE_SECRET }),
+      deps.marketplace ??
+      createMarketplaceClient({ baseUrl: deps.config.MARKETPLACE_URL, secret: deps.config.INTERNAL_SERVICE_SECRET, timeoutMs: deps.config.INTERNAL_HTTP_TIMEOUT_MS }),
+    orders:
+      deps.orders ??
+      createOrdersClient({ baseUrl: deps.config.ORDERS_URL, secret: deps.config.INTERNAL_SERVICE_SECRET, timeoutMs: deps.config.INTERNAL_HTTP_TIMEOUT_MS }),
     models: createModels(deps.conn),
     now: deps.now ?? (() => new Date()),
   };

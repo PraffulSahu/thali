@@ -343,6 +343,10 @@ export const InternalChildOrder = z
     restaurantOwnerId: z.string(),
     status: ChildOrderStatusSchema,
     deliveredAt: nullableIso,
+    /** Child total (paise) — the per-child refund cap. */
+    totalPaise: z.number().int(),
+    /** max(refundRequestedPaise, non-FAILED refunds seen) for this child. */
+    committedRefundPaise: z.number().int(),
   })
   .meta({ id: 'InternalChildOrder' });
 

@@ -28,6 +28,10 @@ export const PaymentsConfigShape = {
   REFUND_WORKER_INTERVAL_MS: int(5_000, 100),
   RECONCILE_INTERVAL_MS: int(60_000, 100),
   MARKETPLACE_URL: z.url().default('http://localhost:4002'),
+  /** orders `GET /internal/orders/child/:id` (manual-refund ownership + per-child cap). */
+  ORDERS_URL: z.url().default('http://localhost:4003'),
+  /** Timeout for payments → other services internal calls. */
+  INTERNAL_HTTP_TIMEOUT_MS: int(3000, 100),
 } satisfies z.ZodRawShape;
 
 function validateProvider<T extends { PAYMENT_PROVIDER: 'razorpay' | 'mock'; RAZORPAY_KEY_ID?: string; RAZORPAY_KEY_SECRET?: string; RAZORPAY_WEBHOOK_SECRET?: string; MOCK_WEBHOOK_SECRET?: string }>(cfg: T): T {

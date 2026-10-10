@@ -62,6 +62,7 @@ export const ERROR_STATUS = {
   WEBHOOK_SIGNATURE_INVALID: 400,
   REFUND_EXCEEDS_CAPTURED: 422,
   REFUND_EXCEEDS_REMAINING: 422,
+  REFUND_TARGET_MISMATCH: 422, // manual refund's child/restaurant does not belong to the payment
 
   // --- delivery ---
   ASSIGNMENT_TAKEN: 409,

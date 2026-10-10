@@ -3,9 +3,10 @@
  * payout recording require Idempotency-Key (LLD §1.4); every mutation is audited in its transaction.
  */
 import express, { type Request, type Router } from 'express';
-import { formatINR } from '@thali/contracts';
+import { DomainError, formatINR } from '@thali/contracts';
 import { PAGE_SORT, auditEvent, buildPage, cursorFilter, idempotency, requireAuth, validate, withTransaction } from '@thali/service-kit';
-import { isValidObjectId } from 'mongoose';
+import { isValidObjectId, type ClientSession } from 'mongoose';
+import type { ChildOrderInfo } from '../clients.js';
 import type { PaymentsContext } from '../context.js';
 import { paymentStatusView } from '../domain/intents.js';
 import { listBalances } from '../domain/ledger.js';
@@ -31,6 +32,51 @@ const actorOf = (req: Request): Actor => ({
   ...(req.ip ? { ip: req.ip } : {}),
 });
 const roleOf = (a: Actor) => `ADMIN:${a.adminRoles.join('|') || 'ADMIN'}`;
+
+/**
+ * A manual refund naming a child must stay inside that child: the child belongs to this payment's checkout,
+ * the restaurant (if given) is the child's, and the amount fits what is left of the child total after every
+ * committed (non-FAILED) refund for it — the larger of payments' own refunds and what orders has committed.
+ * Runs in the refund transaction; the intent reservation write makes concurrent refunds on the same payment
+ * conflict and retry, so the per-child sum is re-read before a second refund can commit.
+ */
+async function assertChildRefundAllowed(
+  ctx: PaymentsContext,
+  session: ClientSession,
+  intent: PaymentIntentDoc,
+  child: ChildOrderInfo,
+  body: { childOrderId?: string | undefined; restaurantId?: string | undefined; amountPaise: number },
+): Promise<void> {
+  if (intent.purpose !== 'CHECKOUT' || child.checkoutGroupId !== intent.referenceId) {
+    throw new DomainError('REFUND_TARGET_MISMATCH', 'Child order does not belong to this payment', 422, {
+      reason: 'CHILD_NOT_IN_PAYMENT',
+      childOrderId: child.id,
+      childCheckoutGroupId: child.checkoutGroupId,
+      paymentReferenceId: intent.referenceId,
+    });
+  }
+  if (body.restaurantId && body.restaurantId !== child.restaurantId) {
+    throw new DomainError('REFUND_TARGET_MISMATCH', 'Restaurant does not match the child order', 422, {
+      reason: 'RESTAURANT_MISMATCH',
+      restaurantId: body.restaurantId,
+      childRestaurantId: child.restaurantId,
+    });
+  }
+  const [agg] = await ctx.models.Refund.aggregate<{ total: number }>([
+    { $match: { childOrderId: child.id, status: { $ne: 'FAILED' } } },
+    { $group: { _id: null, total: { $sum: '$amountPaise' } } },
+  ]).session(session);
+  const committedPaise = Math.max(agg?.total ?? 0, child.committedRefundPaise ?? 0);
+  const remainingPaise = Math.max(0, child.totalPaise - committedPaise);
+  if (body.amountPaise > remainingPaise) {
+    throw new DomainError('REFUND_EXCEEDS_REMAINING', `Refund exceeds what is left to refund for this child order (${formatINR(remainingPaise)})`, 422, {
+      childOrderId: child.id,
+      childTotalPaise: child.totalPaise,
+      committedPaise,
+      remainingPaise,
+    });
+  }
+}
 
 export function adminFinanceRouter(ctx: PaymentsContext): Router {
   const r = express.Router();
@@ -72,16 +118,28 @@ export function adminFinanceRouter(ctx: PaymentsContext): Router {
     const actor = actorOf(req);
     const { body } = vManual.get(req);
     const key = req.header('idempotency-key')!;
+    const idempotencyKey = `refund:admin:${actor.userId}:${key}`;
+    // Child-scoped refund: orders is the source of truth for which checkout/restaurant the child belongs to and
+    // its total. Fetched before the transaction (no HTTP inside it).
+    let child: ChildOrderInfo | null = null;
+    if (body.childOrderId) {
+      child = await ctx.orders.getChildOrder(body.childOrderId);
+      if (!child) {
+        throw new DomainError('REFUND_TARGET_MISMATCH', 'Child order not found', 422, { reason: 'CHILD_NOT_FOUND', childOrderId: body.childOrderId });
+      }
+    }
     const refund = await withTransaction(ctx.conn, async (session) => {
       const intent = await ctx.models.PaymentIntent.findById(body.paymentIntentId).session(session);
+      const replay = await ctx.models.Refund.exists({ idempotencyKey }).session(session);
+      if (child && intent && !replay) await assertChildRefundAllowed(ctx, session, intent, child, body);
       const { refund: rf } = await requestRefund(ctx, session, {
         paymentIntentId: body.paymentIntentId,
         checkoutGroupId: intent?.referenceId ?? body.paymentIntentId,
         childOrderId: body.childOrderId ?? null,
-        restaurantId: body.restaurantId ?? null,
+        restaurantId: body.restaurantId ?? child?.restaurantId ?? null,
         amountPaise: body.amountPaise,
         reason: body.reason,
-        idempotencyKey: `refund:admin:${actor.userId}:${key}`,
+        idempotencyKey,
         requestedBy: `admin:${actor.userId}`,
         note: body.note,
         chargeRestaurantPaise: body.chargeRestaurantPaise,

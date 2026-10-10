@@ -53,7 +53,7 @@ export function aggregateRefundStatus(child: Pick<ChildOrder, 'refunds' | 'refun
   return child.refundStatus ?? 'NONE';
 }
 
-export type RefundEventOutcome = 'APPLIED' | 'STALE' | 'CHECKOUT_LEVEL' | 'UNKNOWN_CHILD';
+export type RefundEventOutcome = 'APPLIED' | 'STALE' | 'CHECKOUT_LEVEL' | 'UNKNOWN_CHILD' | 'CHECKOUT_MISMATCH';
 
 /** Consumer for `refund.requested|processing|succeeded|failed` (runs in the consumer's transaction). */
 export async function applyRefundEvent(
@@ -85,6 +85,21 @@ export async function applyRefundEvent(
   if (!child) {
     ctx.logger.warn({ refundId: p.refundId, childOrderId: p.childOrderId, type: e.type }, 'refund event for unknown child order; ignored');
     return 'UNKNOWN_CHILD';
+  }
+  if (String(child.checkoutGroupId) !== p.checkoutGroupId) {
+    // A refund booked against another payment/checkout must never move this child's money mirror.
+    ctx.logger.error(
+      {
+        alert: 'REFUND_CHECKOUT_MISMATCH',
+        refundId: p.refundId,
+        childOrderId: p.childOrderId,
+        eventCheckoutGroupId: p.checkoutGroupId,
+        childCheckoutGroupId: String(child.checkoutGroupId),
+        type: e.type,
+      },
+      "refund event's checkoutGroupId does not match the child's checkout; ignored",
+    );
+    return 'CHECKOUT_MISMATCH';
   }
 
   const status = p.status as RefundState;

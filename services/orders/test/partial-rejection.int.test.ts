@@ -197,4 +197,23 @@ describe('partial rejection', () => {
     expect((await child(h, p.b.id))!.refundStatus).toBe('PROCESSING');
   });
 
+  it("a refund event whose checkoutGroupId is not the child's checkout is ignored (no mirror change) and alerted", async () => {
+    const p = await placedCheckout(h);
+    const before = await child(h, p.a.id);
+    const e = await publishEvent(h.tr.redis, h.tr.prefix, 'payments', 'refund.succeeded', {
+      refundId: oid(),
+      childOrderId: p.a.id,
+      checkoutGroupId: oid(), // another checkout's payment
+      amountPaise: 1000,
+      reason: 'ADMIN',
+      status: 'SUCCEEDED',
+    });
+    await processed(h, e.id);
+    const after = await child(h, p.a.id);
+    expect(after!.refunds).toHaveLength(0);
+    expect(after!.refundedPaise).toBe(before!.refundedPaise);
+    expect(after!.refundRequestedPaise).toBe(before!.refundRequestedPaise);
+    expect(after!.refundStatus).toBe(before!.refundStatus);
+    expect(await h.ctx.models.OrderEvent.countDocuments({ childOrderId: p.a.id, type: 'refund.succeeded' })).toBe(0);
+  });
 });

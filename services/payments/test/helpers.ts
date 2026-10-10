@@ -18,7 +18,7 @@ import {
 import { buildApp } from '../src/app.js';
 import { loadPaymentsConfig, type PaymentsConfig } from '../src/config.js';
 import { createContext, initPayments, type PaymentsContext } from '../src/context.js';
-import type { MarketplaceClient, RestaurantInfo } from '../src/clients.js';
+import type { ChildOrderInfo, MarketplaceClient, OrdersClient, RestaurantInfo } from '../src/clients.js';
 import {
   parseRazorpayWebhook,
   verifyHexHmac,
@@ -120,12 +120,35 @@ export class FakeMarketplace implements MarketplaceClient {
   }
 }
 
+/** orders `GET /internal/orders/child/:id` double: tests register the children manual refunds may name. */
+export class FakeOrders implements OrdersClient {
+  children = new Map<string, ChildOrderInfo>();
+  calls: string[] = [];
+  add(c: { id: string; checkoutGroupId: string; restaurantId?: string; totalPaise: number; committedRefundPaise?: number; status?: string }): ChildOrderInfo {
+    const info: ChildOrderInfo = {
+      id: c.id,
+      checkoutGroupId: c.checkoutGroupId,
+      restaurantId: c.restaurantId ?? 'r_default',
+      status: c.status ?? 'DELIVERED',
+      totalPaise: c.totalPaise,
+      committedRefundPaise: c.committedRefundPaise ?? 0,
+    };
+    this.children.set(c.id, info);
+    return info;
+  }
+  async getChildOrder(id: string): Promise<ChildOrderInfo | null> {
+    this.calls.push(id);
+    return this.children.get(id) ?? null;
+  }
+}
+
 export interface Harness {
   ctx: PaymentsContext;
   app: ReturnType<typeof buildApp>;
   provider: PaymentProvider;
   fake: FakeProvider;
   marketplace: FakeMarketplace;
+  orders: FakeOrders;
   keys: TestKeys;
   config: PaymentsConfig;
   logs: Record<string, unknown>[];
@@ -167,6 +190,7 @@ export async function setup(name: string, opts: SetupOptions = {}): Promise<Harn
   const logger = createLogger('payments', { level: 'info', destination });
   const fake = new FakeProvider();
   const marketplace = new FakeMarketplace();
+  const orders = new FakeOrders();
   const clock = {
     now: new Date(),
     advance(ms: number) {
@@ -180,6 +204,7 @@ export async function setup(name: string, opts: SetupOptions = {}): Promise<Harn
     redis: tr.redis,
     ...(opts.realProvider ? {} : { provider: fake }),
     marketplace,
+    orders,
     now: () => clock.now,
   });
   await initPayments(ctx);
@@ -190,6 +215,7 @@ export async function setup(name: string, opts: SetupOptions = {}): Promise<Harn
     provider: ctx.provider,
     fake,
     marketplace,
+    orders,
     keys,
     config,
     logs,

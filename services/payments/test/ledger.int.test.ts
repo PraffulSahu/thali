@@ -174,6 +174,7 @@ describe('ledger on order.delivered', () => {
     const { intent } = await createIntent(h.ctx, { purpose: 'CHECKOUT', referenceId: p.checkoutId, userId: p.userId, amountPaise: 53_696 });
     h.fake.addPayment(intent.providerOrderId!, { status: 'captured', amountPaise: 53_696 });
     await reconcileIntent(h.ctx, intent.id);
+    h.orders.add({ id: p.childOrderId, checkoutGroupId: p.checkoutId, restaurantId: p.restaurantId, totalPaise: 53_696 });
     const token = await adminToken(h.keys);
     const res = await request(h.app)
       .post('/api/v1/admin/finance/refunds')
