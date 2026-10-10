@@ -650,6 +650,7 @@ async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult
                 restaurantSetKey: selection.setKey,
                 status: 'AWAITING_PAYMENT',
                 deliveryAddress: dropAddress,
+                customerContact,
                 childOrderIds: childDocs.map((c) => c._id),
                 pricing: totals,
                 couponCode: appliedCoupon ?? null,

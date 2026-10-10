@@ -19,6 +19,13 @@ export interface PaymentSnapshot {
   demoPayUrl: string | null;
 }
 
+/** Copy of the children's customer snapshot (ORD-1 admin checkout list needs no children for it). */
+export interface GroupCustomerContact {
+  name: string;
+  phoneMasked: string;
+  phoneLast4: string | null;
+}
+
 export interface CheckoutGroup {
   _id: Types.ObjectId;
   code: string;
@@ -32,6 +39,8 @@ export interface CheckoutGroup {
   restaurantSetKey?: string;
   status: CheckoutStatus;
   deliveryAddress: AddressSnapshot;
+  /** Set at checkout; pre-redesign groups are backfilled by `orders:contact-backfill`. */
+  customerContact?: GroupCustomerContact | null;
   childOrderIds: Types.ObjectId[];
   pricing: Breakdown;
   couponCode?: string | null;
@@ -78,6 +87,10 @@ export const CheckoutGroupSchema = new Schema<CheckoutGroup>(
     restaurantSetKey: { type: String, default: '*' },
     status: { type: String, enum: enumValues(CheckoutStatus), required: true },
     deliveryAddress: { type: AddressSnapshotSchema, required: true },
+    customerContact: {
+      type: new Schema<GroupCustomerContact>({ name: String, phoneMasked: String, phoneLast4: { type: String, default: null } }, { _id: false }),
+      default: undefined,
+    },
     childOrderIds: { type: [Schema.Types.ObjectId], default: [] },
     pricing: { type: BreakdownDocSchema, required: true },
     couponCode: { type: String, default: null },
@@ -103,6 +116,10 @@ export const CheckoutGroupSchema = new Schema<CheckoutGroup>(
 CheckoutGroupSchema.index({ code: 1 }, { unique: true });
 CheckoutGroupSchema.index({ userId: 1, createdAt: -1 });
 CheckoutGroupSchema.index({ status: 1, expiresAt: 1 });
+// ORD-1 admin checkout list (newest placed first, cursor) + overview GMV; status filter; phone search (ORD-7)
+CheckoutGroupSchema.index({ placedAt: -1, _id: -1 });
+CheckoutGroupSchema.index({ status: 1, placedAt: -1 });
+CheckoutGroupSchema.index({ 'customerContact.phoneLast4': 1 });
 /** Pre-redesign duplicate-submit index (`{userId, cartVersion}`), dropped at boot by `migrateCheckoutIndexes`. */
 export const LEGACY_ACTIVE_CHECKOUT_INDEX = 'uniq_active_checkout_per_cart_version';
 export const ACTIVE_CHECKOUT_INDEX = 'uniq_active_checkout_per_cart_version_set';

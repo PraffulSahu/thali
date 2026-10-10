@@ -2,6 +2,7 @@
  * Admin order routes (LLD §10 orders 🛡 — ADMIN role + MFA; mutations audited in the same txn):
  *   GET  /admin/orders?q&status&restaurantId&userId&phone&from&to&cursor   child-order search
  *        (`phone`, or a `q` of 4–13 digits, matches the indexed `customerContact.phoneLast4` — ORD-7)
+ *   GET  /admin/orders/checkouts?q&status&phone&restaurantId&from&to&cursor&limit   checkout rows (ORD-1)
  *   GET  /admin/orders/overview
  *   GET  /admin/orders/:checkoutId                 group + children + timeline + explanations
  *   POST /admin/orders/child/:childId/cancel {reason, refundPaise}       refundPaise ≤ remaining
@@ -20,8 +21,11 @@ import type { OrderEvent } from '../models/order-event.js';
 import { PREP_MINUTES_MAX, PREP_MINUTES_MIN, transitionChild, type TransitionExtra } from '../domain/lifecycle.js';
 import { adminChildRow, adminChildView, adminOrderDetail } from '../domain/order-views.js';
 import { ordersOverview } from '../domain/stats.js';
+import { listAdminCheckouts } from '../domain/admin-checkouts.js';
 import {
   AdminCancelBody,
+  AdminCheckoutPage,
+  AdminCheckoutsQuery,
   AdminChildView,
   AdminOrderDetail,
   AdminOrderPage,
@@ -113,6 +117,26 @@ function register(app: express.Express, ctx: OrdersContext): void {
     res.json(buildPage(docs, q.limit, adminChildRow));
   });
 
+  // ORD-1 — registered before '/:checkoutId'
+  const vCheckouts = validate({ query: AdminCheckoutsQuery });
+  r.get('/checkouts', adminRead(), vCheckouts, async (req, res) => {
+    const q = vCheckouts.get(req).query;
+    const term = q.q?.trim();
+    const termPhone = term ? phoneTermLast4(term) : null;
+    res.json(
+      await listAdminCheckouts(ctx, {
+        ...(term && !termPhone ? { q: term } : {}),
+        ...(q.status ? { status: q.status } : {}),
+        ...(q.phone ? { phone4: phoneParamLast4(q.phone) } : termPhone ? { phone4: termPhone } : {}),
+        ...(q.restaurantId ? { restaurantId: q.restaurantId } : {}),
+        ...(q.from ? { from: q.from } : {}),
+        ...(q.to ? { to: q.to } : {}),
+        ...(q.cursor ? { cursor: q.cursor } : {}),
+        limit: q.limit,
+      }),
+    );
+  });
+
   r.get('/overview', adminRead(), async (_req, res) => {
     res.json(await ordersOverview(ctx));
   });
@@ -187,6 +211,19 @@ function openapi(o: OpenApi): void {
     security: 'bearer',
     request: { query: AdminOrdersQuery },
     responses: { 200: { description: 'Page of child orders', content: json(AdminOrderPage) } },
+    errors: ['MFA_REQUIRED'],
+  });
+  o.route({
+    method: 'get',
+    path: `${BASE}/checkouts`,
+    tags,
+    summary: 'Checkout-level order list (one row per checkout: restaurants, derived status, paid/refund totals, attention)',
+    description:
+      'Newest placed first (`placedAt desc`). Without `status` only placed checkouts are listed; never-placed ones ' +
+      '(AWAITING_PAYMENT / PAYMENT_FAILED / EXPIRED) appear only when asked for and sort last. A `q` of 4–13 digits is a phone search.',
+    security: 'bearer',
+    request: { query: AdminCheckoutsQuery },
+    responses: { 200: { description: 'Page of checkouts', content: json(AdminCheckoutPage) } },
     errors: ['MFA_REQUIRED'],
   });
   o.route({

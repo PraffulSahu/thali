@@ -65,6 +65,26 @@ export const AdminOrdersQuery = PaginationQuerySchema.extend({
   to: z.iso.datetime({ offset: true }).optional(),
 });
 
+const checkoutStatusList = z
+  .string()
+  .trim()
+  .min(1)
+  .transform((s) => s.split(',').map((x) => x.trim()).filter(Boolean))
+  .pipe(z.array(CheckoutStatusSchema).min(1).max(8))
+  .meta({ description: 'Checkout status, or a comma-separated list (default: every placed checkout)', example: 'PAID_PLACED,IN_PROGRESS' });
+
+export const AdminCheckoutsQuery = PaginationQuerySchema.extend({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  q: AdminOrdersQuery.shape.q.meta({
+    description: 'Checkout or child code (TH-…), checkout/child/user/restaurant id, restaurant name prefix, or a phone (4–13 digits → last-4 match)',
+  }),
+  status: checkoutStatusList.optional(),
+  phone: AdminOrdersQuery.shape.phone,
+  restaurantId: z.string().min(1).max(64).optional(),
+  from: z.iso.datetime({ offset: true }).optional().meta({ description: 'placedAt ≥ from (createdAt for never-placed checkouts)' }),
+  to: z.iso.datetime({ offset: true }).optional(),
+});
+
 export const TicketsQuery = PaginationQuerySchema.extend({ status: z.enum(enumValues(TicketStatus)).optional() });
 export const AdminTicketsQuery = TicketsQuery.extend({
   category: z.enum(enumValues(TicketCategory)).optional(),
@@ -262,6 +282,41 @@ export const AdminChildRow = z
   })
   .meta({ id: 'AdminOrderRow' });
 export const AdminOrderPage = z.object({ items: z.array(AdminChildRow), nextCursor: z.string().nullable() }).meta({ id: 'AdminOrderPage' });
+
+export const AdminCheckoutRow = z
+  .object({
+    id: z.string(),
+    code: z.string().meta({ example: 'TH-DEMOMULTI' }),
+    status: CheckoutStatusSchema,
+    userId: z.string(),
+    placedAt: nullableIso,
+    createdAt: nullableIso,
+    customer: Customer,
+    restaurants: z.array(
+      z.object({
+        id: z.string().meta({ description: 'Restaurant id' }),
+        childOrderId: z.string(),
+        childCode: z.string(),
+        name: z.string(),
+        childStatus: ChildOrderStatusSchema,
+        deliveryStatus: z.string().nullable(),
+        refundStatus: z.string(),
+      }),
+    ),
+    totalPaise: z.number().int(),
+    paidPaise: z.number().int(),
+    refundedPaise: z.number().int(),
+    refundPendingPaise: z.number().int(),
+    attention: z
+      .enum(['DELIVERY_FAILED', 'REFUND_FAILED', 'FINDING_PARTNER', 'AWAITING_ACCEPTANCE'])
+      .nullable()
+      .meta({
+        description:
+          'Most urgent issue: a child delivery failed › a refund failed › an accepted child has no partner yet › a child awaits restaurant acceptance; null = nothing to do',
+      }),
+  })
+  .meta({ id: 'AdminCheckoutRow' });
+export const AdminCheckoutPage = z.object({ items: z.array(AdminCheckoutRow), nextCursor: z.string().nullable() }).meta({ id: 'AdminCheckoutPage' });
 
 export const AdminChildView = CustomerChildView.extend({
   userId: z.string(),
