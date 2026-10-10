@@ -113,8 +113,11 @@ describe('admin search / overview', () => {
     expect(ov.body.activeByStatus.PLACED).toBeGreaterThanOrEqual(2);
     expect(typeof ov.body.today.placed).toBe('number');
     expect(typeof ov.body.today.gmvPaise).toBe('number');
+    const rejectedBefore = ov.body.today.rejected;
+    await p.ownerA.post(`/api/v1/owner/orders/${p.a.id}/reject`, { reason: 'Closed' });
+    expect((await admin.get('/api/v1/admin/orders/overview')).body.today.rejected).toBe(rejectedBefore + 1);
     expect(typeof ov.body.awaitingAcceptance).toBe('number');
     expect(typeof ov.body.refundsPending).toBe('number');
-    expect((await group(h, p.checkout.id))!.status).toBe('PAID_PLACED');
+    expect((await group(h, p.checkout.id))!.status).toBe('IN_PROGRESS');
   });
 });

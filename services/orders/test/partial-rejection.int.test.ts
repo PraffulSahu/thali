@@ -3,7 +3,7 @@
  * B refunded, A continues, the customer sees an accurate explanation and updated totals.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { subscribeRealtime, type ConsumerHandle } from '@thali/service-kit';
+import { createEnvelope, streamKey, subscribeRealtime, type ConsumerHandle } from '@thali/service-kit';
 import { waitFor } from '@thali/service-kit/testing';
 import { startOrdersConsumers } from '../src/events/index.js';
 import { oid, outboxEvents, publishEvent, setup, type Harness } from './helpers.js';
@@ -179,4 +179,22 @@ describe('partial rejection', () => {
     expect(b!.refundStatus).toBe('SUCCEEDED');
     expect(b!.refundedPaise).toBe(p.b.total);
   });
+
+  it('a refund event older than the last applied one is ignored (late PROCESSING does not flip FAILED back)', async () => {
+    const p = await placedCheckout(h);
+    await p.ownerB.post(`/api/v1/owner/orders/${p.b.id}/reject`, { reason: 'Closed' });
+    const base = { refundId: oid(), childOrderId: p.b.id, checkoutGroupId: p.checkout.id, amountPaise: p.b.total, reason: 'RESTAURANT_REJECTED' as const };
+    const t = Date.now();
+    const sendAt = async (type: 'refund.processing' | 'refund.failed', status: 'PROCESSING' | 'FAILED', occurredAt: Date) => {
+      const env = createEnvelope(type, { ...base, status }, { producer: 'payments', aggregateId: 'agg', occurredAt });
+      await h.tr.redis.xadd(streamKey(h.tr.prefix, 'events.payments'), '*', 'data', JSON.stringify(env));
+      await processed(h, env.id);
+    };
+    await sendAt('refund.failed', 'FAILED', new Date(t - 1000));
+    await sendAt('refund.processing', 'PROCESSING', new Date(t - 5000)); // older attempt, delivered late
+    expect((await child(h, p.b.id))!.refundStatus).toBe('FAILED');
+    await sendAt('refund.processing', 'PROCESSING', new Date(t)); // genuine retry
+    expect((await child(h, p.b.id))!.refundStatus).toBe('PROCESSING');
+  });
+
 });

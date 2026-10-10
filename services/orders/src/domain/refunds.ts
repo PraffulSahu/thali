@@ -5,7 +5,8 @@
  * order event; payments creates the refund and reports progress with `refund.*`. Each refund is
  * mirrored on the child by `refundId`, so re-published copies (new envelope ids) never double count:
  *   refundedPaise = Σ SUCCEEDED entries; refundStatus = aggregate of entries (+ a not-yet-seen request).
- * Refund statuses only move forward (SUCCEEDED is final, FAILED → PROCESSING is a retry).
+ * Refund statuses only move forward (SUCCEEDED is final, FAILED → PROCESSING is a retry), and an event
+ * older (`occurredAt`) than the last one applied to that refund is ignored.
  */
 import { Types, type ClientSession } from 'mongoose';
 import type { EventEnvelope, RefundEventPayload } from '@thali/contracts';
@@ -90,6 +91,8 @@ export async function applyRefundEvent(
   const entry = child.refunds.find((r) => r.refundId === p.refundId);
   if (!entry) {
     child.refunds.push({ refundId: p.refundId, amountPaise: p.amountPaise, reason: p.reason, status, updatedAt: at });
+  } else if (entry.updatedAt && at.getTime() < new Date(entry.updatedAt).getTime()) {
+    return 'STALE'; // older than what we applied (e.g. a late PROCESSING must not flip FAILED back)
   } else if (canAdvanceRefund(entry.status, status)) {
     entry.status = status;
     entry.updatedAt = at;

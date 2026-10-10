@@ -234,7 +234,8 @@ export async function transitionChild(
     case 'DELIVERED': {
       if (extra.deliveryJobId && !child.deliveryJobId) child.deliveryJobId = extra.deliveryJobId;
       if (extra.deliveryDistanceKm !== undefined) child.deliveryDistanceKm = extra.deliveryDistanceKm;
-      const partnerUserId = child.partner?.partnerUserId || extra.partnerUserId || '';
+      // the partner who actually delivered (delivery.delivered) wins over the last assignment mirror
+      const partnerUserId = extra.partnerUserId || child.partner?.partnerUserId || '';
       const deliveryJobId = child.deliveryJobId || extra.deliveryJobId || '';
       const deliveryDistanceKm = child.deliveryDistanceKm ?? child.distanceKm ?? 0;
       timelineData.deliveryDistanceKm = deliveryDistanceKm;

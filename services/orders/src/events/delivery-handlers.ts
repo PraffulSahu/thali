@@ -2,8 +2,9 @@
  * Delivery event consumers (`events.delivery`, LLD §4.1 / §8 / §9). Child transitions go through
  * `transitionChild` (actor SYSTEM). Ordering rules:
  *  - `delivery.picked_up` while ACCEPTED/PREPARING is allowed (restaurant forgot "ready")
- *  - `delivery.started` / `delivery.delivered` arriving early walk the missing steps implicitly
- *    (PICKED_UP → OUT_FOR_DELIVERY → DELIVERED, one history entry + event each)
+ *  - `delivery.started` / `delivery.delivered` / `delivery.failed` arriving early walk the missing
+ *    steps implicitly (PICKED_UP → OUT_FOR_DELIVERY → DELIVERED; PICKED_UP → DELIVERY_FAILED — a job
+ *    can only fail after pickup, LLD §4.5), one history entry + event each
  *  - anything that implies an earlier state than the current one is stale → ignored (no error,
  *    so duplicates / late copies are no-ops and never dead-letter)
  *  - events for a job other than the child's recorded `deliveryJobId` are ignored
@@ -37,6 +38,7 @@ export function pathFor(type: DeliveryEventType, status: ChildOrderStatus): Chil
       if (status === 'PICKED_UP') return ['OUT_FOR_DELIVERY', 'DELIVERED'];
       return status === 'OUT_FOR_DELIVERY' ? ['DELIVERED'] : [];
     case 'delivery.failed':
+      if (pre) return ['PICKED_UP', 'DELIVERY_FAILED'];
       return status === 'PICKED_UP' || status === 'OUT_FOR_DELIVERY' ? ['DELIVERY_FAILED'] : [];
     default:
       return [];
@@ -107,15 +109,21 @@ export function deliveryHandlers(ctx: OrdersContext): EventHandlers {
       const child = await loadChild(ctx, session, e);
       if (!child) return;
       const occurred = new Date(e.occurredAt);
-      const newer = !child.deliveryUpdatedAt || child.deliveryUpdatedAt.getTime() <= occurred.getTime();
-      if (!newer && child.partner) return; // stale assignment (a later unassign/progress already applied)
       const p = e.payload;
+      const newer = !child.deliveryUpdatedAt || child.deliveryUpdatedAt.getTime() <= occurred.getTime();
+      if (!newer) {
+        // stale assignment (a later unassign / progress already applied): never overwrite the partner
+        if (!child.deliveryJobId) {
+          child.deliveryJobId = p.jobId;
+          await child.save({ session });
+        }
+        ctx.logger.info({ childOrderId: String(child._id), jobId: p.jobId, eventId: e.id }, 'stale delivery.assigned; partner not changed');
+        return;
+      }
       child.deliveryJobId = p.jobId;
       child.partner = { partnerId: p.partnerId, partnerUserId: p.partnerUserId, name: p.partnerName, vehicle: { type: p.vehicle.type, registrationNumber: p.vehicle.registrationNumber } };
-      if (newer) {
-        if (PRE_PICKUP.includes(child.status) || child.status === 'PLACED') child.deliveryStatus = 'ASSIGNED';
-        child.deliveryUpdatedAt = occurred;
-      }
+      if (PRE_PICKUP.includes(child.status) || child.status === 'PLACED') child.deliveryStatus = 'ASSIGNED';
+      child.deliveryUpdatedAt = occurred;
       await child.save({ session });
       await appendOrderEvents(ctx.conn, session, [
         {

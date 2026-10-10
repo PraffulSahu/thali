@@ -87,7 +87,7 @@ export async function ordersOverview(ctx: OrdersContext, now = new Date()) {
     C.aggregate<{ _id: ChildOrderStatus; n: number }>([{ $match: { status: { $in: ACTIVE } } }, { $group: { _id: '$status', n: { $sum: 1 } } }]),
     C.countDocuments({ placedAt: { $gte: since } }),
     C.countDocuments({ deliveredAt: { $gte: since } }),
-    C.countDocuments({ status: 'REJECTED', updatedAt: { $gte: since } }),
+    C.countDocuments({ status: 'REJECTED', statusHistory: { $elemMatch: { to: 'REJECTED', at: { $gte: since } } } }),
     C.countDocuments({ status: 'CANCELLED', cancelledAt: { $gte: since } }),
     C.countDocuments({ status: 'PLACED', acceptBy: { $lt: now } }),
     C.countDocuments({ refundStatus: { $in: ['REQUESTED', 'PROCESSING', 'FAILED'] } }),

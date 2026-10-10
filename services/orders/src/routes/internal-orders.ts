@@ -14,7 +14,7 @@ import { restaurantStats } from '../domain/stats.js';
 import { InternalChildOrder, InternalChildParams, RestaurantStatsView, StatsQuery, json } from '../order-schemas.js';
 import type { RouteModule } from './types.js';
 
-const CHILD_CALLERS = ['marketplace', 'notifications', 'payments', 'delivery', 'gateway'] as const;
+const CHILD_CALLERS = ['marketplace', 'notifications', 'payments', 'delivery'] as const;
 
 function register(app: express.Express, ctx: OrdersContext): void {
   const r = express.Router();
@@ -37,7 +37,7 @@ function register(app: express.Express, ctx: OrdersContext): void {
   });
 
   const vStats = validate({ query: StatsQuery });
-  r.get('/internal/orders/stats', requireInternal(['marketplace', 'gateway']), vStats, async (req, res) => {
+  r.get('/internal/orders/stats', requireInternal(['marketplace']), vStats, async (req, res) => {
     const q = vStats.get(req).query;
     res.json(await restaurantStats(ctx, { restaurantId: q.restaurantId, from: new Date(q.from), to: new Date(q.to) }));
   });

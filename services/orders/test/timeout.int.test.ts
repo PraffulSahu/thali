@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { jobModules } from '../src/jobs/index.js';
-import { runAcceptanceTimeout } from '../src/jobs/acceptance-timeout.js';
+import { runAcceptanceTimeout, timeoutBackoffMs } from '../src/jobs/acceptance-timeout.js';
 import { outboxEvents, setup, type Harness } from './helpers.js';
 import { child, group, placedCheckout } from './lifecycle-helpers.js';
 
@@ -46,9 +46,32 @@ describe('acceptance-timeout sweeper (LLD §8 sweeper b)', () => {
     expect(ex.message).toMatch(/^Spice Route did not respond in time\. ₹[\d,]+\.\d{2} refund initiated\.$/);
   });
 
-  it('is registered as a leader-locked job', () => {
+  it('is registered in jobModules with the configured interval (run under the service-kit leader lock)', () => {
     const job = jobModules.find((j) => j.name === 'orders:acceptance-timeout');
     expect(job).toBeDefined();
     expect(job!.intervalMs(h.config)).toBe(h.config.ACCEPT_TIMEOUT_INTERVAL_MS);
   });
+
+  it('children that keep failing are backed off and cannot starve the batch', async () => {
+    const poisoned = await placedCheckout(h);
+    const healthy = await placedCheckout(h);
+    // break the poisoned checkout (parent missing → transition throws) and make it the oldest due
+    await h.ctx.models.CheckoutGroup.deleteOne({ _id: poisoned.checkout.id });
+    await h.ctx.models.ChildOrder.updateMany({ _id: { $in: [poisoned.a.id, poisoned.b.id] } }, { $set: { acceptBy: new Date(Date.now() - 60_000) } });
+    await h.ctx.models.ChildOrder.updateOne({ _id: healthy.a.id }, { $set: { acceptBy: new Date(Date.now() - 1000) } });
+
+    const first = await runAcceptanceTimeout(h.ctx, { batch: 2 });
+    expect(first).toMatchObject({ rejected: 0, failed: 2 });
+    const pa = await child(h, poisoned.a.id);
+    expect(pa!.timeoutFailures).toBe(1);
+    expect(new Date(pa!.timeoutRetryAt!).getTime()).toBeGreaterThan(Date.now() + 20_000);
+
+    const second = await runAcceptanceTimeout(h.ctx, { batch: 2 });
+    expect(second).toMatchObject({ rejected: 1, failed: 0 });
+    expect((await child(h, healthy.a.id))!.status).toBe('REJECTED');
+    expect(timeoutBackoffMs(1)).toBe(30_000);
+    expect(timeoutBackoffMs(3)).toBe(120_000);
+    expect(timeoutBackoffMs(20)).toBe(15 * 60_000);
+  });
+
 });

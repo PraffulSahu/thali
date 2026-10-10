@@ -111,6 +111,9 @@ export interface ChildOrder {
   deliveryDistanceKm?: number | null;
   /** `occurredAt` of the last applied delivery mirror update (assigned / unassigned ordering). */
   deliveryUpdatedAt?: Date | null;
+  /** Acceptance-timeout sweeper backoff after failures (not retried before this time). */
+  timeoutRetryAt?: Date | null;
+  timeoutFailures?: number;
   schemaVersion: number;
   createdAt: Date;
   updatedAt: Date;
@@ -206,6 +209,8 @@ export const ChildOrderSchema = new Schema<ChildOrder>(
     },
     deliveryDistanceKm: { type: Number, default: null },
     deliveryUpdatedAt: { type: Date, default: null },
+    timeoutRetryAt: { type: Date, default: null },
+    timeoutFailures: { type: Number, default: 0 },
     schemaVersion: { type: Number, default: 1 },
   },
   { collection: 'child_orders', timestamps: true, optimisticConcurrency: true },

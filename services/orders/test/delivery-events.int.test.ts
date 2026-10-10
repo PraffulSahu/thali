@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ConsumerHandle } from '@thali/service-kit';
+import { createEnvelope, streamKey, type ConsumerHandle } from '@thali/service-kit';
+import { waitFor } from '@thali/service-kit/testing';
 import { startOrdersConsumers } from '../src/events/index.js';
 import { oid, outboxEvents, publishEvent, setup, type Harness } from './helpers.js';
 import { asAdmin, child, group, placedCheckout, processed, type Placed } from './lifecycle-helpers.js';
@@ -31,6 +32,17 @@ async function acceptedA(p: Placed, prepare = true) {
 }
 
 const at = () => new Date().toISOString();
+
+/** Publish a delivery event with an explicit envelope occurredAt (out-of-order scenarios). */
+async function sendAt<T extends 'delivery.assigned' | 'delivery.unassigned' | 'delivery.delivered'>(
+  type: T,
+  payload: Parameters<typeof publishEvent<T>>[4],
+  occurredAt: Date,
+) {
+  const env = createEnvelope(type, payload, { producer: 'delivery', aggregateId: 'agg', occurredAt });
+  await h.tr.redis.xadd(streamKey(h.tr.prefix, 'events.delivery'), '*', 'data', JSON.stringify(env));
+  await processed(h, env.id);
+}
 
 describe('delivery events → child transitions', () => {
   it('assigned stores the job; picked_up while PREPARING → PICKED_UP; delivered while PICKED_UP → two entries ending DELIVERED', async () => {
@@ -163,11 +175,65 @@ describe('delivery events → child transitions', () => {
     expect(view.body.explanations).toEqual([expect.objectContaining({ childOrderId: p.b.id, kind: 'DELIVERY_FAILED' })]);
 
     const admin = await asAdmin(h);
-    const r = await admin.post(`/api/v1/admin/orders/child/${p.b.id}/cancel`, { reason: 'Delivery failed — full refund', refundPaise: p.b.total });
+    // the admin route's snapshot transaction can briefly lag the consumer's commit seen by a plain read:
+    // retry only a 409 that was computed from a status other than DELIVERY_FAILED
+    let r = await admin.post(`/api/v1/admin/orders/child/${p.b.id}/cancel`, { reason: 'Delivery failed — full refund', refundPaise: p.b.total });
+    await waitFor(async () => {
+      if (r.status === 409 && r.body.error?.details?.from !== 'DELIVERY_FAILED') {
+        r = await admin.post(`/api/v1/admin/orders/child/${p.b.id}/cancel`, { reason: 'Delivery failed — full refund', refundPaise: p.b.total });
+      }
+      return r.status !== 409 || r.body.error?.details?.from === 'DELIVERY_FAILED';
+    }, { timeoutMs: 10_000, intervalMs: 100 });
     expect(r.status, JSON.stringify(r.body)).toBe(200);
     expect((await child(h, p.b.id))!.status).toBe('CANCELLED');
     expect((await group(h, p.checkout.id))!.status).toBe('PARTIALLY_COMPLETED');
     const ev = (await outboxEvents(h, 'order.cancelled')).find((e) => e.payload.childOrderId === p.b.id);
     expect(ev!.payload).toMatchObject({ actor: 'ADMIN', reason: 'DELIVERY_FAILED', refundPaise: p.b.total, fromStatus: 'DELIVERY_FAILED' });
   });
+
+  it('out of order: delivery.failed before picked_up (child PREPARING) → implicit PICKED_UP → DELIVERY_FAILED; late picked_up stale', async () => {
+    const p = await placedCheckout(h);
+    await acceptedA(p);
+    const jobId = oid();
+    const pu = oid();
+    await send('delivery.failed', { jobId, childOrderId: p.a.id, reason: 'Accident' });
+    let c = await child(h, p.a.id);
+    expect(c!.status).toBe('DELIVERY_FAILED');
+    expect(c!.statusHistory.slice(-2).map((s) => [s.from, s.to])).toEqual([
+      ['PREPARING', 'PICKED_UP'],
+      ['PICKED_UP', 'DELIVERY_FAILED'],
+    ]);
+    expect(c!.deliveryFailureReason).toBe('Accident');
+    const len = c!.statusHistory.length;
+    await send('delivery.picked_up', { jobId, childOrderId: p.a.id, partnerUserId: pu, at: at() });
+    c = await child(h, p.a.id);
+    expect(c!.status).toBe('DELIVERY_FAILED');
+    expect(c!.statusHistory).toHaveLength(len);
+    expect((await outboxEvents(h, 'order.delivery_failed')).filter((e) => e.payload.childOrderId === p.a.id)).toHaveLength(1);
+  });
+
+  it('unassigned → stale assigned does not overwrite the partner; order.delivered credits the delivering partner', async () => {
+    const p = await placedCheckout(h);
+    await acceptedA(p);
+    const jobId = oid();
+    const p1 = oid();
+    const p2 = oid();
+    const p3 = oid();
+    const t = Date.now();
+    const vehicle = { type: 'BIKE' as const, registrationNumber: 'KA01' };
+    await sendAt('delivery.assigned', { jobId, childOrderId: p.a.id, partnerId: oid(), partnerUserId: p1, partnerName: 'First', vehicle }, new Date(t - 30_000));
+    await sendAt('delivery.unassigned', { jobId, childOrderId: p.a.id, reason: 'dropped' }, new Date(t - 10_000));
+    // an assignment that happened before the unassign arrives late → ignored
+    await sendAt('delivery.assigned', { jobId, childOrderId: p.a.id, partnerId: oid(), partnerUserId: p2, partnerName: 'Stale', vehicle }, new Date(t - 20_000));
+    let c = await child(h, p.a.id);
+    expect(c!.partner ?? null).toBeNull();
+    expect(c!.deliveryStatus).toBe('PENDING_ASSIGNMENT');
+    // the actual delivery is done by p3 (its assignment event never arrived)
+    await sendAt('delivery.delivered', { jobId, childOrderId: p.a.id, partnerUserId: p3, at: at(), distanceKm: 1.5 }, new Date(t));
+    c = await child(h, p.a.id);
+    expect(c!.status).toBe('DELIVERED');
+    const d = (await outboxEvents(h, 'order.delivered')).find((e) => e.payload.childOrderId === p.a.id);
+    expect(d!.payload.partnerUserId).toBe(p3);
+  });
+
 });
