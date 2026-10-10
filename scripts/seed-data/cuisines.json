@@ -1,0 +1,110 @@
+[
+  {
+    "slug": "biryani",
+    "name": "Biryani",
+    "imageId": "cuisine-biryani",
+    "weight": 8
+  },
+  {
+    "slug": "south-indian",
+    "name": "South Indian",
+    "imageId": "cuisine-south-indian",
+    "weight": 12
+  },
+  {
+    "slug": "north-indian",
+    "name": "North Indian",
+    "imageId": "cuisine-north-indian",
+    "weight": 11
+  },
+  {
+    "slug": "chinese",
+    "name": "Chinese",
+    "imageId": "cuisine-chinese",
+    "weight": 10
+  },
+  {
+    "slug": "coastal",
+    "name": "Coastal",
+    "imageId": "cuisine-coastal",
+    "weight": 2.5
+  },
+  {
+    "slug": "rolls",
+    "name": "Rolls",
+    "imageId": "cuisine-rolls",
+    "weight": 4
+  },
+  {
+    "slug": "pizza",
+    "name": "Pizza",
+    "imageId": "cuisine-pizza",
+    "weight": 4.5
+  },
+  {
+    "slug": "healthy",
+    "name": "Healthy",
+    "imageId": "cuisine-healthy",
+    "weight": 4
+  },
+  {
+    "slug": "desserts",
+    "name": "Desserts",
+    "imageId": "cuisine-desserts",
+    "weight": 4
+  },
+  {
+    "slug": "chai-snacks",
+    "name": "Chai & Snacks",
+    "imageId": "cuisine-chai-snacks",
+    "weight": 6
+  },
+  {
+    "slug": "burgers",
+    "name": "Burgers",
+    "imageId": "cuisine-burgers",
+    "weight": 5
+  },
+  {
+    "slug": "andhra",
+    "name": "Andhra",
+    "imageId": "cuisine-andhra",
+    "weight": 2.5
+  },
+  {
+    "slug": "kerala",
+    "name": "Kerala",
+    "imageId": "cuisine-kerala",
+    "weight": 2.5
+  },
+  {
+    "slug": "mughlai",
+    "name": "Mughlai",
+    "imageId": "cuisine-mughlai",
+    "weight": 3
+  },
+  {
+    "slug": "cafe",
+    "name": "Cafe",
+    "imageId": "cuisine-cafe",
+    "weight": 7
+  },
+  {
+    "slug": "bakery",
+    "name": "Bakery",
+    "imageId": "cuisine-bakery",
+    "weight": 6
+  },
+  {
+    "slug": "ice-cream",
+    "name": "Ice Cream",
+    "imageId": "cuisine-ice-cream",
+    "weight": 3
+  },
+  {
+    "slug": "street-food",
+    "name": "Street Food",
+    "imageId": "cuisine-street-food",
+    "weight": 5
+  }
+]

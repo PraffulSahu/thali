@@ -1,0 +1,1071 @@
+[
+  {
+    "name": "Indiranagar",
+    "pincode": "560038",
+    "lat": 12.97329,
+    "lng": 77.64047,
+    "zone": "east",
+    "streets": [
+      "100 Feet Road",
+      "CMH Road",
+      "12th Main Road",
+      "80 Feet Road",
+      "Double Road",
+      "6th Main Road",
+      "Defence Colony 3rd Cross",
+      "Chinmaya Mission Hospital Road"
+    ]
+  },
+  {
+    "name": "Koramangala 1st Block",
+    "pincode": "560034",
+    "lat": 12.92772,
+    "lng": 77.63278,
+    "zone": "south",
+    "streets": [
+      "1st Cross Road",
+      "Jyothi Nivas College Road",
+      "Sarjapur Main Road",
+      "8th Main Road",
+      "Wilson Garden Link Road",
+      "Madiwala Road"
+    ]
+  },
+  {
+    "name": "Koramangala 2nd Block",
+    "pincode": "560034",
+    "lat": 12.92437,
+    "lng": 77.62424,
+    "zone": "south",
+    "streets": [
+      "2nd Cross Road",
+      "Kendriya Sadan Road",
+      "Hosur Road",
+      "6th Main Road",
+      "Sony World Signal Road"
+    ]
+  },
+  {
+    "name": "Koramangala 3rd Block",
+    "pincode": "560034",
+    "lat": 12.92829,
+    "lng": 77.6254,
+    "zone": "south",
+    "streets": [
+      "3rd Cross Road",
+      "Koramangala Club Road",
+      "80 Feet Road",
+      "Madiwala Road",
+      "Hosur Road"
+    ]
+  },
+  {
+    "name": "Koramangala 4th Block",
+    "pincode": "560034",
+    "lat": 12.93278,
+    "lng": 77.62941,
+    "zone": "south",
+    "streets": [
+      "80 Feet Road",
+      "5th Cross Road",
+      "Jyoti Nivas College Road",
+      "Koramangala Inner Ring Road",
+      "Forum Mall Road",
+      "6th Cross Road"
+    ]
+  },
+  {
+    "name": "Koramangala 5th Block",
+    "pincode": "560095",
+    "lat": 12.93484,
+    "lng": 77.61898,
+    "zone": "south",
+    "streets": [
+      "80 Feet Road",
+      "Jyothi Nivas College Road",
+      "17th Main Road",
+      "Sarjapur Road Junction",
+      "Water Tank Road",
+      "18th Main Road"
+    ]
+  },
+  {
+    "name": "Koramangala 6th Block",
+    "pincode": "560095",
+    "lat": 12.93903,
+    "lng": 77.62385,
+    "zone": "south",
+    "streets": [
+      "20th Main Road",
+      "80 Feet Road",
+      "Koramangala Inner Ring Road",
+      "1st Cross Road",
+      "7th Cross Road",
+      "Maruthi Nagar Road"
+    ]
+  },
+  {
+    "name": "Koramangala 7th Block",
+    "pincode": "560095",
+    "lat": 12.93648,
+    "lng": 77.61348,
+    "zone": "south",
+    "streets": [
+      "80 Feet Road",
+      "3rd Cross Road",
+      "Raheja Arcade Road",
+      "Sarjapur Road",
+      "Koramangala Inner Ring Road"
+    ]
+  },
+  {
+    "name": "Koramangala 8th Block",
+    "pincode": "560095",
+    "lat": 12.94087,
+    "lng": 77.61734,
+    "zone": "south",
+    "streets": [
+      "80 Feet Road",
+      "Intermediate Ring Road",
+      "Venkatapura Road",
+      "5th Cross Road",
+      "Ejipura Main Road"
+    ]
+  },
+  {
+    "name": "HSR Layout",
+    "pincode": "560102",
+    "lat": 12.91162,
+    "lng": 77.63886,
+    "zone": "south",
+    "streets": [
+      "27th Main Road",
+      "14th Main Road",
+      "24th Main Road",
+      "100 Feet Road",
+      "Outer Ring Road",
+      "BDA Complex Road",
+      "19th Main Road"
+    ]
+  },
+  {
+    "name": "Jayanagar",
+    "pincode": "560011",
+    "lat": 12.92927,
+    "lng": 77.58242,
+    "zone": "south",
+    "streets": [
+      "11th Main Road",
+      "30th Cross Road",
+      "South End Circle Road",
+      "9th Block East End Road",
+      "Jayanagar 4th Block Shopping Complex",
+      "Ashoka Pillar Road",
+      "27th Main Road"
+    ]
+  },
+  {
+    "name": "JP Nagar",
+    "pincode": "560078",
+    "lat": 12.90969,
+    "lng": 77.58661,
+    "zone": "south",
+    "streets": [
+      "15th Cross Road",
+      "24th Main Road",
+      "Outer Ring Road",
+      "100 Feet Ring Road",
+      "Brigade Millennium Road",
+      "Dollars Colony Road",
+      "Kothnur Main Road"
+    ]
+  },
+  {
+    "name": "BTM Layout",
+    "pincode": "560076",
+    "lat": 12.914,
+    "lng": 77.61028,
+    "zone": "south",
+    "streets": [
+      "Udupi Garden Road",
+      "16th Main Road",
+      "29th Main Road",
+      "Outer Ring Road",
+      "Tavarekere Main Road",
+      "Bannerghatta Main Road"
+    ]
+  },
+  {
+    "name": "Whitefield",
+    "pincode": "560066",
+    "lat": 12.99574,
+    "lng": 77.75795,
+    "zone": "east",
+    "streets": [
+      "ITPL Main Road",
+      "Hope Farm Junction Road",
+      "Whitefield Main Road",
+      "Varthur Road",
+      "Kadugodi Main Road",
+      "EPIP Zone Road",
+      "Borewell Road"
+    ]
+  },
+  {
+    "name": "Marathahalli",
+    "pincode": "560037",
+    "lat": 12.95526,
+    "lng": 77.69842,
+    "zone": "east",
+    "streets": [
+      "Outer Ring Road",
+      "HAL Old Airport Road",
+      "Marathahalli Bridge Road",
+      "Kundalahalli Gate Road",
+      "Munnekolala Main Road",
+      "Varthur Main Road"
+    ]
+  },
+  {
+    "name": "Bellandur",
+    "pincode": "560103",
+    "lat": 12.93205,
+    "lng": 77.68429,
+    "zone": "east",
+    "streets": [
+      "Outer Ring Road",
+      "Sarjapur Main Road",
+      "Bellandur Gate Road",
+      "Ecospace Road",
+      "Kasavanahalli Main Road",
+      "Green Glen Layout Road"
+    ]
+  },
+  {
+    "name": "Sarjapur Road",
+    "pincode": "560035",
+    "lat": 12.92449,
+    "lng": 77.64514,
+    "zone": "east",
+    "streets": [
+      "Sarjapur Main Road",
+      "Dommasandra Circle Road",
+      "Carmelaram Road",
+      "Kaikondrahalli Road",
+      "Haralur Road",
+      "Chikkakannalli Road",
+      "Doddakannelli Road"
+    ]
+  },
+  {
+    "name": "Electronic City",
+    "pincode": "560100",
+    "lat": 12.84876,
+    "lng": 77.64825,
+    "zone": "south",
+    "streets": [
+      "Hosur Road",
+      "Phase 1 Main Road",
+      "Neeladri Road",
+      "Konappana Agrahara Road",
+      "Doddathogur Road",
+      "Phase 2 Main Road"
+    ]
+  },
+  {
+    "name": "MG Road",
+    "pincode": "560001",
+    "lat": 12.97553,
+    "lng": 77.60679,
+    "zone": "central",
+    "streets": [
+      "MG Road",
+      "Residency Road",
+      "Rest House Road",
+      "Magrath Road",
+      "Mahatma Gandhi Road Metro Station Road",
+      "Trinity Circle Road"
+    ]
+  },
+  {
+    "name": "Church Street",
+    "pincode": "560001",
+    "lat": 12.97491,
+    "lng": 77.60526,
+    "zone": "central",
+    "streets": [
+      "Church Street",
+      "St. Marks Road",
+      "Museum Road",
+      "Rest House Road",
+      "Brigade Road Junction",
+      "Ulsoor Road"
+    ]
+  },
+  {
+    "name": "Brigade Road",
+    "pincode": "560001",
+    "lat": 12.97364,
+    "lng": 77.60753,
+    "zone": "central",
+    "streets": [
+      "Brigade Road",
+      "Residency Road",
+      "Church Street",
+      "Rest House Crescent",
+      "Lavelle Road Junction",
+      "Richmond Road"
+    ]
+  },
+  {
+    "name": "Malleshwaram",
+    "pincode": "560003",
+    "lat": 13.00274,
+    "lng": 77.57033,
+    "zone": "north",
+    "streets": [
+      "8th Cross Road",
+      "Sampige Road",
+      "Margosa Road",
+      "15th Cross Road",
+      "18th Cross Road",
+      "Malleshwaram 11th Main Road",
+      "Sankey Road"
+    ]
+  },
+  {
+    "name": "Rajajinagar",
+    "pincode": "560010",
+    "lat": 13.00054,
+    "lng": 77.5497,
+    "zone": "west",
+    "streets": [
+      "Dr Rajkumar Road",
+      "Chord Road",
+      "West of Chord Road",
+      "1st Block Main Road",
+      "Industrial Town Road",
+      "Mahalakshmi Layout Road"
+    ]
+  },
+  {
+    "name": "Basavanagudi",
+    "pincode": "560004",
+    "lat": 12.94173,
+    "lng": 77.5755,
+    "zone": "south",
+    "streets": [
+      "Gandhi Bazaar Main Road",
+      "DVG Road",
+      "Bull Temple Road",
+      "Shankarapuram Road",
+      "Netaji Road",
+      "Basavanagudi 4th Main"
+    ]
+  },
+  {
+    "name": "Banashankari",
+    "pincode": "560070",
+    "lat": 12.92782,
+    "lng": 77.55662,
+    "zone": "south",
+    "streets": [
+      "Kathriguppe Main Road",
+      "Banashankari 2nd Stage Main Road",
+      "Outer Ring Road",
+      "Banashankari Temple Road",
+      "Hosakerehalli Main Road",
+      "BSK 3rd Stage 100 Feet Road"
+    ]
+  },
+  {
+    "name": "Yelahanka",
+    "pincode": "560064",
+    "lat": 13.1007,
+    "lng": 77.59635,
+    "zone": "north",
+    "streets": [
+      "Yelahanka New Town Main Road",
+      "Bellary Road",
+      "Doddaballapur Road",
+      "Attur Layout Road",
+      "Yelahanka Old Town Main Road",
+      "Kogilu Road"
+    ]
+  },
+  {
+    "name": "Hebbal",
+    "pincode": "560024",
+    "lat": 13.03822,
+    "lng": 77.5919,
+    "zone": "north",
+    "streets": [
+      "Bellary Road",
+      "Outer Ring Road",
+      "Kempapura Main Road",
+      "Hebbal Flyover Service Road",
+      "Manorayana Palya Road",
+      "Kodigehalli Main Road"
+    ]
+  },
+  {
+    "name": "RT Nagar",
+    "pincode": "560032",
+    "lat": 13.02272,
+    "lng": 77.59571,
+    "zone": "north",
+    "streets": [
+      "CBI Road",
+      "Ganganagar Main Road",
+      "Hebbal Main Road",
+      "Sultanpalya Main Road",
+      "Armane Nagar Road",
+      "RMV 2nd Stage Road"
+    ]
+  },
+  {
+    "name": "Frazer Town",
+    "pincode": "560005",
+    "lat": 12.99759,
+    "lng": 77.61367,
+    "zone": "central",
+    "streets": [
+      "Mosque Road",
+      "Promenade Road",
+      "Pottery Road",
+      "Wheeler Road",
+      "Coles Road",
+      "Spencer Road"
+    ]
+  },
+  {
+    "name": "Ulsoor",
+    "pincode": "560008",
+    "lat": 12.97788,
+    "lng": 77.62467,
+    "zone": "central",
+    "streets": [
+      "Halasuru Main Road",
+      "Kensington Road",
+      "Ulsoor Lake Road",
+      "Old Madras Road",
+      "Gangadhara Chetty Road",
+      "MG Road Cross"
+    ]
+  },
+  {
+    "name": "Domlur",
+    "pincode": "560071",
+    "lat": 12.96247,
+    "lng": 77.6382,
+    "zone": "east",
+    "streets": [
+      "Domlur Main Road",
+      "Inner Ring Road",
+      "Amar Jyoti Layout Road",
+      "Old Airport Road",
+      "Indiranagar 100 Feet Road Link",
+      "EGL Road"
+    ]
+  },
+  {
+    "name": "CV Raman Nagar",
+    "pincode": "560093",
+    "lat": 12.9851,
+    "lng": 77.66312,
+    "zone": "east",
+    "streets": [
+      "Byappanahalli Main Road",
+      "Old Madras Road",
+      "Kaggadasapura Main Road",
+      "Suddaguntepalya Road",
+      "DRDO Road",
+      "Baiyappanahalli Metro Road"
+    ]
+  },
+  {
+    "name": "Kalyan Nagar",
+    "pincode": "560043",
+    "lat": 13.02214,
+    "lng": 77.64034,
+    "zone": "north",
+    "streets": [
+      "Outer Ring Road",
+      "HRBR Layout Main Road",
+      "Hennur Main Road",
+      "Banaswadi Main Road",
+      "Babusabpalya Road",
+      "Kalyan Nagar 3rd Block Road"
+    ]
+  },
+  {
+    "name": "HBR Layout",
+    "pincode": "560043",
+    "lat": 13.03199,
+    "lng": 77.62808,
+    "zone": "north",
+    "streets": [
+      "HBR Layout 4th Block Main Road",
+      "Outer Ring Road",
+      "Hennur Main Road",
+      "5th Block Road",
+      "Kammanahalli Main Road",
+      "100 Feet Road"
+    ]
+  },
+  {
+    "name": "Banaswadi",
+    "pincode": "560043",
+    "lat": 13.01416,
+    "lng": 77.65185,
+    "zone": "east",
+    "streets": [
+      "Banaswadi Main Road",
+      "Ring Road",
+      "Chelekere Main Road",
+      "Kacharakanahalli Road",
+      "Hennur Road",
+      "Maruthi Sevanagar Road"
+    ]
+  },
+  {
+    "name": "Bannerghatta Road",
+    "pincode": "560076",
+    "lat": 12.8758,
+    "lng": 77.59507,
+    "zone": "south",
+    "streets": [
+      "Bannerghatta Main Road",
+      "Arekere Mico Layout Road",
+      "Hulimavu Gate Road",
+      "Gottigere Road",
+      "Jayadeva Hospital Junction",
+      "Meenakshi Mall Road"
+    ]
+  },
+  {
+    "name": "Bommanahalli",
+    "pincode": "560068",
+    "lat": 12.90346,
+    "lng": 77.623,
+    "zone": "south",
+    "streets": [
+      "Hosur Road",
+      "Begur Road",
+      "Garvebhavi Palya Road",
+      "Silk Board Junction Service Road",
+      "Kudlu Gate Road",
+      "Hongasandra Main Road"
+    ]
+  },
+  {
+    "name": "Hennur",
+    "pincode": "560043",
+    "lat": 13.03708,
+    "lng": 77.64136,
+    "zone": "north",
+    "streets": [
+      "Hennur Main Road",
+      "Hennur Bande Road",
+      "Hennur Bagalur Road",
+      "Kothanur Main Road",
+      "Thanisandra Main Road",
+      "Horamavu Agara Road"
+    ]
+  },
+  {
+    "name": "Kammanahalli",
+    "pincode": "560084",
+    "lat": 13.01485,
+    "lng": 77.6382,
+    "zone": "east",
+    "streets": [
+      "Kammanahalli Main Road",
+      "Hennur Main Road",
+      "St Thomas Town Road",
+      "Banaswadi Road",
+      "Kacharakanahalli Road",
+      "Subbaiah Palya Road"
+    ]
+  },
+  {
+    "name": "Sadashivanagar",
+    "pincode": "560080",
+    "lat": 13.01102,
+    "lng": 77.58086,
+    "zone": "north",
+    "streets": [
+      "Palace Road",
+      "CV Raman Road",
+      "Bellary Road",
+      "Sankey Road",
+      "Subbaiah Circle Road",
+      "8th Main Road"
+    ]
+  },
+  {
+    "name": "Vijayanagar",
+    "pincode": "560040",
+    "lat": 12.97095,
+    "lng": 77.53739,
+    "zone": "west",
+    "streets": [
+      "Chord Road",
+      "Hampi Nagar Road",
+      "RPC Layout Main Road",
+      "Magadi Road",
+      "Attiguppe Main Road",
+      "Cross Road Junction"
+    ]
+  },
+  {
+    "name": "Yeshwanthpur",
+    "pincode": "560022",
+    "lat": 13.01769,
+    "lng": 77.5555,
+    "zone": "north",
+    "streets": [
+      "Tumkur Road",
+      "Yeshwanthpur Circle Road",
+      "Mathikere Road",
+      "MES Ring Road",
+      "Goraguntepalya Main Road",
+      "Sandal Soap Factory Road"
+    ]
+  },
+  {
+    "name": "Kengeri",
+    "pincode": "560060",
+    "lat": 12.91766,
+    "lng": 77.48376,
+    "zone": "west",
+    "streets": [
+      "Mysore Road",
+      "Kengeri Satellite Town Main Road",
+      "Kommaghatta Road",
+      "Kambipura Road",
+      "Ullal Main Road",
+      "Kengeri Hobli Road"
+    ]
+  },
+  {
+    "name": "RR Nagar",
+    "pincode": "560098",
+    "lat": 12.92744,
+    "lng": 77.51552,
+    "zone": "west",
+    "streets": [
+      "Mysore Road",
+      "Kengeri Main Road",
+      "Ideal Homes Township Road",
+      "Pattanagere Road",
+      "Channasandra Main Road",
+      "Ring Road Junction"
+    ]
+  },
+  {
+    "name": "Mahadevapura",
+    "pincode": "560048",
+    "lat": 12.99654,
+    "lng": 77.69272,
+    "zone": "east",
+    "streets": [
+      "Old Madras Road",
+      "ITPL Main Road",
+      "Hoodi Circle Road",
+      "Outer Ring Road",
+      "Garudacharpalya Main Road",
+      "Ramamurthy Nagar Main Road"
+    ]
+  },
+  {
+    "name": "KR Puram",
+    "pincode": "560036",
+    "lat": 13.00752,
+    "lng": 77.69594,
+    "zone": "east",
+    "streets": [
+      "Old Madras Road",
+      "Hoskote Main Road",
+      "Tin Factory Junction Road",
+      "KR Puram Station Road",
+      "Hanging Bridge Road",
+      "Ramamurthy Nagar Road"
+    ]
+  },
+  {
+    "name": "Old Airport Road",
+    "pincode": "560017",
+    "lat": 12.95893,
+    "lng": 77.66336,
+    "zone": "east",
+    "streets": [
+      "Old Airport Road",
+      "HAL Main Road",
+      "Murugeshpalya Road",
+      "Kodihalli Main Road",
+      "Vimanapura Main Road",
+      "Jeevanbimanagar Main Road"
+    ]
+  },
+  {
+    "name": "Wilson Garden",
+    "pincode": "560027",
+    "lat": 12.94893,
+    "lng": 77.59683,
+    "zone": "central",
+    "streets": [
+      "Hosur Road",
+      "Double Road Wilson Garden",
+      "Lalbagh Road",
+      "Dickenson Road",
+      "Chikka Lalbagh Main Road",
+      "Bangalore Dairy Circle Road"
+    ]
+  },
+  {
+    "name": "Richmond Town",
+    "pincode": "560025",
+    "lat": 12.96355,
+    "lng": 77.60159,
+    "zone": "central",
+    "streets": [
+      "Richmond Road",
+      "Hosur Road",
+      "Brunton Road",
+      "Cunningham Road Crossing",
+      "Sophia High School Road",
+      "Residency Cross Road"
+    ]
+  },
+  {
+    "name": "Lavelle Road",
+    "pincode": "560001",
+    "lat": 12.96834,
+    "lng": 77.59651,
+    "zone": "central",
+    "streets": [
+      "Lavelle Road",
+      "Vittal Mallya Road",
+      "Museum Road",
+      "Cubbon Road",
+      "St. Josephs Road",
+      "Kasturba Road"
+    ]
+  },
+  {
+    "name": "Cunningham Road",
+    "pincode": "560052",
+    "lat": 12.98842,
+    "lng": 77.59391,
+    "zone": "central",
+    "streets": [
+      "Cunningham Road",
+      "Millers Road",
+      "Infantry Road",
+      "Racecourse Road",
+      "Lakshmi Road",
+      "Cunningham Crescent Road"
+    ]
+  },
+  {
+    "name": "Vasanth Nagar",
+    "pincode": "560052",
+    "lat": 12.99217,
+    "lng": 77.59146,
+    "zone": "central",
+    "streets": [
+      "Palace Road",
+      "Millers Road",
+      "Cunningham Road",
+      "Vasanth Nagar Main Road",
+      "Kumara Krupa Road",
+      "Race Course Road"
+    ]
+  },
+  {
+    "name": "Shivajinagar",
+    "pincode": "560051",
+    "lat": 12.98553,
+    "lng": 77.60545,
+    "zone": "central",
+    "streets": [
+      "Commercial Street",
+      "Infantry Road",
+      "Russell Market Road",
+      "Cenotaph Road",
+      "Mosque Road",
+      "Queens Road"
+    ]
+  },
+  {
+    "name": "Basaveshwara Nagar",
+    "pincode": "560079",
+    "lat": 12.99376,
+    "lng": 77.53913,
+    "zone": "west",
+    "streets": [
+      "Basaveshwara Nagar Main Road",
+      "West of Chord Road",
+      "Navrang Theatre Road",
+      "Mahalakshmipuram Road",
+      "Ring Road Junction",
+      "Kamakshipalya Main Road"
+    ]
+  },
+  {
+    "name": "Sanjay Nagar",
+    "pincode": "560094",
+    "lat": 12.95787,
+    "lng": 77.69587,
+    "zone": "east",
+    "streets": [
+      "Sanjay Nagar Main Road",
+      "Bellary Road",
+      "RMV 2nd Stage Road",
+      "Ganganagar Main Road",
+      "Geddalahalli Road",
+      "Kaveri Nagar Road"
+    ]
+  },
+  {
+    "name": "Jalahalli",
+    "pincode": "560013",
+    "lat": 13.03941,
+    "lng": 77.51974,
+    "zone": "west",
+    "streets": [
+      "Tumkur Road",
+      "Jalahalli Cross Road",
+      "Jalahalli Main Road",
+      "HMT Layout Road",
+      "Peenya Road",
+      "Gangammanagudi Road"
+    ]
+  },
+  {
+    "name": "Nagarbhavi",
+    "pincode": "560072",
+    "lat": 12.95124,
+    "lng": 77.51905,
+    "zone": "west",
+    "streets": [
+      "Nagarbhavi Main Road",
+      "Outer Ring Road",
+      "Chandra Layout Road",
+      "Vinayaka Layout Road",
+      "Mysore Road",
+      "Nagarbhavi Circle Road"
+    ]
+  },
+  {
+    "name": "Ejipura",
+    "pincode": "560047",
+    "lat": 12.94524,
+    "lng": 77.62748,
+    "zone": "east",
+    "streets": [
+      "Ejipura Main Road",
+      "Sarjapur Road",
+      "Koramangala Ring Road",
+      "Viveknagar Road",
+      "Jakkasandra Main Road",
+      "Intermediate Ring Road"
+    ]
+  },
+  {
+    "name": "Sahakara Nagar",
+    "pincode": "560092",
+    "lat": 13.06215,
+    "lng": 77.58006,
+    "zone": "north",
+    "streets": [
+      "Bellary Road",
+      "Sahakara Nagar Main Road",
+      "Byatarayanapura Road",
+      "Kodigehalli Gate Road",
+      "Judicial Layout Road",
+      "Thindlu Main Road"
+    ]
+  },
+  {
+    "name": "Thanisandra",
+    "pincode": "560077",
+    "lat": 13.05225,
+    "lng": 77.63162,
+    "zone": "north",
+    "streets": [
+      "Thanisandra Main Road",
+      "Hennur Bagalur Road",
+      "Nagawara Road",
+      "Outer Ring Road",
+      "Kothanur Dinne Road",
+      "Manyata Tech Park Road"
+    ]
+  },
+  {
+    "name": "Ramamurthy Nagar",
+    "pincode": "560016",
+    "lat": 13.01202,
+    "lng": 77.67778,
+    "zone": "east",
+    "streets": [
+      "Old Madras Road",
+      "Ramamurthy Nagar Main Road",
+      "Nagavarapalya Road",
+      "Hoysala Nagar Road",
+      "Tin Factory Road",
+      "Kaggadasapura Road"
+    ]
+  },
+  {
+    "name": "Seshadripuram",
+    "pincode": "560020",
+    "lat": 12.99466,
+    "lng": 77.57472,
+    "zone": "central",
+    "streets": [
+      "Seshadri Road",
+      "Platform Road",
+      "Gandhi Nagar Main Road",
+      "Sampige Road",
+      "Racecourse Road",
+      "Kempegowda Road"
+    ]
+  },
+  {
+    "name": "Chamarajpet",
+    "pincode": "560018",
+    "lat": 12.95776,
+    "lng": 77.56653,
+    "zone": "central",
+    "streets": [
+      "Chamarajpet Main Road",
+      "Kempegowda Road",
+      "Tipu Sultan Road",
+      "Mysore Road",
+      "Basaveshwara Temple Road",
+      "Gavipuram Road"
+    ]
+  },
+  {
+    "name": "Benson Town",
+    "pincode": "560046",
+    "lat": 12.99734,
+    "lng": 77.60368,
+    "zone": "central",
+    "streets": [
+      "Nandi Durga Road",
+      "Cantonment Railway Station Road",
+      "Jayamahal Road",
+      "Benson Cross Road",
+      "Fraser Town Link Road",
+      "Thimmaiah Road"
+    ]
+  },
+  {
+    "name": "Hoodi",
+    "pincode": "560048",
+    "lat": 12.99592,
+    "lng": 77.71928,
+    "zone": "east",
+    "streets": [
+      "ITPL Main Road",
+      "Whitefield Main Road",
+      "Hoodi Circle Road",
+      "Graphite India Road",
+      "Sai Baba Ashram Road",
+      "Ramagondanahalli Road"
+    ]
+  },
+  {
+    "name": "Kundalahalli",
+    "pincode": "560037",
+    "lat": 12.97759,
+    "lng": 77.71556,
+    "zone": "east",
+    "streets": [
+      "Kundalahalli Gate Road",
+      "Brookefield Main Road",
+      "ITPL Road",
+      "Outer Ring Road",
+      "AECS Layout Road",
+      "Varthur Main Road"
+    ]
+  },
+  {
+    "name": "Varthur",
+    "pincode": "560087",
+    "lat": 12.94065,
+    "lng": 77.74699,
+    "zone": "east",
+    "streets": [
+      "Varthur Main Road",
+      "Gunjur Road",
+      "Balagere Road",
+      "Panathur Road",
+      "Whitefield Varthur Road",
+      "Thubarahalli Road"
+    ]
+  },
+  {
+    "name": "Hulimavu",
+    "pincode": "560076",
+    "lat": 12.87735,
+    "lng": 77.6028,
+    "zone": "south",
+    "streets": [
+      "Bannerghatta Main Road",
+      "Hulimavu Gate Road",
+      "Hulimavu Lake Road",
+      "Arekere Gate Road",
+      "IIMB Road",
+      "Royal Meenakshi Mall Road"
+    ]
+  },
+  {
+    "name": "Uttarahalli",
+    "pincode": "560061",
+    "lat": 12.90557,
+    "lng": 77.54554,
+    "zone": "south",
+    "streets": [
+      "Uttarahalli Main Road",
+      "Kanakapura Road",
+      "Gubbalala Main Road",
+      "Subramanyapura Road",
+      "Vasanthapura Road",
+      "Raghuvanahalli Road"
+    ]
+  },
+  {
+    "name": "Kanakapura Road",
+    "pincode": "560062",
+    "lat": 12.8559,
+    "lng": 77.5258,
+    "zone": "south",
+    "streets": [
+      "Kanakapura Main Road",
+      "Konanakunte Cross Road",
+      "Art of Living Road",
+      "Thalaghattapura Road",
+      "Vajarahalli Road",
+      "Doddakallasandra Road"
+    ]
+  },
+  {
+    "name": "Girinagar",
+    "pincode": "560085",
+    "lat": 12.94014,
+    "lng": 77.5445,
+    "zone": "west",
+    "streets": [
+      "Girinagar Main Road",
+      "Ring Road",
+      "Hosakerehalli Road",
+      "Kathriguppe Road",
+      "Girinagar 2nd Phase Road",
+      "BSK 3rd Stage Road"
+    ]
+  }
+]
