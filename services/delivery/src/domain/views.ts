@@ -73,6 +73,8 @@ export function partnerJobView(j: JobLean, codeMaxAttempts: number) {
   return {
     id: j._id.toString(),
     childOrderId: j.childOrderId,
+    childOrderCode: j.childOrderCode ?? null,
+    checkoutCode: j.checkoutCode ?? null,
     status: j.status,
     pickup,
     drop,
@@ -97,6 +99,8 @@ export function adminJobView(j: JobLean) {
   return {
     id: j._id.toString(),
     childOrderId: j.childOrderId,
+    childOrderCode: j.childOrderCode ?? null,
+    checkoutCode: j.checkoutCode ?? null,
     checkoutGroupId: j.checkoutGroupId,
     restaurantId: j.restaurantId,
     customerUserId: j.customerUserId,

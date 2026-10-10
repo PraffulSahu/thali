@@ -155,7 +155,7 @@ openapi.route({
   description: READ, summary: 'Short-lived (5 min) KYC document URL (audited)', request: { params: DocParams }, responses: ok('URL', DocumentUrlResponse), errors: ['NOT_FOUND', 'MFA_REQUIRED'],
 });
 openapi.route({
-  method: 'get', path: `${API}/admin/delivery/jobs`, tags: ['admin-delivery'], security: 'bearer', description: READ, summary: 'List delivery jobs (filter status / exception)',
+  method: 'get', path: `${API}/admin/delivery/jobs`, tags: ['admin-delivery'], security: 'bearer', description: READ, summary: 'List delivery jobs (filter status / exception; q = order code prefix or id)',
   request: { query: JobsQuery }, responses: ok('Jobs', page(AdminJobView, 'AdminDeliveryJobPage')), errors: ['MFA_REQUIRED'],
 });
 openapi.route({

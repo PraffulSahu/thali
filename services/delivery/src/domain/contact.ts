@@ -55,7 +55,7 @@ const telUrl = (phone: string) => `tel:${phone.trim().replace(/[^\d+]/g, '')}`;
 const noPhone = () => new DomainError('CONFLICT', 'No phone number is on file for this contact', undefined, { reason: 'NO_PHONE_ON_FILE' });
 
 async function restaurantPhone(ctx: DeliveryContext, job: JobLean): Promise<string | null> {
-  const stored = (job.pickup as { phone?: string | null }).phone;
+  const stored = job.pickup.phone;
   if (stored) return stored;
   const r = await ctx.marketplace.getRestaurant(job.restaurantId);
   return r?.phone ?? null;
@@ -77,7 +77,7 @@ export async function revealContact(ctx: DeliveryContext, userId: string, jobId:
   if (!phone || !displayNumber) throw noPhone();
 
   const now = ctx.now();
-  const code = (job as { childOrderCode?: string | null }).childOrderCode ?? job.childOrderId;
+  const code = job.childOrderCode ?? job.childOrderId;
   await withTransaction(ctx.conn, (session) =>
     auditEvent(ctx.conn, session, {
       service: 'delivery',

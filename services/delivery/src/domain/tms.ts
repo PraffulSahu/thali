@@ -73,10 +73,29 @@ export async function adminFail(ctx: DeliveryContext, jobId: string, reason: str
   });
 }
 
-export async function listJobs(ctx: DeliveryContext, q: { status?: string; exception?: boolean; limit: number; cursor?: string }) {
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** DLV-4 admin search: `TH-…` = code prefix (indexed), 24-hex = job / child / checkout id, else exact ids or codes. */
+export function jobSearchFilter(raw: string): Record<string, unknown> {
+  const q = raw.trim();
+  if (/^TH-/i.test(q)) {
+    const prefix = { $regex: `^${escapeRegex(q.toUpperCase())}` };
+    return { $or: [{ childOrderCode: prefix }, { checkoutCode: prefix }] };
+  }
+  const ors: Record<string, unknown>[] = [{ childOrderId: q }, { checkoutGroupId: q }, { childOrderCode: q.toUpperCase() }, { checkoutCode: q.toUpperCase() }];
+  if (/^[0-9a-f]{24}$/i.test(q)) ors.push({ _id: q });
+  return { $or: ors };
+}
+
+export async function listJobs(ctx: DeliveryContext, q: { status?: string; exception?: boolean; q?: string; limit: number; cursor?: string }) {
   const filter: Record<string, unknown> = { ...cursorFilter(q.cursor) };
   if (q.status) filter.status = q.status;
   if (q.exception !== undefined) filter.exception = q.exception;
+  if (q.q) {
+    // cursorFilter may itself be an $or (createdAt/_id tie-break), so combine with $and
+    const search = jobSearchFilter(q.q);
+    filter.$and = [...((filter.$and as unknown[]) ?? []), search];
+  }
   const docs = await ctx.models.Job.find(filter).sort(PAGE_SORT).limit(q.limit + 1).lean<JobLean[]>();
   return buildPage(docs, q.limit);
 }

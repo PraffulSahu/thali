@@ -54,6 +54,11 @@ export const deliveryJobSchema = new Schema(
     restaurantId: { type: String, required: true },
     /** Customer (order owner) — tracking ownership + `delivery.location` realtime target. */
     customerUserId: { type: String, required: true },
+    /** DLV-4 human order codes (order.accepted; older jobs backfilled from orders at startup). */
+    childOrderCode: { type: String, default: null },
+    checkoutCode: { type: String, default: null },
+    /** DLV-4 backfill marker: set once orders was asked for the codes (found or 404). */
+    codesCheckedAt: { type: Date, default: null },
     pickup: { type: placeSchema, required: true },
     drop: { type: dropSchema, required: true },
     status: { type: String, enum: enumValues(DeliveryStatus), required: true, default: 'PENDING_ASSIGNMENT' },
@@ -94,6 +99,9 @@ deliveryJobSchema.index({ childOrderId: 1 }, { unique: true });
 deliveryJobSchema.index({ status: 1, createdAt: -1 });
 deliveryJobSchema.index({ partnerId: 1, status: 1 });
 deliveryJobSchema.index({ status: 1, exception: 1, nextDispatchAt: 1 });
+// DLV-4: admin search by code (prefix) + the backfill's "still missing" scan
+deliveryJobSchema.index({ childOrderCode: 1, codesCheckedAt: 1 });
+deliveryJobSchema.index({ checkoutCode: 1 });
 
 export type JobFields = InferSchemaType<typeof deliveryJobSchema>;
 export type JobDoc = HydratedDocument<JobFields>;

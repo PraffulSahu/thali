@@ -51,6 +51,13 @@ export const OptionalReasonBody = z.object({ reason: z.string().trim().min(3).ma
 export const AssignBody = z.object({ partnerId: ObjectIdSchema }).meta({ id: 'AssignPartner' });
 export const PartnersQuery = PaginationQuerySchema.extend({ status: z.enum(enumValues(PartnerStatus)).optional() });
 export const JobsQuery = PaginationQuerySchema.extend({
+  q: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .optional()
+    .describe('Order code prefix (TH-…: child or checkout code), job id, child order id or checkout group id'),
   status: z.enum(enumValues(DeliveryStatus)).optional(),
   exception: z
     .enum(['true', 'false'])
@@ -117,6 +124,8 @@ export const PartnerJobView = z
   .object({
     id: z.string(),
     childOrderId: z.string(),
+    childOrderCode: z.string().nullable().describe('e.g. TH-K7Z2MP4Q (null until backfilled for older jobs)'),
+    checkoutCode: z.string().nullable(),
     status: z.enum(enumValues(DeliveryStatus)),
     pickup: Place,
     drop: PartnerDrop,
@@ -141,6 +150,8 @@ export const AdminJobView = z
   .object({
     id: z.string(),
     childOrderId: z.string(),
+    childOrderCode: z.string().nullable().describe('e.g. TH-K7Z2MP4Q (null until backfilled for older jobs)'),
+    checkoutCode: z.string().nullable(),
     checkoutGroupId: z.string(),
     restaurantId: z.string(),
     customerUserId: z.string(),

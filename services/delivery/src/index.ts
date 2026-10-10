@@ -17,6 +17,7 @@ import { buildApp } from './app.js';
 import { parseDeliveryConfig } from './config.js';
 import { createContext, createIdentityClient } from './context.js';
 import { CONSUMED_STREAMS, createEventHandlers } from './events/handlers.js';
+import { startCodeBackfill } from './jobs/code-backfill.js';
 import { startDispatcher } from './jobs/dispatcher.js';
 import { initDeliveryModels } from './models/index.js';
 
@@ -50,6 +51,7 @@ async function main() {
     handlers: createEventHandlers(ctx),
   });
   const dispatcher = startDispatcher(ctx);
+  const codeBackfill = startCodeBackfill(ctx);
 
   const server = app.listen(config.PORT, () => logger.info({ port: config.PORT, mode: config.APP_MODE }, 'delivery listening'));
   gracefulShutdown({
@@ -58,6 +60,7 @@ async function main() {
     closers: [
       () => ctx.simulator.stopAll(),
       () => dispatcher.stop(),
+      () => codeBackfill.stop(),
       () => consumer.stop(),
       () => relay.stop(),
       async () => void (await redis.quit()),
