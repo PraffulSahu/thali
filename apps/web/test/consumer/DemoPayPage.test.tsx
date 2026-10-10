@@ -3,7 +3,7 @@ import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DemoPayPage from '../../src/features/consumer/DemoPayPage';
-import { __resetApiForTests } from '../../src/lib/api';
+import { __resetApiForTests, setAccessToken } from '../../src/lib/api';
 import { renderWithProviders } from '../utils';
 import { errorBody, mockApi } from './fetchMock';
 
@@ -30,6 +30,16 @@ describe('DemoPayPage', () => {
     await userEvent.click(await screen.findByRole('button', { name: /simulate failure/i }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/membership'));
     expect(m.callsTo('POST', '/demo-pay/pi1/complete')[0]!.body).toEqual({ outcome: 'failure' });
+  });
+
+  it('sends the signed-in user\'s bearer token on both calls (server serves only the intent owner)', async () => {
+    setAccessToken('tok-owner');
+    const m = mockApi({ 'GET /demo-pay/pi1': view, 'POST /demo-pay/pi1/complete': { paymentIntentId: 'pi1', status: 'CAPTURED', simulated: true, webhooks: [] } });
+    renderWithProviders(<DemoPayPage />, { route: '/demo-pay/pi1', path: '/demo-pay/:intentId' });
+    await userEvent.click(await screen.findByRole('button', { name: /simulate success/i }));
+    await waitFor(() => expect(m.callsTo('POST', '/demo-pay/pi1/complete')).toHaveLength(1));
+    expect(m.callsTo('GET', '/demo-pay/pi1')[0]!.headers.authorization).toBe('Bearer tok-owner');
+    expect(m.callsTo('POST', '/demo-pay/pi1/complete')[0]!.headers.authorization).toBe('Bearer tok-owner');
   });
 
   it('demo payments disabled (404) explains instead of offering buttons', async () => {

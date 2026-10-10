@@ -1,12 +1,14 @@
 /**
- * 🔓 demo pay (only mounted when PAYMENT_PROVIDER=mock; production refuses mock at startup, ADR-011).
+ * 👤 demo pay (only mounted when PAYMENT_PROVIDER=mock; production refuses mock at startup, ADR-011).
+ * Requires a signed-in user and only serves the intent's owner (`intent.userId`); anyone else gets 404, like the
+ * other customer payment routes, so intent ids can't be probed or paid/failed on someone else's behalf.
  * Completing builds Razorpay-shaped webhook bodies, signs them with MOCK_WEBHOOK_SECRET and feeds them to
  * the same `ingestWebhook` handler the webhook route uses (verification, dedupe, out-of-order rules).
  */
 import { randomBytes } from 'node:crypto';
 import express, { type Router } from 'express';
 import { DomainError } from '@thali/contracts';
-import { validate } from '@thali/service-kit';
+import { requireAuth, validate } from '@thali/service-kit';
 import type { PaymentsContext } from '../context.js';
 import { ingestWebhook } from '../domain/webhook.js';
 import type { MockProvider } from '../providers/mock-provider.js';
@@ -46,15 +48,17 @@ export function demoPayRouter(ctx: PaymentsContext): Router {
   const isMock = () => ctx.provider.name === 'mock';
   const vId = validate({ params: VerifyParams });
 
-  const load = async (id: string) => {
+  const auth = requireAuth();
+
+  const load = async (id: string, userId: string) => {
     if (!isMock()) throw new DomainError('NOT_FOUND', 'Not found');
-    const intent = await ctx.models.PaymentIntent.findById(id);
+    const intent = await ctx.models.PaymentIntent.findOne({ _id: id, userId });
     if (!intent || intent.provider !== 'mock' || !intent.providerOrderId) throw new DomainError('NOT_FOUND', 'Payment intent not found');
     return intent;
   };
 
-  r.get('/api/v1/demo-pay/:intentId', vId, async (req, res) => {
-    const intent = await load(vId.get(req).params.intentId);
+  r.get('/api/v1/demo-pay/:intentId', auth, vId, async (req, res) => {
+    const intent = await load(vId.get(req).params.intentId, req.auth!.userId);
     res.json({
       paymentIntentId: intent.id,
       purpose: intent.purpose,
@@ -68,9 +72,9 @@ export function demoPayRouter(ctx: PaymentsContext): Router {
   });
 
   const vComplete = validate({ params: VerifyParams, body: DemoPayCompleteBody });
-  r.post('/api/v1/demo-pay/:intentId/complete', vComplete, async (req, res) => {
+  r.post('/api/v1/demo-pay/:intentId/complete', auth, vComplete, async (req, res) => {
     const { params, body } = vComplete.get(req);
-    const intent = await load(params.intentId);
+    const intent = await load(params.intentId, req.auth!.userId);
     if (!['CREATED', 'AUTHORIZED', 'FAILED'].includes(intent.status)) {
       throw new DomainError('PAYMENT_INVALID_TRANSITION', `Payment is already ${intent.status}`, 409, { status: intent.status });
     }

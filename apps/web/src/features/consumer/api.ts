@@ -490,12 +490,12 @@ export interface DemoPayView {
   providerOrderId: string;
   isDemo: true;
 }
-export const fetchDemoPay = (intentId: string) => api<DemoPayView>(`/demo-pay/${intentId}`, { auth: false });
+/** Demo pay is owner-only on the server (signed-in intent owner), so these send the bearer token. */
+export const fetchDemoPay = (intentId: string) => api<DemoPayView>(`/demo-pay/${intentId}`);
 export const completeDemoPay = (intentId: string, outcome: 'success' | 'failure') =>
   api<{ paymentIntentId: string; status: string; simulated: true }>(`/demo-pay/${intentId}/complete`, {
     method: 'POST',
     body: { outcome },
-    auth: false,
   });
 
 /** Accepts the orders `PaymentView` and LLD-shaped membership payment objects (`paymentIntentId`). */

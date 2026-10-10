@@ -287,7 +287,7 @@ async function main() {
   const childB = created.checkout.children.find((c: Json) => c.restaurantId === b.id);
 
   await step('demo pay: success', async () => {
-    const r = expectOk(await call('POST', `/demo-pay/${created.payment.intentId}/complete`, { body: { outcome: 'success' } }), 'demo-pay complete');
+    const r = expectOk(await call('POST', `/demo-pay/${created.payment.intentId}/complete`, { token: consumer.token, body: { outcome: 'success' } }), 'demo-pay complete');
     check(r.status === 'CAPTURED', `payment status ${r.status}`);
     return r;
   }, (r) => `payment ${r.status} (simulated=${r.simulated})`);
