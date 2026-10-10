@@ -89,7 +89,8 @@ APIs or event-fed local projections (e.g. orders keeps `restaurant_projection`).
   `rt:partner:<partnerUserId>`, `rt:admin`.
 - **Fallback**: when SSE disconnects, SPA polls the relevant REST resource every 10 s and shows
   "Live updates paused — refreshing every 10 s".
-- Location: partner app posts `POST /api/v1/deliveries/:id/location` (≤ 1 per 5 s). Delivery
+- Location: partner app posts `POST /api/v1/partner/location` while online (≤ 1 per 3 s; the server
+  updates the partner's active jobs; `POST /api/v1/deliveries/:jobId/location` also exists). Delivery
   service stores the latest point, publishes `rt` message via Redis pub/sub (ephemeral; not
   on the durable stream). Consumer UI shows `last updated Xs ago`, stale after 60 s.
 
@@ -192,7 +193,7 @@ Each integration is an interface in `packages/service-kit/providers` (or service
 | Port | Real adapter | Mock (demo only) | Callback |
 |---|---|---|---|
 | SmsProvider | Twilio Messages API | writes to `notifications` + console, labeled DEMO | Twilio status callback (X-Twilio-Signature) |
-| EmailProvider | Resend `POST /emails` | Mailpit SMTP container (local inbox at :8025) | Resend webhooks (Svix signature) |
+| EmailProvider | Resend `POST /emails` | Mailpit container, sent through its HTTP API (inbox UI at :8025) | Resend webhooks (Svix signature) |
 | PaymentProvider | Razorpay Orders/Payments/Refunds | Demo pay page that emits **signed** mock webhooks through the same webhook pipeline | Razorpay webhook (X-Razorpay-Signature) |
 | GeoProvider | Google Geocoding + Routes | Haversine × 1.3 road factor ÷ 20 km/h, labeled "demo estimate" | — |
 | ObjectStorage | AWS S3 | MinIO (same S3 API) | — |
@@ -201,11 +202,11 @@ Each integration is an interface in `packages/service-kit/providers` (or service
 Production startup refuses `*_PROVIDER=mock`.
 
 ## 7. Deployment view
-- **Local**: `docker compose up` — mongo (rs0, keyfile auth), redis (AOF), minio + bucket init,
+- **Local**: `npm run stack:up` (`docker compose up -d --build --wait`) — mongo (rs0, keyfile auth), redis (AOF), minio + bucket init,
   mailpit, 6 services, gateway, web (nginx serving the built SPA and proxying `/api`).
 - **Staging/Prod (recommended)**: containers on a managed runtime (AWS ECS Fargate / Fly.io /
-  Render); MongoDB Atlas (replica set, PITR backups); managed Redis with AOF (Elasticache /
-  Upstash); S3; ALB with TLS; secrets in AWS Secrets Manager; one image per service; CI builds,
+  Render); MongoDB Atlas (replica set, PITR backups); managed Redis with durable writes where available (MemoryDB / Redis Cloud / Upstash;
+  ElastiCache has no AOF, so rely on the outbox re-publish procedure, see docs/06-deployment.md); S3; ALB with TLS; secrets in AWS Secrets Manager; one image per service; CI builds,
   tests, pushes, deploys. Kubernetes not required for pilot.
 - **Scaling path**: stateless services scale horizontally; relays and sweepers use Redis locks
   (single active leader); SSE uses Redis pub/sub; Mongo indexes defined in LLD; move streams
