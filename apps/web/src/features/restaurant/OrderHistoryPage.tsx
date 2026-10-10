@@ -1,19 +1,13 @@
-/** Order history with status and date filters (PRD R-5). Cursor-paginated; details open in a dialog. */
+/** Order history with a status filter (PRD R-5; the API filters by status only). Cursor-paginated; details open in a dialog. */
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import {
-  Button, DataTable, Dialog, Field, FoodMarker, Input, PageHeader, Pagination, Price, Select, StatusPill, useCursorPages,
+  Button, DataTable, Dialog, Field, FoodMarker, PageHeader, Pagination, Price, Select, StatusPill, useCursorPages,
   type Column,
 } from '../../components/ui';
 import { formatDateTime, plural } from '../../lib/format';
-import { HISTORY_STATUS_OPTIONS, keys, ordersApi, type OwnerOrder } from './api';
+import { HISTORY_FILTERS, keys, ordersApi, type OwnerOrder } from './api';
 import { useCurrentRestaurant } from './RestaurantContext';
-
-/** `YYYY-MM-DD` (a day in IST) -> ISO instant at the start / end of that day. */
-export function istDayBound(day: string, end: boolean): string | undefined {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return undefined;
-  return new Date(`${day}T${end ? '23:59:59.999' : '00:00:00.000'}+05:30`).toISOString();
-}
 
 function OrderDetails({ order, onClose }: { order: OwnerOrder | null; onClose: () => void }) {
   if (!order) return null;
@@ -52,7 +46,6 @@ function OrderDetails({ order, onClose }: { order: OwnerOrder | null; onClose: (
         {order.refundStatus && order.refundStatus !== 'NONE' ? (
           <p className="flex items-center gap-2 text-sm text-slate-700">
             Refund <StatusPill kind="childRefund" status={order.refundStatus} />
-            {order.refundedPaise ? <Price paise={order.refundedPaise} size="sm" /> : null}
           </p>
         ) : null}
       </div>
@@ -64,20 +57,15 @@ export default function OrderHistoryPage() {
   const restaurant = useCurrentRestaurant();
   const pages = useCursorPages();
   const [status, setStatus] = useState('');
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
   const [open, setOpen] = useState<OwnerOrder | null>(null);
 
-  const filters = { status, from, to };
+  const statuses = HISTORY_FILTERS.find((f) => f.value === status)?.statuses.join(',');
   const q = useQuery({
-    queryKey: keys.history(restaurant.id, filters, pages.cursor),
-    queryFn: () =>
-      ordersApi.page({ restaurantId: restaurant.id, status: status || undefined, from: istDayBound(from, false), to: istDayBound(to, true), cursor: pages.cursor }),
+    queryKey: keys.history(restaurant.id, status, pages.cursor),
+    queryFn: () => ordersApi.page({ restaurantId: restaurant.id, status: statuses, cursor: pages.cursor }),
     placeholderData: keepPreviousData,
-    enabled: !(from && to && from > to),
   });
   const reset = () => pages.reset();
-  const rangeInvalid = Boolean(from && to && from > to);
 
   const columns: Column<OwnerOrder>[] = [
     { key: 'code', header: 'Order', cell: (o) => <span className="font-mono">{o.code}</span>, primary: true },
@@ -104,38 +92,28 @@ export default function OrderHistoryPage() {
   return (
     <>
       <PageHeader title="Order history" description={`All orders for ${restaurant.name}`} back={{ to: '/restaurant/orders', label: 'Live orders' }} />
-      <form className="mb-4 grid gap-3 sm:grid-cols-4" onSubmit={(e) => e.preventDefault()} aria-label="Filter orders">
-        <Field label="Status">
+      <form className="mb-4 flex flex-wrap items-end gap-3" onSubmit={(e) => e.preventDefault()} aria-label="Filter orders">
+        <Field label="Status" className="min-w-56">
           <Select
             value={status}
             onChange={(e) => {
               setStatus(e.target.value);
               reset();
             }}
-            placeholder="All statuses"
-            options={HISTORY_STATUS_OPTIONS}
+            placeholder="All orders"
+            options={HISTORY_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
           />
         </Field>
-        <Field label="From" error={rangeInvalid ? 'Start date is after the end date.' : undefined}>
-          <Input type="date" value={from} max={to || undefined} onChange={(e) => { setFrom(e.target.value); reset(); }} />
-        </Field>
-        <Field label="To">
-          <Input type="date" value={to} min={from || undefined} onChange={(e) => { setTo(e.target.value); reset(); }} />
-        </Field>
-        <div className="flex items-end">
-          <Button
-            variant="ghost"
-            onClick={() => {
-              setStatus('');
-              setFrom('');
-              setTo('');
-              reset();
-            }}
-            disabled={!status && !from && !to}
-          >
-            Clear filters
-          </Button>
-        </div>
+        <Button
+          variant="ghost"
+          onClick={() => {
+            setStatus('');
+            reset();
+          }}
+          disabled={!status}
+        >
+          Clear filter
+        </Button>
       </form>
       <DataTable
         caption="Orders"
@@ -147,8 +125,8 @@ export default function OrderHistoryPage() {
         onRetry={() => q.refetch()}
         empty={{
           icon: 'receipt',
-          title: status || from || to ? 'No orders match these filters' : 'No orders yet',
-          description: status || from || to ? 'Try a different status or date range.' : 'Completed and past orders will be listed here.',
+          title: status ? 'No orders match this filter' : 'No orders yet',
+          description: status ? 'Try a different status.' : 'Completed and past orders will be listed here.',
         }}
         rowActions={(o) => (
           <Button variant="ghost" size="sm" onClick={() => setOpen(o)} aria-label={`View order ${o.code}`}>

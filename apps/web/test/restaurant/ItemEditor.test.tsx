@@ -90,6 +90,29 @@ describe('ItemEditor customization validation', () => {
   });
 });
 
+describe('ItemEditor photo preview', () => {
+  it('releases local preview URLs when a photo is replaced and when the editor closes', async () => {
+    let n = 0;
+    const create = vi.fn(() => `blob:preview-${++n}`);
+    const revoke = vi.fn();
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke }));
+    mockApi([
+      ['POST', /\/uploads$/, () => json({ key: 'restaurants/r1/images/a.png', bucket: 'public', upload: { url: 'https://s3.test/a', method: 'PUT', headers: { 'content-type': 'image/png' }, expiresAt: 'x', maxBytes: 2097152 } }, 201)],
+      ['PUT', /^\/a$/, () => new Response(null, { status: 200 })],
+    ]);
+    const user = userEvent.setup();
+    const view = renderEditor();
+    const input = screen.getByLabelText('Item photo');
+    await user.upload(input, new File(['a'], 'a.png', { type: 'image/png' }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+    await user.upload(input, new File(['b'], 'b.png', { type: 'image/png' }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(revoke).toHaveBeenCalledWith('blob:preview-1');
+    view.unmount();
+    expect(revoke).toHaveBeenCalledWith('blob:preview-2');
+  });
+});
+
 describe('validateGroups', () => {
   const g = (over: Partial<DraftGroup> = {}): DraftGroup => ({
     name: 'Size', min: '1', max: '1',

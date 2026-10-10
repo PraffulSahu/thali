@@ -13,7 +13,10 @@ import { ItemEditor } from './ItemEditor';
 import { keys, menuApi, type MenuCategory, type OwnerItem } from './api';
 import { useCurrentRestaurant } from './RestaurantContext';
 
-function CategoryDialog({ open, onClose, restaurantId, category, onSaved }: { open: boolean; onClose: () => void; restaurantId: string; category?: MenuCategory; onSaved: () => void }) {
+/** Categories are kept at 10, 20, 30... so the list order is always explicit. */
+export const sortOrderAt = (index: number) => (index + 1) * 10;
+
+function CategoryDialog({ open, onClose, restaurantId, category, nextSortOrder, onSaved }: { open: boolean; onClose: () => void; restaurantId: string; category?: MenuCategory; nextSortOrder: number; onSaved: () => void }) {
   const [name, setName] = useState(category?.name ?? '');
   const [active, setActive] = useState(category?.active ?? true);
   const [show, setShow] = useState(false);
@@ -21,7 +24,7 @@ function CategoryDialog({ open, onClose, restaurantId, category, onSaved }: { op
     mutationFn: () =>
       category
         ? menuApi.updateCategory(restaurantId, category.id, { name: name.trim(), active })
-        : menuApi.createCategory(restaurantId, { name: name.trim(), active }),
+        : menuApi.createCategory(restaurantId, { name: name.trim(), active, sortOrder: nextSortOrder }),
     onSuccess: () => {
       onSaved();
       onClose();
@@ -151,12 +154,12 @@ export default function MenuPage() {
 
   const move = useMutation({
     mutationFn: async ({ list, index, dir }: { list: MenuCategory[]; index: number; dir: -1 | 1 }) => {
-      const order = list.map((c) => c.id);
+      const order = [...list];
       const j = index + dir;
       [order[index], order[j]] = [order[j]!, order[index]!];
-      // rewrite positions for the two swapped categories (distinct values, so ties never reorder)
+      // renumber the whole list in its new order so ties and gaps can never scramble it
       await Promise.all(
-        [index, j].map((pos) => menuApi.updateCategory(r.id, order[pos]!, { sortOrder: (pos + 1) * 10 })),
+        order.flatMap((c, i) => (c.sortOrder === sortOrderAt(i) ? [] : [menuApi.updateCategory(r.id, c.id, { sortOrder: sortOrderAt(i) })])),
       );
     },
     onSuccess: refresh,
@@ -238,7 +241,7 @@ export default function MenuPage() {
       </QueryState>
 
       {catDialog ? (
-        <CategoryDialog key={catDialog.category?.id ?? 'new'} open onClose={() => setCatDialog(null)} restaurantId={r.id} category={catDialog.category} onSaved={() => { refresh(); toast({ title: 'Category saved', tone: 'success' }); }} />
+        <CategoryDialog key={catDialog.category?.id ?? 'new'} open onClose={() => setCatDialog(null)} restaurantId={r.id} category={catDialog.category} nextSortOrder={sortOrderAt(cats.data?.length ?? 0)} onSaved={() => { refresh(); toast({ title: 'Category saved', tone: 'success' }); }} />
       ) : null}
       {itemDialog && cats.data ? (
         <ItemEditor

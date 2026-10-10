@@ -3,14 +3,15 @@
  * Realtime `owner.order` events refresh the list; if the stream is down it polls every 10 s. A new order gets a
  * highlighted card, a screen-reader announcement and (once the owner enabled it) a chime.
  */
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
 import { Button, ButtonLink, Card, EmptyState, PageHeader, QueryState, RealtimeStatus, RelativeTime, SkeletonList } from '../../components/ui';
-import { keys, type OwnerOrder } from './api';
+import { keys, menuApi, type OwnerOrder } from './api';
 import { OrderCard } from './OrderCard';
 import { useCurrentRestaurant } from './RestaurantContext';
 import { useOrderStream, useSoundState } from './orderStream';
 
-function Column({ title, hint, orders, newIds, prep, onChanged }: { title: string; hint: string; orders: OwnerOrder[]; newIds: Set<string>; prep: number; onChanged: () => void }) {
+function Column({ title, hint, orders, newIds, prep, optionNames, onChanged }: { title: string; hint: string; orders: OwnerOrder[]; newIds: Set<string>; prep: number; optionNames: ReadonlyMap<string, string>; onChanged: () => void }) {
   return (
     <section aria-label={title} className="flex min-w-0 flex-col gap-3">
       <h2 className="flex items-center justify-between text-base font-semibold text-slate-900">
@@ -22,7 +23,7 @@ function Column({ title, hint, orders, newIds, prep, onChanged }: { title: strin
       ) : (
         <ul className="flex flex-col gap-3">
           {orders.map((o) => (
-            <OrderCard key={o.id} order={o} isNew={newIds.has(o.id)} defaultPrepMinutes={prep} onChanged={onChanged} />
+            <OrderCard key={o.id} order={o} isNew={newIds.has(o.id)} defaultPrepMinutes={prep} optionNames={optionNames} onChanged={onChanged} />
           ))}
         </ul>
       )}
@@ -36,6 +37,13 @@ export default function OrdersBoard() {
   const approved = restaurant.status === 'APPROVED';
   const stream = useOrderStream(restaurant.id, { enabled: approved });
   const sound = useSoundState();
+  // the order view carries option ids only: resolve names from the menu (best effort, never blocks the board)
+  const menu = useQuery({ queryKey: keys.items(restaurant.id), queryFn: () => menuApi.items(restaurant.id), enabled: approved, staleTime: 60_000 });
+  const optionNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const it of menu.data ?? []) for (const g of it.customizationGroups) for (const o of g.options) if (o.id) m.set(o.id, o.name);
+    return m;
+  }, [menu.data]);
   const refresh = () => void qc.invalidateQueries({ queryKey: keys.orders(restaurant.id) });
 
   const newOrders = stream.active.filter((o) => o.status === 'PLACED');
@@ -93,9 +101,9 @@ export default function OrdersBoard() {
               </Card>
             ) : (
               <div className="grid gap-5 lg:grid-cols-3">
-                <Column title="New" hint="No new orders." orders={newOrders} newIds={stream.newIds} prep={restaurant.avgPrepMinutes} onChanged={refresh} />
-                <Column title="In the kitchen" hint="Nothing being prepared." orders={kitchen} newIds={stream.newIds} prep={restaurant.avgPrepMinutes} onChanged={refresh} />
-                <Column title="Ready for pickup" hint="No orders waiting for a rider." orders={ready} newIds={stream.newIds} prep={restaurant.avgPrepMinutes} onChanged={refresh} />
+                <Column title="New" hint="No new orders." orders={newOrders} newIds={stream.newIds} prep={restaurant.avgPrepMinutes} optionNames={optionNames} onChanged={refresh} />
+                <Column title="In the kitchen" hint="Nothing being prepared." orders={kitchen} newIds={stream.newIds} prep={restaurant.avgPrepMinutes} optionNames={optionNames} onChanged={refresh} />
+                <Column title="Ready for pickup" hint="No orders waiting for a rider." orders={ready} newIds={stream.newIds} prep={restaurant.avgPrepMinutes} optionNames={optionNames} onChanged={refresh} />
               </div>
             )
           }

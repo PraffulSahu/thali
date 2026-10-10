@@ -3,14 +3,18 @@ import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import OrdersBoard from '../../src/features/restaurant/OrdersBoard';
-import { playOrderChime } from '../../src/features/restaurant/orderStream';
+import { playOrderChime, setSoundEnabled } from '../../src/features/restaurant/orderStream';
 import { makeAuth, renderWithProviders } from '../utils';
 import { apiError, json, makeOrder, makeRestaurant, mockApi, withRestaurant } from './fixtures';
 
 const auth = () => makeAuth({ roles: ['RESTAURANT_OWNER'] });
 const board = (restaurant = makeRestaurant()) => renderWithProviders(withRestaurant(restaurant, <OrdersBoard />), { route: '/restaurant/orders', auth: auth() });
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  setSoundEnabled(false);
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe('OrdersBoard', () => {
   it('shows an incoming order with the accept countdown and requests only this restaurant', async () => {
@@ -23,7 +27,9 @@ describe('OrdersBoard', () => {
     expect(within(card).getByText(/Accept within/i)).toBeInTheDocument();
     expect(within(card).getByText(/Chicken Biryani/)).toBeInTheDocument();
     expect(within(card).getByText(/Note: Less spicy/)).toBeInTheDocument();
-    expect(api.calls[0]!.search).toContain('restaurantId=r1');
+    const q = decodeURIComponent(api.find('GET', /^\/owner\/orders$/)[0]!.search);
+    expect(q).toContain('restaurantId=r1');
+    expect(q).toContain('status=PLACED,ACCEPTED,PREPARING,READY_FOR_PICKUP');
   });
 
   it('keeps "Reject order" disabled until a reason is chosen, then rejects with that reason', async () => {
@@ -90,12 +96,107 @@ describe('OrdersBoard', () => {
     expect(await within(dialog).findByText(/acceptance window for this order has closed/i)).toBeInTheDocument();
   });
 
-  it('disables Accept once the window has passed', async () => {
-    mockApi([['GET', /^\/owner\/orders$/, { items: [makeOrder({ acceptBy: new Date(Date.now() - 5000).toISOString() })], nextCursor: null }]]);
+  it('offers no accept/reject once the window has passed (the server returns no transitions)', async () => {
+    mockApi([['GET', /^\/owner\/orders$/, { items: [makeOrder({ acceptBy: new Date(Date.now() - 5000).toISOString(), allowedTransitions: [] })], nextCursor: null }]]);
     board();
     const card = await screen.findByRole('listitem', { name: /Order TH-/ });
-    expect(within(card).getByRole('button', { name: /^accept$/i })).toBeDisabled();
+    expect(within(card).queryByRole('button', { name: /^accept$/i })).not.toBeInTheDocument();
+    expect(within(card).queryByRole('button', { name: /^reject$/i })).not.toBeInTheDocument();
     expect(within(card).getByText(/rejected automatically and refunded/i)).toBeInTheDocument();
+  });
+
+  it.each([
+    ['PLACED', ['Accept', 'Reject'], ['Start preparing', 'Mark ready', 'Update prep time']],
+    ['ACCEPTED', ['Start preparing', 'Mark ready', 'Update prep time'], ['Accept', 'Reject']],
+    ['PREPARING', ['Mark ready', 'Update prep time'], ['Start preparing', 'Accept', 'Reject']],
+    ['READY_FOR_PICKUP', [], ['Accept', 'Reject', 'Start preparing', 'Mark ready', 'Update prep time']],
+  ] as const)('%s: shows exactly the allowed actions', async (status, shown, hidden) => {
+    mockApi([['GET', /^\/owner\/orders$/, { items: [makeOrder({ status })], nextCursor: null }]]);
+    board();
+    const card = await screen.findByRole('listitem', { name: /Order TH-/ });
+    for (const name of shown) expect(within(card).getByRole('button', { name })).toBeInTheDocument();
+    for (const name of hidden) expect(within(card).queryByRole('button', { name })).not.toBeInTheDocument();
+    if (status === 'READY_FOR_PICKUP') {
+      expect(within(card).queryAllByRole('button')).toHaveLength(0);
+      expect(within(card).getByText(/waiting for the delivery partner/i)).toBeInTheDocument();
+    }
+  });
+
+  it('resolves customization names from the menu', async () => {
+    const order = makeOrder({ lines: [{ itemId: 'i1', name: 'Chicken Biryani', quantity: 1, selections: [{ groupId: 'g1', optionIds: ['o2'] }] }] });
+    mockApi([
+      ['GET', /^\/owner\/orders$/, { items: [order], nextCursor: null }],
+      ['GET', /items$/, { items: [{ id: 'i1', customizationGroups: [{ id: 'g1', options: [{ id: 'o1', name: 'Half' }, { id: 'o2', name: 'Full plate' }] }] }] }],
+    ]);
+    board();
+    expect(await screen.findByText('Full plate')).toBeInTheDocument();
+  });
+
+  it('chimes for a new order that arrives after the first load, once sound is armed by a click', async () => {
+    const starts = vi.fn();
+    class FakeAudioContext {
+      state = 'suspended';
+      currentTime = 0;
+      destination = {};
+      resume() {
+        this.state = 'running';
+        return Promise.resolve();
+      }
+      createOscillator() {
+        return { type: '', frequency: { value: 0 }, connect: (n: unknown) => n, start: starts, stop: vi.fn() };
+      }
+      createGain() {
+        return { gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() }, connect: (n: unknown) => n };
+      }
+    }
+    (window as unknown as { AudioContext: unknown }).AudioContext = FakeAudioContext;
+    let items = [makeOrder()];
+    mockApi([['GET', /^\/owner\/orders$/, () => json({ items, nextCursor: null })]]);
+    const user = userEvent.setup();
+    const { queryClient } = board();
+
+    await screen.findByRole('listitem', { name: 'Order TH-8K2M4Q7A' });
+    expect(starts).not.toHaveBeenCalled(); // the order present at load is the baseline, not "new"
+
+    await user.click(screen.getByRole('button', { name: /enable order sound/i }));
+    expect(await screen.findByRole('button', { name: /order sound on/i })).toBeInTheDocument();
+
+    items = [makeOrder(), makeOrder({ id: 'o2', code: 'TH-NEWORDER2', placedAt: new Date(Date.now() + 1000).toISOString() })];
+    await queryClient.invalidateQueries({ queryKey: ['owner', 'orders', 'r1'] });
+    const fresh = await screen.findByRole('listitem', { name: 'Order TH-NEWORDER2' });
+    await waitFor(() => expect(starts).toHaveBeenCalledTimes(2)); // a two-note chime, once
+    expect(within(fresh).getByText('New')).toBeInTheDocument();
+    expect(screen.getByText(/new order: TH-NEWORDER2/i)).toBeInTheDocument();
+  });
+
+  it('does not chime when sound was never enabled', async () => {
+    const starts = vi.fn();
+    (window as unknown as { AudioContext: unknown }).AudioContext = class {
+      state = 'running';
+      createOscillator() { return { start: starts }; }
+    };
+    let items = [makeOrder()];
+    mockApi([['GET', /^\/owner\/orders$/, () => json({ items, nextCursor: null })]]);
+    const { queryClient } = board();
+    await screen.findByRole('listitem', { name: 'Order TH-8K2M4Q7A' });
+    items = [...items, makeOrder({ id: 'o2', code: 'TH-NEWORDER2' })];
+    await queryClient.invalidateQueries({ queryKey: ['owner', 'orders', 'r1'] });
+    await screen.findByRole('listitem', { name: 'Order TH-NEWORDER2' });
+    expect(starts).not.toHaveBeenCalled();
+  });
+
+  it('falls back to polling every 10 s when the realtime stream is not live', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const api = mockApi([['GET', /^\/owner\/orders$/, { items: [makeOrder()], nextCursor: null }]]);
+    board();
+    await screen.findByRole('listitem', { name: /Order TH-/ });
+    const count = () => api.find('GET', /^\/owner\/orders$/).length;
+    const before = count();
+    await vi.advanceTimersByTimeAsync(9_000);
+    expect(count()).toBe(before);
+    await vi.advanceTimersByTimeAsync(2_500);
+    await waitFor(() => expect(count()).toBeGreaterThan(before));
+    expect(screen.getByText(/refreshing every 10 s/i)).toBeInTheDocument();
   });
 
   it('shows the pickup code for accepted orders and offers preparing / ready / prep-time actions', async () => {

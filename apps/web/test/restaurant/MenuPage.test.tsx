@@ -83,6 +83,50 @@ describe('MenuPage', () => {
     await user.type(within(dialog).getByLabelText(/category name/i), 'Starters');
     await user.click(within(dialog).getByRole('button', { name: /^add category$/i }));
     await waitFor(() => expect(api.find('POST', /categories$/)).toHaveLength(1));
-    expect(api.find('POST', /categories$/)[0]!.body).toEqual({ name: 'Starters', active: true });
+    expect(api.find('POST', /categories$/)[0]!.body).toEqual({ name: 'Starters', active: true, sortOrder: 10 });
+  });
+});
+
+describe('MenuPage category order', () => {
+  const c = (id: string, name: string, sortOrder: number): MenuCategory => ({ id, restaurantId: 'r1', name, sortOrder, active: true });
+  const setup = (cats: MenuCategory[]) =>
+    mockApi([
+      ['GET', /categories$/, { items: cats }],
+      ['GET', /items$/, { items: [] }],
+      ['PATCH', /categories\/[^/]+$/, () => json(cats[0])],
+      ['POST', /categories$/, () => json(cats[0], 201)],
+    ]);
+  const patches = (api: ReturnType<typeof mockApi>) =>
+    api.find('PATCH', /categories\/[^/]+$/).map((p) => [p.path.split('/').pop(), (p.body as { sortOrder: number }).sortOrder]).sort();
+
+  it('renumbers the whole list (10, 20, 30...) when tied sort orders are reordered', async () => {
+    const api = setup([c('a', 'Starters', 0), c('b', 'Mains', 0), c('c', 'Desserts', 0)]);
+    const user = userEvent.setup();
+    render();
+    await user.click(await screen.findByRole('button', { name: 'Move Mains up' }));
+    await waitFor(() => expect(api.find('PATCH', /categories\//)).toHaveLength(3));
+    // list was shown alphabetically by name for ties: Desserts, Mains, Starters; Mains moves above Desserts
+    expect(patches(api)).toEqual([['a', 30], ['b', 10], ['c', 20]]);
+  });
+
+  it('only rewrites the categories whose position changed when the numbering is already clean', async () => {
+    const api = setup([c('a', 'Starters', 10), c('b', 'Mains', 20), c('c', 'Desserts', 30)]);
+    const user = userEvent.setup();
+    render();
+    await user.click(await screen.findByRole('button', { name: 'Move Desserts up' }));
+    await waitFor(() => expect(api.find('PATCH', /categories\//)).toHaveLength(2));
+    expect(patches(api)).toEqual([['b', 30], ['c', 20]]);
+  });
+
+  it('appends a new category at the end of the numbering', async () => {
+    const api = setup([c('a', 'Starters', 10), c('b', 'Mains', 20), c('c', 'Desserts', 30)]);
+    const user = userEvent.setup();
+    render();
+    await user.click(await screen.findByRole('button', { name: 'Add category' }));
+    const dialog = await screen.findByRole('dialog');
+    await user.type(within(dialog).getByLabelText(/category name/i), 'Drinks');
+    await user.click(within(dialog).getByRole('button', { name: /^add category$/i }));
+    await waitFor(() => expect(api.find('POST', /categories$/)).toHaveLength(1));
+    expect(api.find('POST', /categories$/)[0]!.body).toEqual({ name: 'Drinks', active: true, sortOrder: 40 });
   });
 });

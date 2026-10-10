@@ -9,7 +9,7 @@ import {
 } from '../../components/ui';
 import { formatPhone, formatTime, plural } from '../../lib/format';
 import { cn } from '../../lib/cn';
-import { PREP_TIME_OPTIONS, ordersApi, type OwnerOrder } from './api';
+import { PREP_TIME_OPTIONS, allowedActions, ordersApi, type OwnerOrder } from './api';
 import { RejectDialog } from './RejectDialog';
 
 export interface OrderCardProps {
@@ -18,6 +18,8 @@ export interface OrderCardProps {
   isNew?: boolean;
   /** Default prep time offered in the accept dialog. */
   defaultPrepMinutes: number;
+  /** option id -> name, resolved from the owner's menu (the order view only carries ids). */
+  optionNames?: ReadonlyMap<string, string>;
   /** Called after any successful change so the board refetches. */
   onChanged: () => void;
 }
@@ -27,7 +29,7 @@ function prepOptions(current: number) {
   return mins.map((m) => ({ value: String(m), label: `${m} min` }));
 }
 
-export function OrderCard({ order, isNew, defaultPrepMinutes, onChanged }: OrderCardProps) {
+export function OrderCard({ order, isNew, defaultPrepMinutes, optionNames, onChanged }: OrderCardProps) {
   const { toast } = useToast();
   const [dialog, setDialog] = useState<'accept' | 'reject' | 'prep' | null>(null);
   const [prep, setPrep] = useState(String(order.prepMinutes ?? defaultPrepMinutes));
@@ -48,7 +50,10 @@ export function OrderCard({ order, isNew, defaultPrepMinutes, onChanged }: Order
   const subtotal = order.breakdown?.itemsSubtotalPaise ?? order.breakdown?.totalPaise;
   const s = order.status;
   const showCode = (s === 'ACCEPTED' || s === 'PREPARING' || s === 'READY_FOR_PICKUP') && order.pickupCode;
-  const windowClosed = expired || (order.acceptBy ? Date.parse(order.acceptBy) <= Date.now() : false);
+  const windowClosed = s === 'PLACED' && (expired || (order.acceptBy ? Date.parse(order.acceptBy) <= Date.now() : false));
+  // the server decides what is allowed (it returns none once the accept window has passed)
+  const actions = windowClosed ? [] : allowedActions(order);
+  const can = (a: ReturnType<typeof allowedActions>[number]) => actions.includes(a);
 
   return (
     <Card
@@ -67,7 +72,7 @@ export function OrderCard({ order, isNew, defaultPrepMinutes, onChanged }: Order
           <p className="text-sm text-slate-600">
             {plural(itemCount, 'item')}
             {order.placedAt ? <> · <RelativeTime value={order.placedAt} prefix="placed" /></> : null}
-            {order.customerContact?.name ? <> · {order.customerContact.name}{order.customerContact.phoneMasked ? ` ${formatPhone(order.customerContact.phoneMasked)}` : ''}</> : null}
+            {order.customer?.name ? <> · {order.customer.name}{order.customer.phoneMasked ? ` ${formatPhone(order.customer.phoneMasked)}` : ''}</> : null}
           </p>
         </div>
         <StatusPill kind="childOrder" status={s} />
@@ -82,7 +87,10 @@ export function OrderCard({ order, isNew, defaultPrepMinutes, onChanged }: Order
                 <span className="font-semibold tabular-nums">{l.quantity} ×</span> {l.name}
               </p>
               {l.addOns?.length ? <p className="text-sm text-slate-600">{l.addOns.map((a) => a.name).join(', ')}</p> : null}
-              {l.selectionNames?.length ? <p className="text-sm text-slate-600">{l.selectionNames.join(', ')}</p> : null}
+              {(() => {
+                const names = (l.selections ?? []).flatMap((sel) => sel.optionIds.map((id) => optionNames?.get(id))).filter((n): n is string => Boolean(n));
+                return names.length ? <p className="text-sm text-slate-600">{names.join(', ')}</p> : null;
+              })()}
               {l.note ? <p className="text-sm font-medium text-warn-800">Note: {l.note}</p> : null}
             </div>
             {typeof l.lineTotalPaise === 'number' ? <Price paise={l.lineTotalPaise} size="sm" tone="muted" /> : null}
@@ -132,19 +140,13 @@ export function OrderCard({ order, isNew, defaultPrepMinutes, onChanged }: Order
       <InlineError error={preparing.error ?? ready.error} />
 
       <div className="flex flex-wrap gap-2">
-        {s === 'PLACED' ? (
-          <>
-            <Button onClick={() => setDialog('accept')} disabled={windowClosed} icon="check">Accept</Button>
-            <Button variant="danger" onClick={() => setDialog('reject')} icon="x">Reject</Button>
-          </>
+        {can('accept') ? <Button onClick={() => setDialog('accept')} icon="check">Accept</Button> : null}
+        {can('reject') ? <Button variant="danger" onClick={() => setDialog('reject')} icon="x">Reject</Button> : null}
+        {can('preparing') ? <Button onClick={() => preparing.mutate()} loading={preparing.isPending}>Start preparing</Button> : null}
+        {can('ready') ? (
+          <Button variant={s === 'PREPARING' ? 'primary' : 'secondary'} onClick={() => ready.mutate()} loading={ready.isPending} icon="check">Mark ready</Button>
         ) : null}
-        {s === 'ACCEPTED' ? <Button onClick={() => preparing.mutate()} loading={preparing.isPending}>Start preparing</Button> : null}
-        {s === 'ACCEPTED' || s === 'PREPARING' ? (
-          <>
-            <Button variant={s === 'PREPARING' ? 'primary' : 'secondary'} onClick={() => ready.mutate()} loading={ready.isPending} icon="check">Mark ready</Button>
-            <Button variant="ghost" onClick={() => setDialog('prep')}>Update prep time</Button>
-          </>
-        ) : null}
+        {s === 'ACCEPTED' || s === 'PREPARING' ? <Button variant="ghost" onClick={() => setDialog('prep')}>Update prep time</Button> : null}
         {s === 'READY_FOR_PICKUP' ? (
           <p className="flex items-center gap-1.5 text-sm text-slate-700">
             <Icon name="bike" size={16} /> Waiting for the delivery partner{order.deliveryStatus ? ` (${order.deliveryStatus.toLowerCase().replace(/_/g, ' ')})` : ''}.

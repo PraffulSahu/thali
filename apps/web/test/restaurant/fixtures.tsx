@@ -1,7 +1,8 @@
 /** Shared fixtures and a tiny fetch router for the restaurant-area tests. Not a test file itself. */
 import { vi } from 'vitest';
 import type { ReactElement } from 'react';
-import type { OwnerRestaurant, OwnerOrder } from '../../src/features/restaurant/api';
+import { type Dashboard, type OwnerRestaurant, type OwnerOrder } from '../../src/features/restaurant/api';
+import type { ChildOrderStatus } from '@thali/contracts';
 import { RestaurantContext } from '../../src/features/restaurant/RestaurantContext';
 
 export function makeRestaurant(over: Partial<OwnerRestaurant> = {}): OwnerRestaurant {
@@ -51,21 +52,54 @@ export function completeDraft(over: Partial<OwnerRestaurant> = {}): OwnerRestaur
   });
 }
 
+/** Mirrors the server's `restaurantActions`: what the owner may do per status (PLACED with an open window). */
+const TRANSITIONS: Partial<Record<ChildOrderStatus, ChildOrderStatus[]>> = {
+  PLACED: ['ACCEPTED', 'REJECTED'],
+  ACCEPTED: ['PREPARING', 'READY_FOR_PICKUP'],
+  PREPARING: ['READY_FOR_PICKUP'],
+};
+
 export function makeOrder(over: Partial<OwnerOrder> = {}): OwnerOrder {
+  const status = over.status ?? 'PLACED';
   return {
     id: 'o1',
     code: 'TH-8K2M4Q7A',
     restaurantId: 'r1',
-    status: 'PLACED',
+    restaurantName: 'Spice Route',
+    status,
     lines: [
       { itemId: 'i1', name: 'Chicken Biryani', isVeg: false, quantity: 2, unitPricePaise: 29900, lineTotalPaise: 59800 },
       { itemId: 'i2', name: 'Paneer Tikka', isVeg: true, quantity: 1, unitPricePaise: 24900, lineTotalPaise: 24900, note: 'Less spicy' },
     ],
     breakdown: { itemsSubtotalPaise: 84700, totalPaise: 99000 },
     placedAt: new Date().toISOString(),
-    acceptBy: new Date(Date.now() + 300_000).toISOString(),
+    acceptBy: status === 'PLACED' ? new Date(Date.now() + 300_000).toISOString() : null,
     pickupCode: '4821',
-    customerContact: { name: 'Asha', phoneMasked: '+91******3210' },
+    customer: { name: 'Asha', phoneMasked: '+91******3210' },
+    allowedTransitions: TRANSITIONS[status] ?? [],
+    prepMinutes: null,
+    readyEta: null,
+    rejectionReason: null,
+    cancellationReason: null,
+    refundStatus: 'NONE',
+    deliveryStatus: null,
+    ...over,
+  };
+}
+
+/** Real response shape of GET /owner/restaurants/:id/dashboard. */
+export function makeDashboard(over: Partial<Dashboard> = {}): Dashboard {
+  return {
+    restaurant: { id: 'r1', name: 'Spice Route', status: 'APPROVED', open: true, pausedUntil: null },
+    period: { from: '2026-10-09T18:30:00.000Z', to: '2026-10-10T18:29:59.999Z' },
+    orders: {
+      restaurantId: 'r1', from: '2026-10-09T18:30:00.000Z', to: '2026-10-10T18:29:59.999Z', ordersTotal: 12,
+      byStatus: { DELIVERED: 8, REJECTED: 1, CANCELLED: 1, PLACED: 2 }, acceptanceRate: 0.875, avgAcceptSeconds: 95, grossPaise: 640000, netRevenuePaise: 512000,
+    },
+    ordersAvailable: true,
+    rating: { average: 4.4, count: 31 },
+    ratingCount: 31,
+    menu: { itemsTotal: 24, itemsUnavailable: 2, itemsOutOfStock: 1, lowStockThreshold: 5, lowStock: [{ itemId: 'i9', name: 'Gulab Jamun', availableQty: 3 }] },
     ...over,
   };
 }

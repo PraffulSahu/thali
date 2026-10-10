@@ -22,7 +22,7 @@ function NewOrdersBadge() {
   const id = selected?.status === 'APPROVED' ? selected.id : undefined;
   const q = useQuery({
     queryKey: keys.orders(id ?? ''),
-    queryFn: () => ordersApi.recent(id!),
+    queryFn: () => ordersApi.active(id!),
     enabled: Boolean(id),
     refetchInterval: 30_000,
   });

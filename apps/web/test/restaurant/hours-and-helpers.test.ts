@@ -1,6 +1,6 @@
 import '../setup';
 import { describe, expect, it } from 'vitest';
-import { missingForSubmit, normalizeDashboard, paiseToRupees, rupeesToPaise, validateUpload } from '../../src/features/restaurant/api';
+import { allowedActions, istTodayRange, missingForSubmit, paiseToRupees, rupeesToPaise, validateUpload } from '../../src/features/restaurant/api';
 import { emptyWeek, slotsFromWeek, slotKind, summarizeHours, validateWeek, weekFromSlots } from '../../src/features/restaurant/hours';
 import { completeDraft, makeRestaurant } from './fixtures';
 
@@ -65,17 +65,21 @@ describe('missingForSubmit', () => {
   });
 });
 
-describe('normalizeDashboard', () => {
-  it('reads plausible spellings and never invents numbers', () => {
-    const m = normalizeDashboard({ ordersToday: 12, accepted: 9, rejected: 1, revenuePaise: 450000 });
-    expect(m.ordersToday).toBe(12);
-    expect(m.acceptanceRatePct).toBe(90);
-    expect(m.revenuePaise).toBe(450000);
-    const empty = normalizeDashboard({});
-    expect(empty.ordersToday).toBeNull();
-    expect(empty.acceptanceRatePct).toBeNull();
-    expect(empty.revenuePaise).toBeNull();
-    expect(normalizeDashboard({ acceptanceRate: 0.875 }).acceptanceRatePct).toBe(87.5);
-    expect(normalizeDashboard({ acceptanceRateBps: 9250 }).acceptanceRatePct).toBe(92.5);
+describe('istTodayRange', () => {
+  it('covers the whole IST calendar day, including late evening UTC that is already tomorrow in IST', () => {
+    // 2026-10-10 20:00 UTC is 2026-10-11 01:30 IST
+    expect(istTodayRange(Date.parse('2026-10-10T20:00:00.000Z'))).toEqual({ from: '2026-10-10T18:30:00.000Z', to: '2026-10-11T18:29:59.999Z' });
+    expect(istTodayRange(Date.parse('2026-10-10T05:00:00.000Z'))).toEqual({ from: '2026-10-09T18:30:00.000Z', to: '2026-10-10T18:29:59.999Z' });
+  });
+});
+
+describe('allowedActions', () => {
+  it('follows the server list when present, including an empty list after the accept window', () => {
+    expect(allowedActions({ status: 'PLACED', allowedTransitions: [] })).toEqual([]);
+    expect(allowedActions({ status: 'PREPARING', allowedTransitions: ['READY_FOR_PICKUP'] })).toEqual(['ready']);
+  });
+  it('falls back to the LLD table when the server sends none', () => {
+    expect(allowedActions({ status: 'PLACED' })).toEqual(['accept', 'reject']);
+    expect(allowedActions({ status: 'READY_FOR_PICKUP' })).toEqual([]);
   });
 });

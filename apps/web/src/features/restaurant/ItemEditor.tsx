@@ -4,7 +4,7 @@
  * /owner/restaurants/:id/items.
  */
 import { useMutation } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Dialog, Field, FormActions, InlineError, Input, RadioGroup, Select, Switch, Textarea } from '../../components/ui';
 import { fieldErrors } from '../../lib/errors';
 import { FilePicker } from './FilePicker';
@@ -65,6 +65,13 @@ export function ItemEditor({ open, onClose, restaurantId, categories, item, defa
   const [groups, setGroups] = useState<DraftGroup[]>(() => toDraftGroups(item?.customizationGroups ?? []));
   const [preview, setPreview] = useState<string | null>(item?.imageUrl ?? null);
   const [show, setShow] = useState(false);
+  // local preview URLs must be released, or each chosen photo leaks until the tab closes
+  const objectUrl = useRef<string | null>(null);
+  const releasePreview = () => {
+    if (objectUrl.current && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(objectUrl.current);
+    objectUrl.current = null;
+  };
+  useEffect(() => releasePreview, []);
 
   const errors = validateItem(v, item?.reservedQty ?? 0);
   const groupErrors = validateGroups(groups);
@@ -163,12 +170,16 @@ export function ItemEditor({ open, onClose, restaurantId, categories, item, defa
             onPick={async (file) => {
               const key = await uploadFile(restaurantId, file, 'IMAGE');
               set('imageKey', key);
-              if (typeof URL.createObjectURL === 'function') setPreview(URL.createObjectURL(file));
+              if (typeof URL.createObjectURL === 'function') {
+                releasePreview();
+                objectUrl.current = URL.createObjectURL(file);
+                setPreview(objectUrl.current);
+              }
             }}
           />
           {preview ? (
             <div>
-              <Button variant="link" size="sm" onClick={() => { set('imageKey', null); setPreview(null); }}>Remove photo</Button>
+              <Button variant="link" size="sm" onClick={() => { releasePreview(); set('imageKey', null); setPreview(null); }}>Remove photo</Button>
             </div>
           ) : null}
         </div>

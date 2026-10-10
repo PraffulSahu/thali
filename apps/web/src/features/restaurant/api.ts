@@ -1,10 +1,7 @@
 /**
  * Restaurant-area API layer: types, fetchers, query keys, upload helper and small pure helpers.
- *
- * Verified against the implemented marketplace service (owner-restaurants, owner-menu, uploads) and the
- * payments service (finance). Owner order routes (orders Task 12) and the owner dashboard (marketplace) were
- * not written when this was built: those shapes follow LLD section 10 and are normalised defensively
- * (see the "Unverified" markers below and the Task 18 report).
+ * Shapes follow the implemented services: marketplace (owner-restaurants, owner-menu, owner-dashboard, uploads),
+ * orders (owner-orders, `OwnerOrderView`) and payments (finance).
  */
 import { useQuery, type QueryClient } from '@tanstack/react-query';
 import type { ChildOrderStatus, HoursSlot, LedgerEntryType, PayoutStatus, RestaurantStatus } from '@thali/contracts';
@@ -226,7 +223,7 @@ export const menuApi = {
   deleteItem: (rid: string, id: string) => api<void>(`${base(rid)}/items/${id}`, { method: 'DELETE' }),
 };
 
-/* ------------------------------------------------------------------ orders (LLD 10; UNVERIFIED shapes) */
+/* ------------------------------------------------------------------ orders (services/orders owner-orders.ts) */
 
 export interface OwnerOrderLine {
   itemId?: string;
@@ -236,51 +233,70 @@ export interface OwnerOrderLine {
   unitPricePaise?: number;
   lineTotalPaise?: number;
   addOns?: { id?: string; name: string; pricePaise?: number }[];
-  /** Resolved names when the server provides them (selections only carry ids in the customer view). */
-  selectionNames?: string[];
+  /** ids only: the owner view does not resolve option names */
+  selections?: { groupId: string; optionIds: string[] }[];
   note?: string | null;
 }
 
+/** `OwnerOrderView` from the orders service. */
 export interface OwnerOrder {
   id: string;
   code: string;
   restaurantId?: string;
+  restaurantName?: string;
   status: ChildOrderStatus;
   lines: OwnerOrderLine[];
   breakdown?: { itemsSubtotalPaise?: number; totalPaise: number } & Record<string, number>;
-  placedAt: string | null;
+  customer?: { name: string; phoneMasked: string } | null;
+  /** 4 digits; the delivery partner quotes it at pickup. */
+  pickupCode?: string | null;
   /** Deadline for accepting (PLACED only). */
   acceptBy: string | null;
-  acceptedAt?: string | null;
   prepMinutes?: number | null;
   readyEta?: string | null;
-  readyAt?: string | null;
-  /** 4 digits, shown to the restaurant; the partner enters it at pickup. */
-  pickupCode?: string | null;
-  customerContact?: { name?: string; phoneMasked?: string } | null;
   rejectionReason?: string | null;
   cancellationReason?: string | null;
   refundStatus?: string;
-  refundedPaise?: number;
   deliveryStatus?: string | null;
+  /** Statuses the restaurant may move this order to right now (empty once the accept window has passed). */
+  allowedTransitions?: ChildOrderStatus[];
+  placedAt: string | null;
+  acceptedAt?: string | null;
+  readyAt?: string | null;
   isDemo?: boolean;
 }
 
 export const ACTIVE_STATUSES: ChildOrderStatus[] = ['PLACED', 'ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP'];
-export const HISTORY_STATUS_OPTIONS: { value: ChildOrderStatus; label: string }[] = [
-  { value: 'DELIVERED', label: 'Delivered' },
-  { value: 'REJECTED', label: 'Rejected' },
-  { value: 'CANCELLED', label: 'Cancelled' },
-  { value: 'PICKED_UP', label: 'Picked up' },
-  { value: 'OUT_FOR_DELIVERY', label: 'On the way' },
-  { value: 'DELIVERY_FAILED', label: 'Delivery failed' },
+const IN_PROGRESS: ChildOrderStatus[] = [...ACTIVE_STATUSES, 'PICKED_UP', 'OUT_FOR_DELIVERY'];
+
+/** History filters map to the server's comma-separated `status` list (empty = every order). */
+export const HISTORY_FILTERS: { value: string; label: string; statuses: ChildOrderStatus[] }[] = [
+  { value: 'delivered', label: 'Delivered', statuses: ['DELIVERED'] },
+  { value: 'declined', label: 'Rejected or cancelled', statuses: ['REJECTED', 'CANCELLED'] },
+  { value: 'failed', label: 'Delivery failed', statuses: ['DELIVERY_FAILED'] },
+  { value: 'progress', label: 'In progress', statuses: IN_PROGRESS },
 ];
 
+export type OrderAction = 'accept' | 'reject' | 'preparing' | 'ready';
+
+/** Which action buttons to show: the server's `allowedTransitions` when present, else the LLD 4.1 table. */
+export function allowedActions(o: Pick<OwnerOrder, 'status' | 'allowedTransitions'>): OrderAction[] {
+  const t: ChildOrderStatus[] =
+    o.allowedTransitions ??
+    (o.status === 'PLACED' ? ['ACCEPTED', 'REJECTED'] : o.status === 'ACCEPTED' ? ['PREPARING', 'READY_FOR_PICKUP'] : o.status === 'PREPARING' ? ['READY_FOR_PICKUP'] : []);
+  const out: OrderAction[] = [];
+  if (t.includes('ACCEPTED')) out.push('accept');
+  if (t.includes('REJECTED')) out.push('reject');
+  if (t.includes('PREPARING')) out.push('preparing');
+  if (t.includes('READY_FOR_PICKUP')) out.push('ready');
+  return out;
+}
+
 export const ordersApi = {
-  /** All recent orders of a restaurant, newest first (the board filters to active statuses). */
-  recent: (restaurantId: string, limit = 100) =>
-    api<Paginated<OwnerOrder>>('/owner/orders', { query: { restaurantId, limit } }),
-  page: (q: { restaurantId: string; status?: string; from?: string; to?: string; cursor?: string; limit?: number }) =>
+  /** Orders waiting on the restaurant (new, in the kitchen, ready), newest first. */
+  active: (restaurantId: string) =>
+    api<Paginated<OwnerOrder>>('/owner/orders', { query: { restaurantId, status: ACTIVE_STATUSES.join(','), limit: 100 } }),
+  page: (q: { restaurantId: string; status?: string; cursor?: string; limit?: number }) =>
     api<Paginated<OwnerOrder>>('/owner/orders', { query: { limit: 20, ...q } }),
   get: (childId: string) => api<OwnerOrder>(`/owner/orders/${encodeURIComponent(childId)}`),
   accept: (childId: string, prepMinutes: number) =>
@@ -289,69 +305,59 @@ export const ordersApi = {
     api<OwnerOrder>(`/owner/orders/${encodeURIComponent(childId)}/reject`, { method: 'POST', body: { reason } }),
   preparing: (childId: string) => api<OwnerOrder>(`/owner/orders/${encodeURIComponent(childId)}/preparing`, { method: 'POST' }),
   ready: (childId: string) => api<OwnerOrder>(`/owner/orders/${encodeURIComponent(childId)}/ready`, { method: 'POST' }),
+  /** Minutes from now until ready (ACCEPTED / PREPARING only). */
   setPrepTime: (childId: string, prepMinutes: number) =>
     api<OwnerOrder>(`/owner/orders/${encodeURIComponent(childId)}/prep-time`, { method: 'PATCH', body: { prepMinutes } }),
 };
 
 export const PREP_TIME_OPTIONS = [10, 15, 20, 25, 30, 40, 45, 60, 90];
 
-/* ------------------------------------------------------------------ dashboard (UNVERIFIED) */
+/* ------------------------------------------------------------------ dashboard (marketplace owner-dashboard.ts) */
 
-export interface DashboardMetrics {
-  ordersToday: number | null;
-  acceptedToday: number | null;
-  rejectedToday: number | null;
-  /** 0-100, null when there were no decided orders. */
-  acceptanceRatePct: number | null;
-  revenuePaise: number | null;
-  avgPrepMinutes: number | null;
-  /** Date label the server computed the numbers for, when present. */
-  asOf: string | null;
-  raw: unknown;
+export interface OrderStats {
+  restaurantId: string;
+  from: string;
+  to: string;
+  ordersTotal: number;
+  byStatus: Record<string, number>;
+  /** fraction 0..1 (accepted / (accepted + rejected)); null when nothing has been decided */
+  acceptanceRate: number | null;
+  avgAcceptSeconds: number | null;
+  /** delivered orders only: items + packaging */
+  grossPaise: number;
+  /** delivered orders only: what the payments ledger credits after commission */
+  netRevenuePaise: number;
 }
 
-const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
-const pick = (o: Record<string, unknown>, ...names: string[]): number | null => {
-  for (const n of names) {
-    const v = num(o[n]);
-    if (v !== null) return v;
-  }
-  return null;
-};
-
-/** Tolerant reader: the dashboard payload is not specified beyond LLD 10, so accept the plausible spellings. */
-export function normalizeDashboard(raw: unknown): DashboardMetrics {
-  const root = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  const o = (root.today && typeof root.today === 'object' ? { ...root, ...(root.today as object) } : root) as Record<string, unknown>;
-  const ordersToday = pick(o, 'ordersToday', 'todayOrders', 'orders', 'ordersCount', 'orderCount', 'placed');
-  const accepted = pick(o, 'acceptedToday', 'accepted', 'acceptedCount');
-  const rejected = pick(o, 'rejectedToday', 'rejected', 'rejectedCount');
-  let rate = pick(o, 'acceptanceRatePct', 'acceptanceRatePercent');
-  if (rate === null) {
-    const bps = pick(o, 'acceptanceRateBps');
-    if (bps !== null) rate = bps / 100;
-  }
-  if (rate === null) {
-    const r = pick(o, 'acceptanceRate');
-    if (r !== null) rate = r <= 1 ? r * 100 : r;
-  }
-  if (rate === null && accepted !== null && rejected !== null && accepted + rejected > 0) {
-    rate = (accepted / (accepted + rejected)) * 100;
-  }
-  return {
-    ordersToday,
-    acceptedToday: accepted,
-    rejectedToday: rejected,
-    acceptanceRatePct: rate === null ? null : Math.round(rate * 10) / 10,
-    revenuePaise: pick(o, 'revenuePaise', 'todayRevenuePaise', 'grossPaise', 'earningsPaise'),
-    avgPrepMinutes: pick(o, 'avgPrepMinutes', 'averagePrepMinutes'),
-    asOf: typeof o.asOf === 'string' ? o.asOf : typeof o.date === 'string' ? o.date : null,
-    raw,
+export interface Dashboard {
+  restaurant: { id: string; name: string; status: string; open: boolean; closedReason?: string; pausedUntil: string | null };
+  period: { from: string; to: string };
+  /** null when the orders service could not be reached */
+  orders: OrderStats | null;
+  ordersAvailable: boolean;
+  rating: { average: number; count: number } | null;
+  ratingCount: number;
+  menu: {
+    itemsTotal: number;
+    itemsUnavailable: number;
+    itemsOutOfStock: number;
+    lowStockThreshold: number;
+    lowStock: { itemId: string; name: string; availableQty: number }[];
   };
 }
 
+const IST_OFFSET_MS = 330 * 60_000;
+const DAY_MS = 86_400_000;
+
+/** Start and end of the current calendar day in Asia/Kolkata, as ISO instants. */
+export function istTodayRange(now: number = Date.now()): { from: string; to: string } {
+  const ist = now + IST_OFFSET_MS;
+  const start = ist - (ist % DAY_MS) - IST_OFFSET_MS;
+  return { from: new Date(start).toISOString(), to: new Date(start + DAY_MS - 1).toISOString() };
+}
+
 export const dashboardApi = {
-  get: (restaurantId: string) => api<unknown>(`${base(restaurantId)}/dashboard`).then(normalizeDashboard),
+  today: (restaurantId: string) => api<Dashboard>(`${base(restaurantId)}/dashboard`, { query: istTodayRange() }),
 };
 
 /* ------------------------------------------------------------------ finance (payments service, verified) */

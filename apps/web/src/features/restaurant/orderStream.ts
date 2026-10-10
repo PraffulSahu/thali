@@ -7,9 +7,9 @@
  * before that. Motion for the visual alert uses Tailwind's `motion-safe:` so reduced motion is respected.
  */
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useRealtime } from '../../hooks/useRealtime';
-import { ACTIVE_STATUSES, keys, ordersApi, type OwnerOrder } from './api';
+import { keys, ordersApi } from './api';
 
 /* ---------------------------------------------------------------- sound (module singleton) */
 
@@ -111,10 +111,6 @@ export function useSoundState() {
 
 /* ---------------------------------------------------------------- stream */
 
-export function isActiveOrder(o: Pick<OwnerOrder, 'status'>): boolean {
-  return (ACTIVE_STATUSES as string[]).includes(o.status);
-}
-
 export interface OrderStreamOptions {
   enabled?: boolean;
   /** Chime when a PLACED order appears that was not in the previous snapshot (default true). */
@@ -122,16 +118,16 @@ export interface OrderStreamOptions {
 }
 
 /**
- * Fetches the restaurant's recent orders and keeps them fresh. Returns the active orders sorted oldest-first
- * within each state (the oldest PLACED order has the least time left), the ids of orders that arrived since
- * the screen opened, and the realtime status.
+ * Fetches the restaurant's active orders (new, in the kitchen, ready) and keeps them fresh. Returns them
+ * oldest-first (the oldest PLACED order has the least time left), the ids of orders that arrived since the
+ * screen opened, and the realtime status.
  */
 export function useOrderStream(restaurantId: string | undefined, opts: OrderStreamOptions = {}) {
   const { enabled = true, alert = true } = opts;
   const on = Boolean(restaurantId) && enabled;
   const query = useQuery({
     queryKey: keys.orders(restaurantId ?? ''),
-    queryFn: () => ordersApi.recent(restaurantId!),
+    queryFn: () => ordersApi.active(restaurantId!),
     enabled: on,
   });
   const { status } = useRealtime<{ restaurantId?: string }>(
@@ -142,46 +138,34 @@ export function useOrderStream(restaurantId: string | undefined, opts: OrderStre
     { fallbackRefetch: query.refetch, enabled: on },
   );
 
-  const active = useMemo(() => {
-    const items = (query.data?.items ?? []).filter(isActiveOrder);
-    return items.sort((a, b) => Date.parse(a.placedAt ?? '') - Date.parse(b.placedAt ?? ''));
-  }, [query.data]);
+  const active = useMemo(
+    () => [...(query.data?.items ?? [])].sort((a, b) => Date.parse(a.placedAt ?? '') - Date.parse(b.placedAt ?? '')),
+    [query.data],
+  );
 
-  // New-order detection: ids seen on the first successful load are the baseline; later PLACED ids are "new".
+  // New-order detection: PLACED ids on the first successful load are the baseline; later ones are "new".
   const seen = useRef<Set<string> | null>(null);
-  const fresh = useRef<Set<string>>(new Set());
-  const lastRestaurant = useRef(restaurantId);
-  if (lastRestaurant.current !== restaurantId) {
-    lastRestaurant.current = restaurantId;
+  const [newIds, setNewIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
     seen.current = null;
-    fresh.current = new Set();
-  }
-  const newIds = useMemo(() => {
-    if (!query.data) return fresh.current;
+    setNewIds(new Set());
+  }, [restaurantId]);
+
+  useEffect(() => {
+    if (!query.data) return;
     const placed = query.data.items.filter((o) => o.status === 'PLACED').map((o) => o.id);
     if (seen.current === null) {
       seen.current = new Set(placed);
-      return fresh.current;
+      return;
     }
-    const next = new Set(fresh.current);
-    let added = false;
-    for (const id of placed) {
-      if (!seen.current.has(id)) {
-        seen.current.add(id);
-        next.add(id);
-        added = true;
-      }
-    }
-    if (added) fresh.current = next;
-    return fresh.current;
-  }, [query.data]);
-
-  const chimedFor = useRef(0);
-  useEffect(() => {
-    if (!alert || newIds.size <= chimedFor.current) return;
-    chimedFor.current = newIds.size;
-    playOrderChime();
-  }, [alert, newIds]);
+    const known = seen.current;
+    const added = placed.filter((id) => !known.has(id));
+    if (added.length === 0) return;
+    added.forEach((id) => known.add(id));
+    setNewIds((prev) => new Set([...prev, ...added]));
+    if (alert) playOrderChime();
+  }, [query.data, alert]);
 
   const placedCount = active.filter((o) => o.status === 'PLACED').length;
   return { query, active, newIds, placedCount, realtime: status };

@@ -155,3 +155,35 @@ describe('OnboardingWizard: uploads', () => {
     expect(api.find('POST', /uploads/)).toHaveLength(0);
   });
 });
+
+describe('OnboardingWizard: settlement', () => {
+  it('sends the full account number once, then only the last 4 digits are ever rendered', async () => {
+    const api = mockApi([
+      ['GET', /^\/owner\/restaurants\/r1$/, completeDraft({ settlement: null })],
+      ['PUT', /settlement$/, () => json({ accountHolder: 'Spice Route Foods', ifsc: 'HDFC0001234', last4: '9012' })],
+    ]);
+    const user = userEvent.setup();
+    renderWithProviders(<OnboardingWizard />, { route: '/restaurant/onboarding/r1?step=settlement', ...ROUTE, auth: makeAuth({ roles: ['RESTAURANT_OWNER'] }) });
+
+    await user.type(await screen.findByLabelText(/account holder name/i), 'Spice Route Foods');
+    await user.type(screen.getByLabelText(/^account number/i), '123456789012');
+    await user.type(screen.getByLabelText(/confirm account number/i), '123456789012');
+    await user.type(screen.getByLabelText(/ifsc/i), 'hdfc0001234');
+    await user.click(screen.getByRole('button', { name: /save and continue/i }));
+
+    // moved on to the review step, which only knows the masked value
+    expect(await screen.findByText(/Spice Route Foods · ending 9012/)).toBeInTheDocument();
+    expect(api.find('PUT', /settlement$/)[0]!.body).toEqual({ accountHolder: 'Spice Route Foods', accountNumber: '123456789012', ifsc: 'HDFC0001234' });
+    expect(document.body.textContent).not.toContain('123456789012');
+    expect(document.body.textContent).not.toContain('3456789012');
+    expect(Array.from(document.querySelectorAll('input')).some((i) => i.value.includes('123456789012'))).toBe(false);
+  });
+
+  it('shows an already-saved account as masked and lets the owner keep it', async () => {
+    mockApi([['GET', /^\/owner\/restaurants\/r1$/, completeDraft()]]);
+    renderWithProviders(<OnboardingWizard />, { route: '/restaurant/onboarding/r1?step=settlement', ...ROUTE, auth: makeAuth({ roles: ['RESTAURANT_OWNER'] }) });
+    expect(await screen.findByText(/Account ending 4321/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/^account number/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /keep these details/i })).toBeInTheDocument();
+  });
+});
