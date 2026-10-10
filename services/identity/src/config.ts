@@ -66,6 +66,9 @@ export function loadIdentityConfig(env: Record<string, string | undefined> = pro
   if (raw.APP_MODE === 'production' && !raw.JWT_PRIVATE_KEY_PEM) {
     issues.push('JWT_PRIVATE_KEY_PEM: required when APP_MODE=production');
   }
+  if (raw.APP_MODE === 'production' && raw.COOKIE_SECURE === false) {
+    issues.push('COOKIE_SECURE: must not be false when APP_MODE=production (refresh cookie must be Secure)');
+  }
   const demoPhones: string[] = [];
   for (const p of raw.DEMO_PHONES) {
     const n = tryNormalizePhone(p);

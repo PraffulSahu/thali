@@ -79,6 +79,13 @@ describe('config', () => {
     expect(loadIdentityConfig(env({ ...prodBase, JWT_PRIVATE_KEY_PEM: pem })).COOKIE_SECURE).toBe(true);
   });
 
+  it('production rejects COOKIE_SECURE=false (explicit true is fine)', () => {
+    const pem = generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+    expect(() => loadIdentityConfig(env({ ...prodBase, JWT_PRIVATE_KEY_PEM: pem, COOKIE_SECURE: 'false' }))).toThrow(/COOKIE_SECURE/);
+    expect(() => loadIdentityConfig(env({ ...prodBase, JWT_PRIVATE_KEY_PEM: pem, COOKIE_SECURE: '0' }))).toThrow(/COOKIE_SECURE/);
+    expect(loadIdentityConfig(env({ ...prodBase, JWT_PRIVATE_KEY_PEM: pem, COOKIE_SECURE: 'true' })).COOKIE_SECURE).toBe(true);
+  });
+
   it('COOKIE_SECURE defaults: false in demo, true in sandbox; explicit value wins', () => {
     expect(loadIdentityConfig(env({ APP_MODE: 'demo' })).COOKIE_SECURE).toBe(false);
     expect(loadIdentityConfig(env({ APP_MODE: 'sandbox' })).COOKIE_SECURE).toBe(true);
