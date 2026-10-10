@@ -74,6 +74,10 @@ export class FakeMarketplace implements MarketplaceClient {
   couponCalls: CouponValidateRequest[] = [];
   membershipCalls: MembershipBenefitsRequest[] = [];
   failReserveWith: Error | null = null;
+  /** Return each restaurant's quote lines in reverse request order (lineRef must disambiguate). */
+  reverseLines = false;
+  /** Do not echo lineRef (legacy marketplace) — orders must fall back to position or fail closed. */
+  omitLineRef = false;
   reserveDelayMs = 0;
 
   addRestaurant(over: Partial<FakeRestaurant> = {}): FakeRestaurant {
@@ -204,6 +208,7 @@ export class FakeMarketplace implements MarketplaceClient {
       if (!item.available) problems.push({ code: 'ITEM_UNAVAILABLE', restaurantId: r.id, itemId: item.id, message: `${item.name} unavailable` });
       else if (!stockOk) problems.push({ code: 'OUT_OF_STOCK', restaurantId: r.id, itemId: item.id, message: `${item.name} out of stock` });
       qr.lines.push({
+        ...(it.lineRef !== undefined && !this.omitLineRef ? { lineRef: it.lineRef } : {}),
         itemId: item.id,
         name: item.name,
         isVeg: item.isVeg,
@@ -213,6 +218,7 @@ export class FakeMarketplace implements MarketplaceClient {
         stockOk,
       });
     }
+    if (this.reverseLines) for (const r of byRestaurant.values()) r.lines.reverse();
     return { restaurants: [...byRestaurant.values()], problems };
   }
 

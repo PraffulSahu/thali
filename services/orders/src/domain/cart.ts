@@ -25,6 +25,7 @@ import type { Cart, CartDoc, CartLine } from '../models/cart.js';
 import type { AddressSnapshot } from '../models/common.js';
 import type { QuoteProblem, QuoteProblemCode, QuoteResponse } from '../clients/marketplace.js';
 import { hashGuestToken, isWellFormedGuestToken } from './guest-token.js';
+import { matchQuoteLines } from './quote-lines.js';
 
 export const DELIVERY_NOTE = 'Delivered separately by restaurant';
 export const DELIVERY_EXPLANATION =
@@ -151,6 +152,8 @@ interface ItemSnapshot {
   addOns: { id: string; name: string; pricePaise: number }[];
 }
 
+const ADD_LINE_REF = 'cart-write';
+
 async function quoteSingleItem(
   ctx: OrdersContext,
   restaurantId: string,
@@ -160,7 +163,7 @@ async function quoteSingleItem(
 ): Promise<ItemSnapshot> {
   let q: QuoteResponse;
   try {
-    q = await ctx.clients.marketplace.quote({ items: [{ restaurantId, itemId, quantity, selections }] });
+    q = await ctx.clients.marketplace.quote({ items: [{ lineRef: ADD_LINE_REF, restaurantId, itemId, quantity, selections }] });
   } catch (e) {
     if (e instanceof DomainError && e.code === 'NOT_FOUND') {
       throw new DomainError('ITEM_UNAVAILABLE', 'Item not found', 422, { problems: [{ code: 'ITEM_UNAVAILABLE', restaurantId, itemId }] });
@@ -168,7 +171,7 @@ async function quoteSingleItem(
     throw e;
   }
   const r = q.restaurants.find((x) => x.restaurantId === restaurantId);
-  const line = r?.lines.find((l) => l.itemId === itemId);
+  const line = r ? matchQuoteLines([{ lineRef: ADD_LINE_REF, itemId }], r.lines)[0] ?? undefined : undefined;
   const problems = [...q.problems];
   if (line && !line.available && !problems.some((p) => p.code === 'ITEM_UNAVAILABLE'))
     problems.push({ code: 'ITEM_UNAVAILABLE', restaurantId, itemId, message: `${line.name} is unavailable` });
@@ -310,13 +313,14 @@ export async function setCoupon(ctx: OrdersContext, owner: CartOwner, couponCode
 
 /**
  * Merge a guest cart into the user's cart (same lineKey → quantities added, capped at 20) and delete
- * the guest cart, in one transaction. Idempotent: an unknown/already-merged token → `merged:false`.
+ * the guest cart, in one transaction. Idempotent: an unknown/expired/already-merged token → `merged:false`.
  */
 export async function mergeGuestCart(ctx: OrdersContext, userId: string, guestToken: string): Promise<{ merged: boolean; lineCount: number }> {
   const tokenHash = isWellFormedGuestToken(guestToken) ? hashGuestToken(guestToken) : null;
   return withTransaction(ctx.conn, async (session) => {
     const guest = tokenHash ? await ctx.models.Cart.findOne({ guestTokenHash: tokenHash, ownerType: 'GUEST' }).session(session) : null;
-    if (!guest) {
+    const expired = !!guest?.expiresAt && guest.expiresAt.getTime() < Date.now(); // TTL monitor may lag
+    if (!guest || expired) {
       const mine = await ctx.models.Cart.findOne({ userId, ownerType: 'USER' }).session(session);
       return { merged: false, lineCount: mine?.items.length ?? 0 };
     }
@@ -343,7 +347,10 @@ export async function mergeGuestCart(ctx: OrdersContext, userId: string, guestTo
         });
       }
     }
-    if (!user.deliveryAddress && guest.deliveryAddress) user.deliveryAddress = guest.deliveryAddress;
+    if (!user.deliveryAddress && guest.deliveryAddress) {
+      user.deliveryAddress = guest.deliveryAddress;
+      user.addressId = guest.addressId ?? guest.deliveryAddress.addressId ?? null;
+    }
     if (!user.couponCode && guest.couponCode) user.couponCode = guest.couponCode;
     user.cartVersion += 1;
     await user.save({ session });

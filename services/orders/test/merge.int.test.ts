@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { asUser, oid, setup, type Harness } from './helpers.js';
@@ -61,6 +62,26 @@ describe('guest → user cart merge', () => {
     expect(r1.body).toEqual({ merged: true, lineCount: 2 });
     const r2 = await u.post('/api/v1/cart/merge', { guestToken: token });
     expect(r2.body).toEqual({ merged: false, lineCount: 2 });
+  });
+
+  it('copies the guest address (with addressId) when the user has none; expired guest carts are ignored', async () => {
+    const { token } = await guestWithTwoRestaurants();
+    const addr = { line1: '7 Lake View', city: 'Bengaluru', pincode: '560034', location: { lat: 12.93, lng: 77.62 } };
+    expect((await request(h.app).put('/api/v1/cart/address').set('X-Guest-Cart', token).send({ addressId: 'home-9', address: addr })).status).toBe(200);
+    const u = await asUser(h);
+    expect((await u.post('/api/v1/cart/merge', { guestToken: token })).body.merged).toBe(true);
+    const cart = await u.get('/api/v1/cart');
+    expect(cart.body.deliveryAddress).toMatchObject({ addressId: 'home-9', line1: '7 Lake View' });
+    const row = await h.db.conn.collection('carts').findOne({ userId: u.userId });
+    expect(row!.addressId).toBe('home-9');
+
+    const expired = await guestWithTwoRestaurants();
+    const hash = createHash('sha256').update(expired.token).digest('hex');
+    const upd = await h.db.conn.collection('carts').updateOne({ guestTokenHash: hash }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+    expect(upd.modifiedCount).toBe(1);
+    const v = await asUser(h);
+    const m = await v.post('/api/v1/cart/merge', { guestToken: expired.token });
+    expect(m.body).toEqual({ merged: false, lineCount: 0 });
   });
 
   it('internal merge requires an identity service token', async () => {

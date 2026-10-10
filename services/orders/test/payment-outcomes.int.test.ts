@@ -157,7 +157,7 @@ describe('payment.captured', () => {
 });
 
 describe('payment.failed and late payment', () => {
-  it('payment.failed → children PAYMENT_FAILED + checkout.released', async () => {
+  it('payment.failed is a mirror only: checkout stays AWAITING_PAYMENT with holds; a retry capture then places', async () => {
     const c = await newCheckout();
     const env = await publishEvent(h.tr.redis, h.tr.prefix, 'payments', 'payment.failed', {
       paymentIntentId: c.payment.intentId,
@@ -167,13 +167,63 @@ describe('payment.failed and late payment', () => {
       reason: 'card declined',
     });
     await processed(env.id);
-    expect((await childrenOf(c.checkout.id)).map((k) => k.status)).toEqual(['PAYMENT_FAILED', 'PAYMENT_FAILED']);
-    expect((await group(c.checkout.id))!.status).toBe('PAYMENT_FAILED');
+    expect((await childrenOf(c.checkout.id)).map((k) => k.status)).toEqual(['AWAITING_PAYMENT', 'AWAITING_PAYMENT']);
+    const g = await group(c.checkout.id);
+    expect(g!.status).toBe('AWAITING_PAYMENT');
+    expect(g!.paymentStatus).toBe('FAILED');
+    expect((await outboxEvents(h, 'checkout.released')).filter((e) => e.payload.checkoutId === c.checkout.id)).toHaveLength(0);
+    const tl = await h.db.conn.collection('order_events').findOne({ checkoutGroupId: oidOf(c.checkout.id), type: 'payment.failed' });
+    expect(tl!.data).toMatchObject({ reason: 'card declined' });
+    // the UI can show "Payment failed — try again"
+    const view = await c.u.get(`/api/v1/checkouts/${c.checkout.id}`);
+    expect(view.body.checkout).toMatchObject({ status: 'AWAITING_PAYMENT', paymentStatus: 'FAILED' });
+    expect((await c.u.get('/api/v1/cart')).body.itemCount).toBe(3);
+
+    // customer retries on the same provider order (LLD §4.3 FAILED → CAPTURED)
+    const env2 = await captured(c);
+    await processed(env2.id);
+    expect((await childrenOf(c.checkout.id)).map((k) => k.status)).toEqual(['PLACED', 'PLACED']);
+    const g2 = await group(c.checkout.id);
+    expect(g2!.status).toBe('PAID_PLACED');
+    expect(g2!.paymentStatus).toBe('CAPTURED');
+    expect((await outboxEvents(h, 'checkout.late_payment')).filter((e) => e.payload.checkoutId === c.checkout.id)).toHaveLength(0);
+  });
+
+  it('a stale payment.failed after the capture changes nothing', async () => {
+    const c = await newCheckout();
+    await processed((await captured(c)).id);
+    const env = await publishEvent(h.tr.redis, h.tr.prefix, 'payments', 'payment.failed', {
+      paymentIntentId: c.payment.intentId,
+      purpose: 'CHECKOUT',
+      referenceId: c.checkout.id,
+      userId: c.u.userId,
+      reason: 'late failure',
+    });
+    await processed(env.id);
+    const g = await group(c.checkout.id);
+    expect(g!.status).toBe('PAID_PLACED');
+    expect(g!.paymentStatus).toBe('CAPTURED');
+  });
+
+  it('failed then expired (reconcile FAILED) → EXPIRED + released by the sweeper', async () => {
+    const c = await newCheckout();
+    await processed(
+      (
+        await publishEvent(h.tr.redis, h.tr.prefix, 'payments', 'payment.failed', {
+          paymentIntentId: c.payment.intentId,
+          purpose: 'CHECKOUT',
+          referenceId: c.checkout.id,
+          userId: c.u.userId,
+          reason: 'declined',
+        })
+      ).id,
+    );
+    h.payments.reconcileStatus.set(c.payment.intentId, { status: 'FAILED', capturedPaise: 0 });
+    await h.db.conn.collection('checkout_groups').updateOne({ _id: oidOf(c.checkout.id) }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+    await runCheckoutExpiry(h.ctx);
+    expect((await group(c.checkout.id))!.status).toBe('EXPIRED');
     const rel = (await outboxEvents(h, 'checkout.released')).filter((e) => e.payload.checkoutId === c.checkout.id);
     expect(rel).toHaveLength(1);
-    expect(rel[0]!.payload.reason).toBe('PAYMENT_FAILED');
-    // cart kept so the customer can retry
-    expect((await c.u.get('/api/v1/cart')).body.itemCount).toBe(3);
   });
 
   it('captured after EXPIRED → checkout.late_payment emitted, children stay EXPIRED', async () => {

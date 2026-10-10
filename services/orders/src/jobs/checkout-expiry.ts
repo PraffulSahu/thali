@@ -3,7 +3,8 @@
  * are ALWAYS reconciled with payments before anything is released (HLD §4.1 "orders down when
  * captured" / "webhook missed"):
  *   - CAPTURED (amount == total)  → placed exactly like `payment.captured`
- *   - CAPTURED (amount differs)   → EXPIRED + `checkout.released` + `checkout.late_payment` (refund)
+ *   - CAPTURED (amount differs), PARTIALLY_REFUNDED, REFUNDED → EXPIRED + `checkout.released` +
+ *     `checkout.late_payment` (refund of what was captured)
  *   - AUTHORIZED within AUTHORIZED_GRACE_SEC of expiry → left alone (payments auto-captures)
  *   - otherwise (CREATED / FAILED / no intent at all) → EXPIRED + `checkout.released`
  *   - payments unreachable → skipped; retried next tick (never expire without a reconcile)
@@ -19,7 +20,9 @@ import type { JobModule } from './types.js';
 
 const BATCH = 100;
 const isNotFound = (e: unknown) => e instanceof DomainError && e.code === 'NOT_FOUND';
-const CAPTURED_STATES = new Set(['CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED']);
+/** Provider took money at some point. Only a plain CAPTURED of the exact total places the order;
+ * REFUNDED / PARTIALLY_REFUNDED (or a different amount) → EXPIRED + release + late-payment refund. */
+const MONEY_TAKEN_STATES = new Set(['CAPTURED', 'PARTIALLY_REFUNDED', 'REFUNDED']);
 
 export type SweepOutcome = 'PLACED' | 'EXPIRED' | 'EXPIRED_LATE_PAYMENT' | 'WAITING_CAPTURE' | 'SKIPPED' | 'NOOP';
 
@@ -45,17 +48,19 @@ export async function sweepCheckout(ctx: OrdersContext, g: Pick<CheckoutGroup, '
     return 'SKIPPED';
   }
 
-  if (rec && CAPTURED_STATES.has(rec.status)) {
+  if (rec && MONEY_TAKEN_STATES.has(rec.status)) {
     const capturedPaise = rec.capturedPaise;
     const intentId = rec.paymentIntentId;
+    const placeable = rec.status === 'CAPTURED' && capturedPaise === g.pricing.totalPaise;
     return withTransaction(ctx.conn, async (session) => {
-      if (capturedPaise === g.pricing.totalPaise) {
+      if (placeable) {
         const outcome = await applyCapturedPayment(ctx, session, { checkoutId: String(g._id), paymentIntentId: intentId, amountPaise: capturedPaise, source: 'reconcile' });
         return outcome === 'PLACED' ? 'PLACED' : 'NOOP';
       }
       const group = await ctx.models.CheckoutGroup.findById(g._id).session(session);
       if (!group || group.status !== 'AWAITING_PAYMENT') return 'NOOP';
-      await releaseCheckout(ctx, session, group, 'EXPIRED', { detail: 'captured amount mismatch', paymentStatus: rec!.status });
+      const detail = rec!.status === 'CAPTURED' ? 'captured amount mismatch' : `payment ${rec!.status.toLowerCase()} at expiry`;
+      await releaseCheckout(ctx, session, group, 'EXPIRED', { detail, paymentStatus: rec!.status });
       await applyCapturedPayment(ctx, session, { checkoutId: String(g._id), paymentIntentId: intentId, amountPaise: capturedPaise, source: 'reconcile' });
       return 'EXPIRED_LATE_PAYMENT';
     });

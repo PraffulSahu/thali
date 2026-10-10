@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DomainError } from '@thali/contracts';
 import { priceCheckout } from '@thali/pricing';
 import { asUser, DROP_ADDRESS, fillTwoRestaurantCart, idemKey, oid, outboxEvents, setup, type Harness } from './helpers.js';
@@ -152,6 +152,80 @@ describe('POST /checkouts — happy path', () => {
   });
 });
 
+describe('quote line identity (lineRef)', () => {
+  async function sameItemTwice() {
+    const u = await asUser(h);
+    const s = h.marketplace.seedTwo();
+    const regular = await u.post('/api/v1/cart/items', {
+      restaurantId: s.a.id,
+      itemId: s.paneer.id,
+      quantity: 2,
+      selections: [{ groupId: s.size.id, optionIds: [s.size.options[0]!.id] }],
+    });
+    const large = await u.post('/api/v1/cart/items', {
+      restaurantId: s.a.id,
+      itemId: s.paneer.id,
+      quantity: 1,
+      selections: [
+        { groupId: s.size.id, optionIds: [s.size.options[1]!.id] },
+        { groupId: s.extras.id, optionIds: [s.extras.options[0]!.id] },
+      ],
+    });
+    expect(regular.status).toBe(201);
+    expect(large.status).toBe(201);
+    return { u, s, regularLineId: regular.body.lineId as string, largeLineId: large.body.lineId as string };
+  }
+
+  it('same item twice with different selections, quote lines returned in reversed order → each line priced by its lineRef', async () => {
+    const { u, regularLineId, largeLineId } = await sameItemTwice();
+    h.marketplace.reverseLines = true;
+    let r;
+    try {
+      r = await checkoutReq(u, { address: DROP_ADDRESS });
+    } finally {
+      h.marketplace.reverseLines = false;
+    }
+    expect(r.status).toBe(201);
+    const sent = h.marketplace.quoteCalls.at(-1)!.items.map((i) => i.lineRef);
+    expect(sent).toEqual([regularLineId, largeLineId]);
+    const child = await h.db.conn.collection('child_orders').findOne({ userId: u.userId });
+    const byLine = new Map(child!.lines.map((l: { cartLineId: string }) => [l.cartLineId, l]));
+    expect(byLine.get(regularLineId)).toMatchObject({ quantity: 2, lineTotalPaise: 2 * 25000 });
+    expect(byLine.get(largeLineId)).toMatchObject({ quantity: 1, lineTotalPaise: 25000 + 3000 + 2000 });
+    expect(child!.breakdown.itemsSubtotalPaise).toBe(80000);
+    // one reservation line per item (customizations share stock)
+    expect(h.marketplace.reserveCalls.at(-1)!.lines).toEqual([{ restaurantId: child!.restaurantId, itemId: child!.lines[0].itemId, qty: 3 }]);
+  });
+
+  it('no lineRef echoed + duplicate itemIds in a restaurant → fail closed with 502 UPSTREAM_ERROR', async () => {
+    const { u } = await sameItemTwice();
+    h.marketplace.omitLineRef = true;
+    const before = h.marketplace.reserveCalls.length;
+    let r;
+    try {
+      r = await checkoutReq(u, { address: DROP_ADDRESS });
+    } finally {
+      h.marketplace.omitLineRef = false;
+    }
+    expect(r.status).toBe(502);
+    expect(r.body.error.code).toBe('UPSTREAM_ERROR');
+    expect(h.marketplace.reserveCalls.length).toBe(before);
+  });
+
+  it('no lineRef echoed but unique itemIds → position/itemId fallback works', async () => {
+    const u = await asUser(h);
+    await fillTwoRestaurantCart(h, u);
+    h.marketplace.omitLineRef = true;
+    let r;
+    try {
+      r = await checkoutReq(u, { address: DROP_ADDRESS });
+    } finally {
+      h.marketplace.omitLineRef = false;
+    }
+    expect(r.status).toBe(201);
+  });
+});
+
 describe('POST /checkouts — failure branches', () => {
   it('restaurant closed in quote → 422 RESTAURANT_CLOSED with problems, nothing reserved', async () => {
     const u = await asUser(h);
@@ -197,6 +271,25 @@ describe('POST /checkouts — failure branches', () => {
     } finally {
       h.marketplace.failReserveWith = null;
     }
+    expect(await h.db.conn.collection('checkout_groups').countDocuments({ userId: u.userId })).toBe(0);
+    expect(await h.db.conn.collection('child_orders').countDocuments({ userId: u.userId })).toBe(0);
+  });
+
+  it('a failure persisting the checkout after a successful reserve releases the hold', async () => {
+    const u = await asUser(h);
+    await fillTwoRestaurantCart(h, u);
+    const spy = vi.spyOn(h.ctx.models.ChildOrder, 'create').mockRejectedValueOnce(new Error('disk full'));
+    let r;
+    try {
+      r = await checkoutReq(u, { address: DROP_ADDRESS });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(r.status).toBe(500);
+    const reserved = h.marketplace.reserveCalls.at(-1)!;
+    expect(reserved.userId).toBe(u.userId);
+    const released = (await outboxEvents(h, 'checkout.released')).filter((e) => e.payload.checkoutId === reserved.checkoutId);
+    expect(released).toHaveLength(1);
     expect(await h.db.conn.collection('checkout_groups').countDocuments({ userId: u.userId })).toBe(0);
     expect(await h.db.conn.collection('child_orders').countDocuments({ userId: u.userId })).toBe(0);
   });

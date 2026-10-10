@@ -101,6 +101,19 @@ describe('checkout-expiry sweeper (LLD §8 sweeper a)', () => {
     expect(late[0]!.payload.amountPaise).toBe(100);
   });
 
+  it('reconcile REFUNDED / PARTIALLY_REFUNDED (even of the full amount) is never placed → EXPIRED + late_payment', async () => {
+    for (const status of ['REFUNDED', 'PARTIALLY_REFUNDED'] as const) {
+      const c = await newCheckout();
+      await expireNow(c.checkout.id);
+      h.payments.reconcileStatus.set(c.payment.intentId, { status, capturedPaise: c.checkout.pricing.totalPaise });
+      await runCheckoutExpiry(h.ctx);
+      expect((await group(c.checkout.id))!.status).toBe('EXPIRED');
+      expect((await outboxEvents(h, 'order.placed')).filter((e) => e.payload.checkoutId === c.checkout.id)).toHaveLength(0);
+      expect((await outboxEvents(h, 'checkout.released')).filter((e) => e.payload.checkoutId === c.checkout.id)).toHaveLength(1);
+      expect((await outboxEvents(h, 'checkout.late_payment')).filter((e) => e.payload.checkoutId === c.checkout.id)).toHaveLength(1);
+    }
+  });
+
   it('checkout without a stored intent (crash before createIntent) → looks up by reference, then expires', async () => {
     const c = await newCheckout();
     await h.db.conn

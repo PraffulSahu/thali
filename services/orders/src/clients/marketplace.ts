@@ -17,6 +17,8 @@ export interface LatLng {
 }
 
 export interface QuoteItemInput {
+  /** Opaque line reference (the cart line id); marketplace echoes it on the matching quote line. */
+  lineRef?: string;
   restaurantId: string;
   itemId: string;
   quantity: number;
@@ -42,13 +44,15 @@ const LatLngLike = z.union([
 
 const QuoteAddOnSchema = z.object({ id: z.string(), name: z.string(), pricePaise: z.number().int().nonnegative() });
 const QuoteLineSchema = z.object({
+  lineRef: z.string().optional(),
   itemId: z.string(),
   name: z.string(),
   isVeg: z.boolean().default(false),
   unitPricePaise: z.number().int().nonnegative(),
   addOns: z.array(QuoteAddOnSchema).default([]),
-  available: z.boolean().default(true),
-  stockOk: z.boolean().default(true),
+  // required: a missing availability/stock flag is schema drift (→ 502), never "available"
+  available: z.boolean(),
+  stockOk: z.boolean(),
 });
 const QuoteRestaurantSchema = z.object({
   restaurantId: z.string(),

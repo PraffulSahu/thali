@@ -39,6 +39,7 @@ import { appendOrderEvents } from '../models/order-event.js';
 import { DELIVERY_NOTE, findCart, primaryProblemCode, problemError, toAddressSnapshot, addressView } from './cart.js';
 import { handoverCodePair, maskPhone, orderCode } from './codes.js';
 import { emitOrdersEvent } from './events.js';
+import { matchQuoteLines } from './quote-lines.js';
 import { queueOrderUpdated } from './realtime.js';
 import { releaseCheckout, releaseOrphanReservation } from './release.js';
 import { checkoutView, paymentView, type CheckoutView, type PaymentView } from './views.js';
@@ -73,9 +74,10 @@ export interface QuoteAndPrice {
   priced: PricedCheckout;
 }
 
-/** Quote every cart line, collect problems, map quote lines back to cart lines (request order per restaurant). */
+/** Quote every cart line, collect problems, map quote lines back to cart lines (by echoed lineRef). */
 async function quoteCart(ctx: OrdersContext, cart: CartDoc, drop: LatLng) {
   const items = cart.items.map((l) => ({
+    lineRef: String(l._id),
     restaurantId: l.restaurantId,
     itemId: l.itemId,
     quantity: l.quantity,
@@ -101,18 +103,15 @@ async function quoteCart(ctx: OrdersContext, cart: CartDoc, drop: LatLng) {
     if (!q.open && !has('RESTAURANT_CLOSED', restaurantId)) problems.push({ code: 'RESTAURANT_CLOSED', restaurantId, message: `${q.name} is closed` });
     if (!q.serviceable && !has('NOT_SERVICEABLE', restaurantId))
       problems.push({ code: 'NOT_SERVICEABLE', restaurantId, message: `${q.name} does not deliver to this address` });
-    const used = new Set<number>();
+    const matched = matchQuoteLines(cartLines.map((cl) => ({ lineRef: String(cl._id), itemId: cl.itemId })), q.lines);
     const lines: MappedLine[] = [];
     cartLines.forEach((cl, idx) => {
-      let qi = q.lines[idx] && q.lines[idx]!.itemId === cl.itemId && !used.has(idx) ? idx : -1;
-      if (qi < 0) qi = q.lines.findIndex((ql, i) => !used.has(i) && ql.itemId === cl.itemId);
-      if (qi < 0) {
+      const ql = matched[idx];
+      if (!ql) {
         if (!has('ITEM_UNAVAILABLE', restaurantId, cl.itemId))
           problems.push({ code: 'ITEM_UNAVAILABLE', restaurantId, itemId: cl.itemId, message: `${cl.name} is no longer available` });
         return;
       }
-      used.add(qi);
-      const ql = q.lines[qi]!;
       if (!ql.available && !has('ITEM_UNAVAILABLE', restaurantId, cl.itemId))
         problems.push({ code: 'ITEM_UNAVAILABLE', restaurantId, itemId: cl.itemId, message: `${ql.name} is unavailable` });
       if (!ql.stockOk && !has('OUT_OF_STOCK', restaurantId, cl.itemId))
@@ -517,117 +516,134 @@ async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult
   const isDemo = ctx.config.APP_MODE === 'demo';
 
   let group: CheckoutGroupDoc | null = null;
-  for (let attempt = 0; attempt < 3 && !group; attempt++) {
+  // Once reserve succeeded, every failure to persist must hand the hold back (best effort; the
+  // marketplace sweeper's 404 from /internal/checkouts/:id/status is the second safety net).
+  let holdReleased = false;
+  const releaseHold = async () => {
+    if (holdReleased) return;
+    holdReleased = true;
     try {
-      group = await withTransaction(ctx.conn, async (session) => {
-        const childDocs = qp.priced.children.map((pc) => {
-          const r = qp.restaurants.find((x) => x.quote.restaurantId === pc.restaurantId)!;
-          const info = restaurantInfo.get(pc.restaurantId)!;
-          return {
-            _id: childIds.get(pc.restaurantId)!,
-            code: orderCode(),
-            checkoutGroupId: checkoutId,
-            userId,
-            restaurantId: pc.restaurantId,
-            restaurantOwnerId: r.quote.ownerUserId,
-            restaurantName: r.quote.name,
-            restaurantLocation: { type: 'Point' as const, coordinates: [r.quote.location.lng, r.quote.location.lat] as [number, number] },
-            restaurantAddress: { line1: info.address.line1, ...(info.address.line2 ? { line2: info.address.line2 } : {}), city: info.address.city, pincode: info.address.pincode },
-            restaurantPhone: info.phone ?? null,
-            commissionBps: info.commissionBps,
-            avgPrepMinutes: info.avgPrepMinutes,
-            lines: pc.lines.map((pl, i) => {
-              const cl = r.lines[i]!.cartLine;
-              return {
-                cartLineId: String(cl._id),
-                lineKey: cl.lineKey,
-                itemId: pl.itemId,
-                name: pl.name,
-                isVeg: r.lines[i]!.quoteLine.isVeg,
-                unitPricePaise: pl.unitPricePaise,
-                addOns: pl.addOns,
-                selections: cl.selections.map((x) => ({ groupId: x.groupId, optionIds: [...x.optionIds] })),
-                quantity: pl.quantity,
-                note: cl.note ?? null,
-                lineTotalPaise: pl.lineTotalPaise,
-              };
-            }),
-            breakdown: pc.breakdown,
-            status: 'AWAITING_PAYMENT' as const,
-            statusHistory: [{ from: null, to: 'AWAITING_PAYMENT' as const, actor: 'CUSTOMER', actorId: userId, reason: 'checkout created', at: now }],
-            refundStatus: 'NONE' as const,
-            refundedPaise: 0,
-            ...handoverCodePair(),
-            customerContact,
-            dropAddress,
-            distanceKm: r.quote.distanceKm,
-            etaMinutes: r.quote.etaMinutes,
-            etaSource: r.quote.etaSource,
-            isDemo,
-          };
-        });
-        const [g] = await ctx.models.CheckoutGroup.create(
-          [
-            {
-              _id: checkoutId,
-              code: orderCode(),
-              userId,
-              cartId: cart._id,
-              cartVersion: cart.cartVersion,
-              status: 'AWAITING_PAYMENT',
-              deliveryAddress: dropAddress,
-              childOrderIds: childDocs.map((c) => c._id),
-              pricing: totals,
-              couponCode: appliedCoupon ?? null,
-              membershipId: membershipHold?.membershipId ?? null,
-              paymentStatus: 'PENDING',
-              expiresAt,
-              statusHistory: [{ from: null, to: 'AWAITING_PAYMENT', actor: 'CUSTOMER', actorId: userId, reason: 'checkout created', at: now }],
-              idempotencyKey: s.idempotencyKey,
-              isDemo,
-            },
-          ],
-          { session },
-        );
-        await ctx.models.ChildOrder.create(childDocs, { session, ordered: true });
-        await ctx.models.Cart.updateOne({ _id: cart._id }, { $set: { checkedOutVersion: cart.cartVersion } }, { session });
-        await emitOrdersEvent(ctx, session, 'checkout.created', {
-          checkoutId: String(checkoutId),
-          userId,
-          totalPaise: totals.totalPaise,
-          childOrderIds: childDocs.map((c) => String(c._id)),
-        }, String(checkoutId));
-        await appendOrderEvents(ctx.conn, session, [
-          { checkoutGroupId: checkoutId, type: 'checkout.created', actor: 'CUSTOMER', actorId: userId, data: { totalPaise: totals.totalPaise }, at: now },
-        ]);
-        for (const c of childDocs) {
-          queueOrderUpdated(session, ctx.redis, ctx.logger, userId, {
-            checkoutId: String(checkoutId),
-            childOrderId: String(c._id),
-            status: c.status,
-            checkoutStatus: 'AWAITING_PAYMENT',
-            refundStatus: 'NONE',
-            deliveryStatus: null,
-          });
-        }
-        return g!;
-      });
-    } catch (e) {
-      const dup = e as { code?: number; keyPattern?: Record<string, unknown>; message?: string };
-      if (dup.code !== 11000) throw e;
-      const key = dup.keyPattern ?? {};
-      if ('cartVersion' in key || /uniq_active_checkout_per_cart_version/.test(dup.message ?? '')) {
-        // lost a double-submit race past the lock: release our hold and return the winner
-        await withTransaction(ctx.conn, (session) => releaseOrphanReservation(ctx, session, String(checkoutId)));
-        const winner = await findActive(ctx, userId, cart.cartVersion);
-        if (winner) return respondExisting(ctx, winner);
-        throw new DomainError('CONFLICT', 'Checkout conflict, please retry');
-      }
-      if ('code' in key && attempt < 2) continue; // order-code collision: regenerate
-      throw e;
+      await withTransaction(ctx.conn, (session) => releaseOrphanReservation(ctx, session, String(checkoutId)));
+    } catch (err) {
+      ctx.logger.error({ err, checkoutId: String(checkoutId) }, 'could not enqueue reservation release after failed checkout persist');
     }
+  };
+  try {
+    for (let attempt = 0; attempt < 3 && !group; attempt++) {
+      try {
+        group = await withTransaction(ctx.conn, async (session) => {
+          const childDocs = qp.priced.children.map((pc) => {
+            const r = qp.restaurants.find((x) => x.quote.restaurantId === pc.restaurantId)!;
+            const info = restaurantInfo.get(pc.restaurantId)!;
+            return {
+              _id: childIds.get(pc.restaurantId)!,
+              code: orderCode(),
+              checkoutGroupId: checkoutId,
+              userId,
+              restaurantId: pc.restaurantId,
+              restaurantOwnerId: r.quote.ownerUserId,
+              restaurantName: r.quote.name,
+              restaurantLocation: { type: 'Point' as const, coordinates: [r.quote.location.lng, r.quote.location.lat] as [number, number] },
+              restaurantAddress: { line1: info.address.line1, ...(info.address.line2 ? { line2: info.address.line2 } : {}), city: info.address.city, pincode: info.address.pincode },
+              restaurantPhone: info.phone ?? null,
+              commissionBps: info.commissionBps,
+              avgPrepMinutes: info.avgPrepMinutes,
+              lines: pc.lines.map((pl, i) => {
+                const cl = r.lines[i]!.cartLine;
+                return {
+                  cartLineId: String(cl._id),
+                  lineKey: cl.lineKey,
+                  itemId: pl.itemId,
+                  name: pl.name,
+                  isVeg: r.lines[i]!.quoteLine.isVeg,
+                  unitPricePaise: pl.unitPricePaise,
+                  addOns: pl.addOns,
+                  selections: cl.selections.map((x) => ({ groupId: x.groupId, optionIds: [...x.optionIds] })),
+                  quantity: pl.quantity,
+                  note: cl.note ?? null,
+                  lineTotalPaise: pl.lineTotalPaise,
+                };
+              }),
+              breakdown: pc.breakdown,
+              status: 'AWAITING_PAYMENT' as const,
+              statusHistory: [{ from: null, to: 'AWAITING_PAYMENT' as const, actor: 'CUSTOMER', actorId: userId, reason: 'checkout created', at: now }],
+              refundStatus: 'NONE' as const,
+              refundedPaise: 0,
+              ...handoverCodePair(),
+              customerContact,
+              dropAddress,
+              distanceKm: r.quote.distanceKm,
+              etaMinutes: r.quote.etaMinutes,
+              etaSource: r.quote.etaSource,
+              isDemo,
+            };
+          });
+          const [g] = await ctx.models.CheckoutGroup.create(
+            [
+              {
+                _id: checkoutId,
+                code: orderCode(),
+                userId,
+                cartId: cart._id,
+                cartVersion: cart.cartVersion,
+                status: 'AWAITING_PAYMENT',
+                deliveryAddress: dropAddress,
+                childOrderIds: childDocs.map((c) => c._id),
+                pricing: totals,
+                couponCode: appliedCoupon ?? null,
+                membershipId: membershipHold?.membershipId ?? null,
+                paymentStatus: 'PENDING',
+                expiresAt,
+                statusHistory: [{ from: null, to: 'AWAITING_PAYMENT', actor: 'CUSTOMER', actorId: userId, reason: 'checkout created', at: now }],
+                idempotencyKey: s.idempotencyKey,
+                isDemo,
+              },
+            ],
+            { session },
+          );
+          await ctx.models.ChildOrder.create(childDocs, { session, ordered: true });
+          await ctx.models.Cart.updateOne({ _id: cart._id }, { $set: { checkedOutVersion: cart.cartVersion } }, { session });
+          await emitOrdersEvent(ctx, session, 'checkout.created', {
+            checkoutId: String(checkoutId),
+            userId,
+            totalPaise: totals.totalPaise,
+            childOrderIds: childDocs.map((c) => String(c._id)),
+          }, String(checkoutId));
+          await appendOrderEvents(ctx.conn, session, [
+            { checkoutGroupId: checkoutId, type: 'checkout.created', actor: 'CUSTOMER', actorId: userId, data: { totalPaise: totals.totalPaise }, at: now },
+          ]);
+          for (const c of childDocs) {
+            queueOrderUpdated(session, ctx.redis, ctx.logger, userId, {
+              checkoutId: String(checkoutId),
+              childOrderId: String(c._id),
+              status: c.status,
+              checkoutStatus: 'AWAITING_PAYMENT',
+              refundStatus: 'NONE',
+              deliveryStatus: null,
+            });
+          }
+          return g!;
+        });
+      } catch (e) {
+        const dup = e as { code?: number; keyPattern?: Record<string, unknown>; message?: string };
+        if (dup.code !== 11000) throw e;
+        const key = dup.keyPattern ?? {};
+        if ('cartVersion' in key || /uniq_active_checkout_per_cart_version/.test(dup.message ?? '')) {
+          // lost a double-submit race past the lock: release our hold and return the winner
+          await releaseHold();
+          const winner = await findActive(ctx, userId, cart.cartVersion);
+          if (winner) return respondExisting(ctx, winner);
+          throw new DomainError('CONFLICT', 'Checkout conflict, please retry');
+        }
+        if ('code' in key && attempt < 2) continue; // order-code collision: regenerate
+        throw e;
+      }
+    }
+    if (!group) throw new DomainError('INTERNAL_ERROR', 'Could not create checkout');
+  } catch (e) {
+    await releaseHold();
+    throw e;
   }
-  if (!group) throw new DomainError('INTERNAL_ERROR', 'Could not create checkout');
 
   // 8: payment intent
   let intent;
