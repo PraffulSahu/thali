@@ -22,7 +22,9 @@ function toMs(v: string | number | Date | null | undefined): number | null {
 
 /** Whole seconds remaining until `to` (0 when passed, null when `to` is empty). */
 export function useCountdown(to: string | number | Date | null | undefined): number | null {
-  const now = useNow(1000);
+  // The shared ticker drives re-renders, but its value can lag by up to one interval (it only advances on ticks),
+  // which would show "0:31" for a fresh 30 s deadline. Never count from a time earlier than the real clock.
+  const now = Math.max(useNow(1000), Date.now());
   const target = toMs(to);
   return target === null ? null : Math.max(0, Math.ceil((target - now) / 1000));
 }
