@@ -337,11 +337,27 @@ async function main() {
     return r;
   });
 
-  await step('B refund SUCCEEDED (mock provider)', () =>
-    waitFor('B refund SUCCEEDED', async () => {
-      const c = child(await order(), childB.id);
-      return c?.refundStatus === 'SUCCEEDED' ? c : null;
-    }), (c) => `refunded ₹${((c.refundedPaise ?? 0) / 100).toFixed(2)} of ₹${(c.breakdown.totalPaise / 100).toFixed(2)}`);
+  await step('B refund SUCCEEDED (mock provider): full B share, payment PARTIALLY_REFUNDED, adjusted totals', async () => {
+    const o = await waitFor('B refund SUCCEEDED', async () => {
+      const x = await order();
+      return child(x, childB.id)?.refundStatus === 'SUCCEEDED' ? x : null;
+    });
+    const b = child(o, childB.id);
+    const total = checkoutOf(o).pricing?.totalPaise ?? created.checkout.pricing.totalPaise;
+    check(b.refundedPaise === b.breakdown.totalPaise, `B refundedPaise ${b.refundedPaise} != B total ${b.breakdown.totalPaise}`);
+    const adj = o.adjustedTotals;
+    check(adj, 'order view has no adjustedTotals');
+    check(
+      adj.paidPaise === total && adj.refundedPaise === b.breakdown.totalPaise && adj.refundPendingPaise === 0 && adj.netPaise === total - b.breakdown.totalPaise,
+      `adjustedTotals ${JSON.stringify(adj)} (expected paid ${total}, refunded ${b.breakdown.totalPaise}, net ${total - b.breakdown.totalPaise})`,
+    );
+    const pay = await waitFor('payment PARTIALLY_REFUNDED', async () => {
+      const r = expectOk(await call('GET', `/payments/checkout/${checkoutId}`, { token: consumer.token }), 'GET payment status');
+      return r.status === 'PARTIALLY_REFUNDED' ? r : null;
+    });
+    check(pay.refundedPaise === b.breakdown.totalPaise && pay.capturedPaise === total, `payment captured ${pay.capturedPaise} refunded ${pay.refundedPaise}`);
+    return { b, adj, pay };
+  }, ({ b, adj, pay }) => `refunded ₹${(b.refundedPaise / 100).toFixed(2)} = B total; payment ${pay.status}; net ₹${(adj.netPaise / 100).toFixed(2)} of ₹${(adj.paidPaise / 100).toFixed(2)}`);
 
   await step('restaurant A preparing → ready for pickup', async () => {
     expectOk(await call('POST', `/owner/orders/${childA.id}/preparing`, { token: ownerA }), 'A preparing');
