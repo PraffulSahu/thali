@@ -17,7 +17,7 @@ export interface DeliverabilityInput {
   deliveryRadiusKm?: number | null;
 }
 
-export type NotDeliverableReason = 'NO_SERVICE_AREA' | 'NOT_APPROVED' | 'NO_LOCATION' | 'OUTSIDE_RADIUS';
+export type NotDeliverableReason = 'NO_SERVICE_AREA' | 'NOT_APPROVED' | 'NO_LOCATION' | 'OUTSIDE_SERVICE_AREA' | 'OUTSIDE_RADIUS';
 
 export interface Deliverability {
   deliverable: boolean;
@@ -41,11 +41,34 @@ export async function findServiceArea(conn: Connection, point: LatLng): Promise<
 
 export const toLatLng = (loc: { coordinates: number[] }): LatLng => ({ lat: loc.coordinates[1]!, lng: loc.coordinates[0]! });
 
+/** Ray-casting test on one ring of [lng, lat] positions (planar; fine at city scale). */
+function inRing(ring: number[][], lng: number, lat: number): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i]!;
+    const [xj, yj] = ring[j]!;
+    if (yi! > lat !== yj! > lat && lng < ((xj! - xi!) * (lat - yi!)) / (yj! - yi!) + xi!) inside = !inside;
+  }
+  return inside;
+}
+
+/** Point inside a GeoJSON Polygon (outer ring, excluding holes). */
+export function pointInPolygon(polygon: { coordinates: number[][][] }, p: LatLng): boolean {
+  const [outer, ...holes] = polygon.coordinates;
+  if (!outer || !inRing(outer, p.lng, p.lat)) return false;
+  return !holes.some((h) => inRing(h, p.lng, p.lat));
+}
+
+/**
+ * Deliverable iff the drop's active area exists, the restaurant is APPROVED, the restaurant itself is
+ * inside that SAME area polygon, and the drop is within the restaurant's radius.
+ */
 export function isDeliverable(restaurant: DeliverabilityInput, area: ServiceArea | null, drop: LatLng): Deliverability {
   const distanceKm = restaurant.location?.coordinates?.length === 2 ? Math.round(haversineKm(toLatLng(restaurant.location), drop) * 100) / 100 : null;
   if (!area) return { deliverable: false, distanceKm, reason: 'NO_SERVICE_AREA' };
   if (restaurant.status !== 'APPROVED') return { deliverable: false, distanceKm, reason: 'NOT_APPROVED' };
   if (distanceKm === null) return { deliverable: false, distanceKm, reason: 'NO_LOCATION' };
+  if (!pointInPolygon(area.polygon as unknown as { coordinates: number[][][] }, toLatLng(restaurant.location!))) return { deliverable: false, distanceKm, reason: 'OUTSIDE_SERVICE_AREA' };
   const radius = restaurant.deliveryRadiusKm ?? DEFAULT_DELIVERY_RADIUS_KM;
   if (distanceKm > radius) return { deliverable: false, distanceKm, reason: 'OUTSIDE_RADIUS' };
   return { deliverable: true, distanceKm };

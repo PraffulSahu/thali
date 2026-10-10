@@ -4,6 +4,7 @@
  * reservation flow (Task 9); owners can never set stock below what is currently reserved.
  */
 import { DomainError } from '@thali/contracts';
+import { withTransaction } from '@thali/service-kit';
 import { Types } from 'mongoose';
 import type { AppContext } from '../context.js';
 import type { MenuItemDoc } from '../models/menu-item.js';
@@ -167,21 +168,35 @@ export async function createItem(ctx: AppContext, rid: string, userId: string, i
 
 export async function updateItem(ctx: AppContext, rid: string, userId: string, itemId: string, input: ItemInput) {
   await findOwned(ctx, rid, userId);
-  const doc = await ctx.models.MenuItem.findOne({ _id: oid(itemId), restaurantId: rid });
-  if (!doc) throw notFound();
+  const _id = oid(itemId);
+  const before = await ctx.models.MenuItem.findOne({ _id, restaurantId: rid }).lean<ItemLean>();
+  if (!before) throw notFound();
   if (input.categoryId) await assertCategory(ctx, rid, input.categoryId);
-  await assertImage(ctx, rid, input.imageKey, doc.imageKey);
+  await assertImage(ctx, rid, input.imageKey, before.imageKey); // storage I/O stays outside the txn
   const { customizationGroups, imageKey, stockQty, ...rest } = input;
-  doc.set(rest);
-  if (imageKey === null) doc.set('imageKey', undefined);
-  else if (imageKey !== undefined) doc.set('imageKey', imageKey);
-  if (customizationGroups) doc.set('customizationGroups', toGroups(customizationGroups));
-  if (stockQty !== undefined) {
-    if (stockQty < (doc.reservedQty ?? 0)) throw new DomainError('CONFLICT', `stockQty cannot be below the reserved quantity (${doc.reservedQty})`);
-    doc.stockQty = stockQty;
-  }
-  await doc.save(); // OCC: concurrent edit → 409 CONCURRENT_MODIFICATION
-  return itemOwnerView(ctx, doc.toObject() as ItemLean);
+  const updated = await withTransaction(ctx.conn, async (session) => {
+    const doc = await ctx.models.MenuItem.findOne({ _id, restaurantId: rid }).session(session);
+    if (!doc) throw notFound();
+    doc.set(rest);
+    if (imageKey === null) doc.set('imageKey', undefined);
+    else if (imageKey !== undefined) doc.set('imageKey', imageKey);
+    if (customizationGroups) doc.set('customizationGroups', toGroups(customizationGroups));
+    await doc.save({ session }); // OCC: concurrent owner edit → 409 CONCURRENT_MODIFICATION
+    if (stockQty !== undefined) {
+      // floor enforced at write time against the live reservedQty (reservations $inc it concurrently)
+      const r = await ctx.models.MenuItem.updateOne(
+        { _id, restaurantId: rid, $expr: { $gte: [stockQty, '$reservedQty'] } },
+        { $set: { stockQty }, $inc: { __v: 1 } },
+        { session },
+      );
+      if (!r.matchedCount) {
+        const live = await ctx.models.MenuItem.findById(_id).session(session).lean<ItemLean>();
+        throw new DomainError('CONFLICT', `stockQty cannot be below the reserved quantity (${live?.reservedQty ?? 0})`);
+      }
+    }
+    return ctx.models.MenuItem.findById(_id).session(session).lean<ItemLean>();
+  });
+  return itemOwnerView(ctx, updated!);
 }
 
 export async function deleteItem(ctx: AppContext, rid: string, userId: string, itemId: string) {
@@ -211,7 +226,7 @@ export async function setAvailability(
     if (input.trackStock === undefined) $set.trackStock = true;
   }
   const filter: Record<string, unknown> = { _id, restaurantId: rid };
-  if (input.stockQty !== undefined) filter.reservedQty = { $lte: input.stockQty };
+  if (input.stockQty !== undefined) filter.$expr = { $gte: [input.stockQty, '$reservedQty'] };
   const updated = await ctx.models.MenuItem.findOneAndUpdate(filter, { $set, $inc: { __v: 1 } }, { new: true }).lean<ItemLean>();
   if (!updated) {
     const existing = await ctx.models.MenuItem.findOne({ _id, restaurantId: rid }).lean<ItemLean>();

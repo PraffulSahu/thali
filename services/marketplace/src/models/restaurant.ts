@@ -24,6 +24,10 @@ export const restaurantSchema = new Schema(
         { _id: false },
       ),
     },
+    /** Verification-email send log (survives email changes): 60 s cooldown + daily cap. */
+    emailVerificationLog: {
+      type: new Schema({ windowStart: { type: Date, required: true }, count: { type: Number, required: true }, lastSentAt: { type: Date, required: true } }, { _id: false }),
+    },
     address: {
       type: new Schema({ line1: String, line2: String, city: String, pincode: String }, { _id: false }),
     },

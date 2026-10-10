@@ -1,5 +1,6 @@
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { Types } from 'mongoose';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { bearer, createHarness, newId, type Harness } from './helpers.js';
 
 let h: Harness;
@@ -114,6 +115,41 @@ describe('menu categories and items', () => {
     await h.models.MenuItem.updateOne({ _id: itemId }, { $set: { reservedQty: 5 } });
     const below = await request(h.app).patch(url(`/items/${itemId}/availability`)).set(bearer(token)).send({ stockQty: 3 });
     expect(below.status).toBe(409);
+    await h.models.MenuItem.updateOne({ _id: itemId }, { $set: { reservedQty: 0 } });
+  });
+
+  it('stock floor is enforced at write time: a reservation landing after the read still blocks PATCH stockQty (409)', async () => {
+    await h.models.MenuItem.updateOne({ _id: itemId }, { $set: { stockQty: 10, reservedQty: 0, trackStock: true } });
+    // Simulate a concurrent reservation committing right after updateItem reads the item.
+    const model = h.models.MenuItem;
+    const orig = model.findOne.bind(model);
+    let bumped = false;
+    const spy = vi.spyOn(model, 'findOne').mockImplementation(((...args: Parameters<typeof orig>) => {
+      const q = orig(...args);
+      const exec = q.exec.bind(q);
+      q.exec = (async (...a: unknown[]) => {
+        const r = await (exec as (...x: unknown[]) => Promise<unknown>)(...a);
+        if (!bumped) {
+          bumped = true;
+          await model.collection.updateOne({ _id: new Types.ObjectId(itemId) }, { $set: { reservedQty: 5 } });
+        }
+        return r;
+      }) as typeof q.exec;
+      return q;
+    }) as unknown as typeof model.findOne);
+    try {
+      const res = await request(h.app).patch(url(`/items/${itemId}`)).set(bearer(token)).send({ stockQty: 3, name: 'Margherita v2' });
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('CONFLICT');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(bumped).toBe(true);
+    const doc = await h.models.MenuItem.findById(itemId).lean();
+    expect(doc).toMatchObject({ stockQty: 10, reservedQty: 5, name: 'Margherita' }); // nothing applied
+    const ok = await request(h.app).patch(url(`/items/${itemId}`)).set(bearer(token)).send({ stockQty: 5 });
+    expect(ok.status).toBe(200);
+    expect(ok.body).toMatchObject({ stockQty: 5, reservedQty: 5, availableQty: 0 });
     await h.models.MenuItem.updateOne({ _id: itemId }, { $set: { reservedQty: 0 } });
   });
 

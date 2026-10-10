@@ -16,6 +16,9 @@ import { transitionRestaurant } from './transitions.js';
 export const EMAIL_TOKEN_BYTES = 32;
 export const EMAIL_TOKEN_TTL_MS = 24 * 3600_000;
 export const EMAIL_RESEND_COOLDOWN_SEC = 60;
+/** Max verification emails per restaurant per rolling 24 h window (submit, resend and email changes). */
+export const EMAIL_MAX_PER_DAY = 5;
+const DAY_MS = 24 * 3600_000;
 
 export const hashToken = (raw: string) => createHash('sha256').update(raw, 'utf8').digest('hex');
 
@@ -25,12 +28,30 @@ export function verifyUrl(publicApiUrl: string, raw: string): string {
 
 /**
  * Issue a fresh token on `doc` (replacing any previous one) and enqueue the email event.
+ * Every send path (submit, resend, businessEmail change) goes through here, so the 60 s cooldown and
+ * the per-restaurant daily cap apply to all of them → 429 RATE_LIMITED (aborts the caller's txn).
  * Must run inside the caller's transaction; the caller saves `doc`.
  */
 export async function issueVerification(ctx: AppContext, session: ClientSession, doc: RestaurantHydrated): Promise<void> {
   if (!doc.businessEmail) throw new DomainError('VALIDATION_FAILED', 'businessEmail is required', undefined, { missing: ['businessEmail'] });
-  const raw = randomBytes(EMAIL_TOKEN_BYTES).toString('base64url');
   const now = ctx.now();
+  const log = doc.emailVerificationLog;
+  if (log?.lastSentAt) {
+    const elapsedSec = (now.getTime() - log.lastSentAt.getTime()) / 1000;
+    if (elapsedSec < EMAIL_RESEND_COOLDOWN_SEC) {
+      const retryAfterSec = Math.ceil(EMAIL_RESEND_COOLDOWN_SEC - elapsedSec);
+      throw new DomainError('RATE_LIMITED', `Please wait ${retryAfterSec}s before sending another verification email`, undefined, { retryAfterSec });
+    }
+  }
+  const inWindow = !!log?.windowStart && now.getTime() - log.windowStart.getTime() < DAY_MS;
+  const count = inWindow ? log!.count : 0;
+  if (count >= EMAIL_MAX_PER_DAY) {
+    const retryAfterSec = Math.ceil((log!.windowStart.getTime() + DAY_MS - now.getTime()) / 1000);
+    throw new DomainError('RATE_LIMITED', `Verification email limit reached (${EMAIL_MAX_PER_DAY} per 24 h)`, undefined, { retryAfterSec });
+  }
+  doc.set('emailVerificationLog', { windowStart: inWindow ? log!.windowStart : now, count: count + 1, lastSentAt: now });
+
+  const raw = randomBytes(EMAIL_TOKEN_BYTES).toString('base64url');
   doc.set('emailVerification', { tokenHash: hashToken(raw), expiresAt: new Date(now.getTime() + EMAIL_TOKEN_TTL_MS), sentAt: now });
   await emitEmailVerificationRequested(ctx.conn, session, doc, doc.businessEmail, verifyUrl(ctx.config.PUBLIC_API_URL, raw));
 }
@@ -71,11 +92,6 @@ export async function resendVerification(ctx: AppContext, restaurantId: string, 
     if (!doc) throw new DomainError('NOT_FOUND', 'Restaurant not found');
     if (doc.status === 'DRAFT' || doc.emailVerifiedAt || !doc.emailVerification) {
       throw new DomainError('CONFLICT', 'There is no pending email verification for this restaurant');
-    }
-    const elapsedSec = (ctx.now().getTime() - doc.emailVerification.sentAt.getTime()) / 1000;
-    if (elapsedSec < EMAIL_RESEND_COOLDOWN_SEC) {
-      const retryAfterSec = Math.ceil(EMAIL_RESEND_COOLDOWN_SEC - elapsedSec);
-      throw new DomainError('RATE_LIMITED', `Please wait ${retryAfterSec}s before resending`, undefined, { retryAfterSec });
     }
     await issueVerification(ctx, session, doc);
     await doc.save({ session });

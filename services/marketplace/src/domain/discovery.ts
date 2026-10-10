@@ -110,7 +110,11 @@ async function menuStats(ctx: AppContext, restaurantIds: Types.ObjectId[]): Prom
 async function deliverableRestaurants(ctx: AppContext, drop: LatLng, area: ServiceArea, now: Date) {
   const candidates = await ctx.models.Restaurant.find({
     status: 'APPROVED',
-    location: { $geoWithin: { $centerSphere: [[drop.lng, drop.lat], ctx.config.MAX_DELIVERY_RADIUS_KM / 6371] } },
+    // restaurant must be inside the SAME active area that contains the drop, and near the drop
+    $and: [
+      { location: { $geoWithin: { $geometry: area.polygon } } },
+      { location: { $geoWithin: { $centerSphere: [[drop.lng, drop.lat], ctx.config.MAX_DELIVERY_RADIUS_KM / 6371] } } },
+    ],
   }).lean<RestaurantLean[]>();
   return candidates.filter((r) => {
     if (r.pausedUntil && new Date(r.pausedUntil).getTime() > now.getTime()) return false; // PRD C-2: not paused

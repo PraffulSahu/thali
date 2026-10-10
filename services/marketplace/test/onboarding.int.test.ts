@@ -153,6 +153,8 @@ describe('restaurant onboarding', () => {
     let r = await request(h.app).get(`/api/v1/owner/restaurants/${id}`).set(bearer(token));
     expect(r.body).toMatchObject({ status: 'APPROVAL_PENDING', emailVerified: true });
 
+    // outside the 60 s verification-email cooldown
+    await h.models.Restaurant.updateOne({ _id: id }, { $set: { 'emailVerificationLog.lastSentAt': new Date(Date.now() - 61_000) } });
     const p = await request(h.app).patch(`/api/v1/owner/restaurants/${id}`).set(bearer(token)).send({ businessEmail: 'new@spiceroute.test' });
     expect(p.status).toBe(200);
     expect(p.body).toMatchObject({ status: 'VERIFICATION_PENDING', emailVerified: false, businessEmail: 'new@spiceroute.test' });

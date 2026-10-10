@@ -75,6 +75,26 @@ describe('discovery: nearby ≠ deliverable', () => {
     expect(res.body.serviceArea).toMatchObject({ name: 'Bengaluru Central', minOrderPaise: 10000 });
   });
 
+  it('restaurant within radius but OUTSIDE the drop’s service-area polygon is not deliverable (list + page)', async () => {
+    // area spans lat 12.90–13.05; drop just inside the southern edge, restaurant ~2.2 km south of it (outside)
+    const edgeDrop = { lat: 12.91, lng: 77.62 };
+    const outside = await seedRestaurant(h.models, { name: 'Across The Border', location: { lat: 12.89, lng: 77.62 } });
+    const inside = await seedRestaurant(h.models, { name: 'Edge Inside', location: { lat: 12.92, lng: 77.62 } });
+    const res = await request(h.app).get('/api/v1/discovery/restaurants').query(edgeDrop);
+    const ids = res.body.items.map((i: { id: string }) => i.id);
+    expect(ids).toContain(inside);
+    expect(ids).not.toContain(outside);
+
+    const page = await request(h.app).get(`/api/v1/restaurants/${outside}`).query(edgeDrop);
+    expect(page.status).toBe(200);
+    expect(page.body.delivery).toMatchObject({ deliverable: false, reason: 'OUTSIDE_SERVICE_AREA' });
+    const pageIn = await request(h.app).get(`/api/v1/restaurants/${inside}`).query(edgeDrop);
+    expect(pageIn.body.delivery).toMatchObject({ deliverable: true });
+
+    const search = await request(h.app).get('/api/v1/discovery/search').query({ ...edgeDrop, q: 'border' });
+    expect(search.body.restaurants).toEqual([]);
+  });
+
   it('drop outside every active area → {items:[], serviceable:false}', async () => {
     const res = await request(h.app).get('/api/v1/discovery/restaurants').query({ lat: 19.07, lng: 72.87 });
     expect(res.status).toBe(200);
