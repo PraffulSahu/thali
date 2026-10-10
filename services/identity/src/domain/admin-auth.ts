@@ -109,7 +109,7 @@ function assertNotLocked(cred: AdminCredentialDoc): void {
 }
 
 /** Count a failed password/TOTP attempt; locks the account when the threshold is reached (throws 423). */
-async function registerFailure(ctx: Ctx, cred: AdminCredentialDoc): Promise<void> {
+export async function registerFailure(ctx: Ctx, cred: AdminCredentialDoc): Promise<void> {
   const { AdminCredential } = ctx.m;
   const after = await AdminCredential.findOneAndUpdate({ _id: cred._id }, { $inc: { failedAttempts: 1 } }, { new: true }).lean();
   if (after && after.failedAttempts >= ctx.config.ADMIN_MAX_FAILED_ATTEMPTS) {

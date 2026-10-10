@@ -2,6 +2,9 @@ import { Types } from 'mongoose';
 import type { AddressDoc, UserDoc } from '../models/user.js';
 import type { AuditLogDoc } from '../models/audit-log.js';
 
+/** Resolves a stored image ref (upload key or allowlisted https URL) to a browser URL, or null. */
+export type ImageResolver = (ref: string | null | undefined) => string | null;
+
 export function toAddressView(a: AddressDoc) {
   return {
     id: String(a._id),
@@ -9,6 +12,8 @@ export function toAddressView(a: AddressDoc) {
     line1: a.line1,
     line2: a.line2 ?? null,
     landmark: a.landmark ?? null,
+    locality: a.locality ?? null,
+    formattedAddress: a.formattedAddress ?? null,
     city: a.city,
     pincode: a.pincode,
     location: { lat: a.location.coordinates[1], lng: a.location.coordinates[0] },
@@ -26,12 +31,13 @@ function prefsOf(u: Pick<UserDoc, 'notificationPrefs'>) {
   };
 }
 
-export function toUserView(u: UserDoc) {
+export function toUserView(u: UserDoc, imageUrl: ImageResolver) {
   return {
     id: String(u._id),
     phone: u.phone ?? null,
     email: u.email ?? null,
     name: u.name ?? null,
+    avatarUrl: imageUrl(u.avatarKey),
     roles: [...u.roles],
     adminRoles: [...(u.adminRoles ?? [])],
     status: u.status,
@@ -42,12 +48,13 @@ export function toUserView(u: UserDoc) {
 }
 
 /** Binding shape for `GET /internal/users/:id`. */
-export function toInternalUserView(u: UserDoc) {
+export function toInternalUserView(u: UserDoc, imageUrl: ImageResolver) {
   return {
     id: String(u._id),
     phone: u.phone ?? null,
     email: u.email ?? null,
     name: u.name ?? null,
+    avatarUrl: imageUrl(u.avatarKey),
     roles: [...u.roles],
     status: u.status,
     notificationPrefs: prefsOf(u),

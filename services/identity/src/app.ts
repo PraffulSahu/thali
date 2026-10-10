@@ -4,7 +4,7 @@
  * plus the shared Redis revocation check.
  */
 import type { Express } from 'express';
-import { createApp, createAuthVerifier, createOpsRouter, mongoHealthCheck, redisHealthCheck } from '@thali/service-kit';
+import { createApp, createAuthVerifier, createOpsRouter, mongoHealthCheck, redisHealthCheck, resolveImageUrl } from '@thali/service-kit';
 import type { AppDeps, Ctx } from './deps.js';
 import { AUDIT_STREAMS } from './events/handlers.js';
 import { models } from './models/index.js';
@@ -20,7 +20,8 @@ import { meRouter } from './routes/me.js';
 export type { AppDeps } from './deps.js';
 
 export function buildApp(deps: AppDeps): Express {
-  const ctx: Ctx = { ...deps, m: models(deps.conn) };
+  const hosts = deps.config.EXTERNAL_IMAGE_HOSTS;
+  const ctx: Ctx = { ...deps, m: models(deps.conn), imageUrl: (ref) => resolveImageUrl(deps.storage, ref, hosts) };
   return createApp({
     config: deps.config,
     logger: deps.logger,

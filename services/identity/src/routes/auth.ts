@@ -57,7 +57,7 @@ export function authRouter(ctx: Ctx): Router {
       accessToken,
       tokenType: 'Bearer',
       expiresInSec: ctx.keys.accessTtlSec,
-      user: toUserView(result.user),
+      user: toUserView(result.user, ctx.imageUrl),
       ...(guestCartMerged !== undefined ? { guestCartMerged } : {}),
       ...(result.demo ? { demoOtp: true } : {}),
     });
@@ -78,7 +78,7 @@ export function authRouter(ctx: Ctx): Router {
     const sid = String(outcome.session._id);
     const accessToken = await signAccessFor(ctx, outcome.user, sid, outcome.session.amr);
     if (outcome.kind === 'rotated') setRefreshCookie(res, config, outcome.refreshToken, outcome.session.expiresAt);
-    res.json({ accessToken, tokenType: 'Bearer', expiresInSec: ctx.keys.accessTtlSec, user: toUserView(outcome.user) });
+    res.json({ accessToken, tokenType: 'Bearer', expiresInSec: ctx.keys.accessTtlSec, user: toUserView(outcome.user, ctx.imageUrl) });
   });
 
   r.post('/logout', csrf, async (req, res) => {

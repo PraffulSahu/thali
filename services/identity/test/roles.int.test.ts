@@ -82,8 +82,9 @@ describe('GET /internal/users/:id', () => {
   it('returns exactly the binding shape', async () => {
     const r = await request(h.app).get(`/internal/users/${u.userId}`).set(await svc('notifications'));
     expect(r.status).toBe(200);
-    expect(Object.keys(r.body).sort()).toEqual(['email', 'id', 'name', 'notificationPrefs', 'phone', 'roles', 'status']);
+    expect(Object.keys(r.body).sort()).toEqual(['avatarUrl', 'email', 'id', 'name', 'notificationPrefs', 'phone', 'roles', 'status']);
     expect(r.body.id).toBe(u.userId);
+    expect(r.body.avatarUrl).toBeNull(); // contract 5 (IDN-3)
     expect(r.body.email).toBeNull();
     expect(r.body.name).toBeNull();
     expect(r.body.status).toBe('ACTIVE');

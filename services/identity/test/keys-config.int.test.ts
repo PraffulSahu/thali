@@ -7,7 +7,7 @@ import { testLogger } from '@thali/service-kit/testing';
 import { buildApp } from '../src/app.js';
 import { loadIdentityConfig } from '../src/config.js';
 import { loadSigningKeys } from '../src/domain/tokens.js';
-import { baseEnv, createHarness, FakeNotifications, FakeOrders, randomPhone, type Harness } from './helpers.js';
+import { baseEnv, createHarness, FakeNotifications, FakeOrders, fakeStorage, randomPhone, type Harness } from './helpers.js';
 
 let h: Harness;
 beforeAll(async () => {
@@ -116,12 +116,19 @@ describe('rate limits fail CLOSED when Redis is down', () => {
         keys: h.keys,
         notifications: new FakeNotifications(),
         orders: new FakeOrders(),
+        storage: fakeStorage().storage,
       });
       const otp = await request(app).post('/api/v1/auth/otp/request').send({ phone: randomPhone() });
       expect(otp.status).toBe(503);
       expect(otp.body.error.code).toBe('SERVICE_UNAVAILABLE');
       const admin = await request(app).post('/api/v1/auth/admin/login').send({ email: 'a@b.co', password: 'whatever' });
       expect(admin.status).toBe(503);
+      const forgot = await request(app).post('/api/v1/auth/admin/password/forgot').send({ email: 'a@b.co' });
+      expect(forgot.status).toBe(503);
+      const reset = await request(app)
+        .post('/api/v1/auth/admin/password/reset')
+        .send({ token: 'a'.repeat(43), newPassword: 'long-enough-password', totpCode: '123456' });
+      expect(reset.status).toBe(503);
     } finally {
       dead.disconnect();
     }

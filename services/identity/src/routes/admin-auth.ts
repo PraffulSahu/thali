@@ -1,13 +1,17 @@
-/** `/api/v1/auth/admin` — admin password + TOTP (LLD §5.3). There is deliberately no registration route. */
+/**
+ * `/api/v1/auth/admin` — admin password + TOTP (LLD §5.3), forgot/reset password (IDN-1).
+ * There is deliberately no registration route.
+ */
 import express, { type Router } from 'express';
 import { DomainError } from '@thali/contracts';
 import { rateLimit, requireAuth, validate } from '@thali/service-kit';
 import type { Ctx } from '../deps.js';
 import { adminLogin, mfaEnable, mfaSetup, mfaVerify } from '../domain/admin-auth.js';
+import { requestAdminPasswordReset, resetAdminPassword } from '../domain/password-reset.js';
 import { signAccessFor } from '../domain/sessions.js';
 import { MFA_TOKEN_TTL_SEC } from '../domain/tokens.js';
 import { toUserView } from '../domain/views.js';
-import { AdminLoginBody, AdminMfaBody, MfaEnableBody } from '../schemas.js';
+import { AdminLoginBody, AdminMfaBody, AdminPasswordForgotBody, AdminPasswordResetBody, MfaEnableBody } from '../schemas.js';
 import { clientMeta, setRefreshCookie } from './_http.js';
 
 export function adminAuthRouter(ctx: Ctx): Router {
@@ -33,6 +37,35 @@ export function adminAuthRouter(ctx: Ctx): Router {
     points: config.ADMIN_LOGIN_MAX_PER_WINDOW * 3,
     durationSec: config.ADMIN_LOGIN_WINDOW_SEC,
   });
+  // IDN-1 limits mirror admin login (fail CLOSED): per IP, and per email for forgot (mail-bomb guard).
+  const emailOf = (req: express.Request) => {
+    const email = (req.body as { email?: unknown } | undefined)?.email;
+    return typeof email === 'string' ? email.trim().toLowerCase().slice(0, 254) : null;
+  };
+  const forgotIpLimit = rateLimit({
+    redis,
+    name: 'admin-pwd-forgot-ip',
+    keyFn: (req) => req.ip,
+    points: config.ADMIN_LOGIN_MAX_PER_WINDOW,
+    durationSec: config.ADMIN_LOGIN_WINDOW_SEC,
+    message: 'Too many reset requests. Try again later.',
+  });
+  const forgotEmailLimit = rateLimit({
+    redis,
+    name: 'admin-pwd-forgot-email',
+    keyFn: emailOf,
+    points: config.ADMIN_RESET_MAX_PER_EMAIL,
+    durationSec: config.ADMIN_LOGIN_WINDOW_SEC,
+    message: 'Too many reset requests. Try again later.',
+  });
+  const resetIpLimit = rateLimit({
+    redis,
+    name: 'admin-pwd-reset-ip',
+    keyFn: (req) => req.ip,
+    points: config.ADMIN_LOGIN_MAX_PER_WINDOW,
+    durationSec: config.ADMIN_LOGIN_WINDOW_SEC,
+    message: 'Too many attempts. Try again later.',
+  });
   const pwdAdmin = requireAuth({ roles: ['ADMIN'] });
   const needPwd: express.RequestHandler = (req, _res, next) => {
     if (!req.auth!.amr.includes('pwd')) throw new DomainError('FORBIDDEN', 'Admin password session required');
@@ -52,7 +85,7 @@ export function adminAuthRouter(ctx: Ctx): Router {
       accessToken: await signAccessFor(ctx, result.user, result.session.sid, result.session.amr),
       tokenType: 'Bearer',
       expiresInSec: ctx.keys.accessTtlSec,
-      user: toUserView(result.user),
+      user: toUserView(result.user, ctx.imageUrl),
     });
   });
 
@@ -65,8 +98,25 @@ export function adminAuthRouter(ctx: Ctx): Router {
       accessToken: await signAccessFor(ctx, user, session.sid, session.amr),
       tokenType: 'Bearer',
       expiresInSec: ctx.keys.accessTtlSec,
-      user: toUserView(user),
+      user: toUserView(user, ctx.imageUrl),
     });
+  });
+
+  const vForgot = validate({ body: AdminPasswordForgotBody });
+  r.post('/password/forgot', forgotIpLimit, vForgot, forgotEmailLimit, (req, res) => {
+    const { body } = vForgot.get(req);
+    const meta = clientMeta(req);
+    // Answer first: same status/body/timing whether or not the email is an admin (no enumeration).
+    res.status(202).json({ status: 'ACCEPTED' });
+    const task = requestAdminPasswordReset(ctx, body.email, meta); // never rejects
+    ctx.onBackgroundTask?.(task);
+  });
+
+  const vReset = validate({ body: AdminPasswordResetBody });
+  r.post('/password/reset', resetIpLimit, vReset, async (req, res) => {
+    const { body } = vReset.get(req);
+    await resetAdminPassword(ctx, body, clientMeta(req));
+    res.status(204).end();
   });
 
   r.post('/mfa/setup', pwdAdmin, needPwd, async (req, res) => {

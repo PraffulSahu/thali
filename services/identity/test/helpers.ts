@@ -7,7 +7,7 @@ import request, { type Response, type Test } from 'supertest';
 import type { Express } from 'express';
 import { decodeJwt } from 'jose';
 import { tryNormalizePhone, DomainError, type AdminRole, type Role } from '@thali/contracts';
-import { redisKey } from '@thali/service-kit';
+import { redisKey, type StorageProvider } from '@thali/service-kit';
 import {
   createTestDb,
   createTestRedis,
@@ -22,7 +22,7 @@ import { buildApp } from '../src/app.js';
 import { loadIdentityConfig, type IdentityConfig } from '../src/config.js';
 import { initIdentityDb } from '../src/db.js';
 import { loadSigningKeys, type KeyStore } from '../src/domain/tokens.js';
-import type { NotificationsClient } from '../src/clients/notifications.js';
+import type { NotificationsClient, SendNotificationInput } from '../src/clients/notifications.js';
 import type { OrdersClient } from '../src/clients/orders.js';
 
 export const ORIGIN = 'http://localhost:5173';
@@ -30,7 +30,14 @@ export const FIELD_KEY = Buffer.alloc(32, 7).toString('base64');
 
 export class FakeNotifications implements NotificationsClient {
   sent: { phone: string; code: string }[] = [];
+  emails: SendNotificationInput[] = [];
   fail = false;
+  failSend = false;
+  async send(input: SendNotificationInput): Promise<{ notificationId: string }> {
+    if (this.failSend) throw new DomainError('UPSTREAM_UNAVAILABLE', 'notifications unreachable: connect ECONNREFUSED 10.0.0.9:4006');
+    this.emails.push(input);
+    return { notificationId: '0'.repeat(24) };
+  }
   async sendOtp(phone: string, code: string): Promise<void> {
     if (this.fail) throw new DomainError('OTP_DELIVERY_FAILED', 'SMS provider down');
     this.sent.push({ phone, code });
@@ -50,6 +57,57 @@ export class FakeOrders implements OrdersClient {
     if (this.fail) throw new DomainError('UPSTREAM_UNAVAILABLE', 'orders down');
     return { merged: true, lineCount: 2 };
   }
+}
+
+/** 1x1 PNG. */
+export const PNG = Buffer.from(
+  '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8ffff3f0005fe02fea7d6a4f10000000049454e44ae426082',
+  'hex',
+);
+
+/** In-memory public-bucket storage: `put(key, bytes, contentType)` simulates the browser PUT. */
+export function fakeStorage() {
+  const objects = new Map<string, { contentType: string; bytes: Buffer }>();
+  const deleted: string[] = [];
+  const presigned: unknown[] = [];
+  const storage = {
+    async presignPut(input: { bucket: string; key: string; contentType: string; maxBytes: number }) {
+      presigned.push(input);
+      return {
+        url: `http://storage.test/${input.bucket}/${input.key}?sig=1`,
+        method: 'PUT' as const,
+        headers: { 'content-type': input.contentType },
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+        maxBytes: input.maxBytes,
+      };
+    },
+    async presignGet(input: { bucket: string; key: string }) {
+      return { url: `http://storage.test/${input.bucket}/${input.key}?sig=1`, expiresAt: new Date(Date.now() + 300_000).toISOString() };
+    },
+    async head(_bucket: string, key: string) {
+      const o = objects.get(key);
+      return o ? { contentType: o.contentType, size: o.bytes.length } : null;
+    },
+    async readHead(_bucket: string, key: string, bytes: number) {
+      return (objects.get(key)?.bytes ?? Buffer.alloc(0)).subarray(0, bytes);
+    },
+    publicUrl(key: string) {
+      return `http://storage.test/thali-public/${key}`;
+    },
+    async delete(_bucket: string, key: string) {
+      deleted.push(key);
+      objects.delete(key);
+    },
+  } as unknown as StorageProvider;
+  return {
+    storage,
+    objects,
+    deleted,
+    presigned,
+    put(key: string, bytes: Buffer = PNG, contentType = 'image/png') {
+      objects.set(key, { contentType, bytes });
+    },
+  };
 }
 
 export function baseEnv(prefix: string): Record<string, string> {
@@ -78,6 +136,9 @@ export interface Harness {
   keys: KeyStore;
   notifications: FakeNotifications;
   orders: FakeOrders;
+  storage: ReturnType<typeof fakeStorage>;
+  /** Wait for work that continues after responses (forgot-password email). */
+  settle(): Promise<void>;
   app: Express;
   /** Another app sharing the same DB/Redis/keys/fakes with env overrides. */
   appWith(env: Record<string, string>): Express;
@@ -92,8 +153,24 @@ export async function createHarness(name: string, env: Record<string, string> = 
   const keys = await loadSigningKeys(db.conn, config);
   const notifications = new FakeNotifications();
   const orders = new FakeOrders();
+  const storage = fakeStorage();
+  const pending = new Set<Promise<unknown>>();
+  const onBackgroundTask = (t: Promise<unknown>) => {
+    pending.add(t);
+    void t.finally(() => pending.delete(t));
+  };
   const make = (cfg: IdentityConfig) =>
-    buildApp({ config: cfg, logger: testLogger('identity'), conn: db.conn, redis: tr.redis, keys, notifications, orders });
+    buildApp({
+      config: cfg,
+      logger: testLogger('identity'),
+      conn: db.conn,
+      redis: tr.redis,
+      keys,
+      notifications,
+      orders,
+      storage: storage.storage,
+      onBackgroundTask,
+    });
   return {
     db,
     tr,
@@ -101,6 +178,10 @@ export async function createHarness(name: string, env: Record<string, string> = 
     keys,
     notifications,
     orders,
+    storage,
+    async settle() {
+      while (pending.size) await Promise.allSettled([...pending]);
+    },
     app: make(config),
     appWith: (over) => make(loadIdentityConfig({ ...baseEnv(tr.prefix), ...env, ...over })),
     async close() {

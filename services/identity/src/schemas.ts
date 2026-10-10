@@ -15,6 +15,7 @@ import {
   PincodeSchema,
   RoleSchema,
 } from '@thali/contracts';
+import { MIN_ADMIN_PASSWORD_LENGTH } from './domain/admin-auth.js';
 
 export const IdParams = z.object({ id: z.string().min(1).max(64) });
 
@@ -30,6 +31,8 @@ export const AddressViewSchema = z
     line1: z.string(),
     line2: z.string().nullable(),
     landmark: z.string().nullable(),
+    locality: z.string().nullable().describe('Neighbourhood, e.g. "Indiranagar" (header chip, delivery drop area)'),
+    formattedAddress: z.string().nullable().describe('Provider-formatted full address (display only)'),
     city: z.string(),
     pincode: z.string(),
     location: GeoPointSchema,
@@ -43,6 +46,7 @@ export const UserViewSchema = z
     phone: z.string().nullable(),
     email: z.string().nullable(),
     name: z.string().nullable(),
+    avatarUrl: z.string().nullable().describe('Resolved avatar image URL; null = show initials'),
     roles: z.array(RoleSchema),
     adminRoles: z.array(AdminRoleSchema),
     status: z.enum(['ACTIVE', 'BLOCKED']),
@@ -58,6 +62,7 @@ export const InternalUserSchema = z
     phone: z.string().nullable(),
     email: z.string().nullable(),
     name: z.string().nullable(),
+    avatarUrl: z.string().nullable(),
     roles: z.array(RoleSchema),
     status: z.enum(['ACTIVE', 'BLOCKED']),
     notificationPrefs: NotificationPrefsSchema,
@@ -107,11 +112,36 @@ export const MfaSetupResponse = z.object({ otpauthUri: z.string(), secret: z.str
 export const MfaEnableBody = z.object({ code: OtpCodeSchema }).meta({ id: 'MfaEnable' });
 export const MfaEnableResponse = z.object({ enabled: z.literal(true) }).meta({ id: 'MfaEnabled' });
 
+/** IDN-1 */
+export const AdminPasswordForgotBody = z.object({ email: z.email().max(254) }).meta({ id: 'AdminPasswordForgot' });
+export const AdminPasswordForgotResponse = z
+  .object({ status: z.literal('ACCEPTED') })
+  .meta({ id: 'AdminPasswordForgotAccepted', description: 'Always returned, whether or not the email belongs to an admin' });
+export const AdminPasswordResetBody = z
+  .object({
+    token: z.string().regex(/^[A-Za-z0-9_-]{43}$/, 'Invalid reset token').describe('The token from the reset link (32 random bytes, base64url)'),
+    newPassword: z
+      .string()
+      .min(MIN_ADMIN_PASSWORD_LENGTH, `Password must be at least ${MIN_ADMIN_PASSWORD_LENGTH} characters`)
+      .max(256),
+    totpCode: OtpCodeSchema.describe('Current code from the admin authenticator app'),
+  })
+  .strict()
+  .meta({ id: 'AdminPasswordReset' });
+
 // ---- me ----
+/** Only keys from `POST /me/uploads` (never absolute URLs). */
+export const AVATAR_KEY_RE = /^users\/[0-9a-f]{24}\/avatars\/[0-9a-f-]{36}\.(?:jpg|png|webp)$/;
 export const PatchMeBody = z
   .object({
     name: z.string().trim().min(1).max(80).optional(),
     email: z.email().max(254).transform((e) => e.toLowerCase()).optional(),
+    avatarKey: z
+      .string()
+      .regex(AVATAR_KEY_RE, 'Use the key returned by POST /api/v1/me/uploads')
+      .nullable()
+      .optional()
+      .describe('Key from POST /me/uploads after the PUT (content is verified); null removes the avatar'),
   })
   .strict()
   .meta({ id: 'PatchMe' });
@@ -122,6 +152,8 @@ export const PatchAddressBody = z
     line1: z.string().trim().min(1).max(200).optional(),
     line2: z.string().trim().max(200).optional(),
     landmark: z.string().trim().max(120).optional(),
+    locality: z.string().trim().max(60).nullable().optional(),
+    formattedAddress: z.string().trim().max(300).nullable().optional(),
     city: z.string().trim().min(1).max(80).optional(),
     pincode: PincodeSchema.optional(),
     location: GeoPointSchema.optional(),
@@ -129,6 +161,20 @@ export const PatchAddressBody = z
   })
   .strict()
   .meta({ id: 'AddressPatch' });
+export const AvatarUploadBody = z
+  .object({
+    contentType: z.string().min(3).max(100).describe('image/jpeg | image/png | image/webp'),
+    sizeBytes: z.number().int().positive().describe('Exact file size (≤ 2 MB); signed into the URL'),
+  })
+  .strict()
+  .meta({ id: 'AvatarUploadRequest' });
+export const PresignedUploadResponse = z
+  .object({
+    key: z.string(),
+    bucket: z.literal('public'),
+    upload: z.object({ url: z.string(), method: z.literal('PUT'), headers: z.record(z.string(), z.string()), expiresAt: z.string(), maxBytes: z.number() }),
+  })
+  .meta({ id: 'AvatarPresignedUpload' });
 export const AddressListResponse = z.object({ items: z.array(AddressViewSchema) }).meta({ id: 'AddressList' });
 
 // ---- admin ----

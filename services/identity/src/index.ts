@@ -2,7 +2,7 @@
  * Identity service boot: config → logger → mongo → redis → collections/indexes → signing key →
  * app → outbox relay + audit consumer → listen → graceful shutdown.
  */
-import { connectMongo, createLogger, createRedis, gracefulShutdown, startRelay } from '@thali/service-kit';
+import { connectMongo, createLogger, createRedis, createStorageProvider, gracefulShutdown, startRelay } from '@thali/service-kit';
 import { buildApp } from './app.js';
 import { createNotificationsClient } from './clients/notifications.js';
 import { createOrdersClient } from './clients/orders.js';
@@ -28,6 +28,7 @@ async function main(): Promise<void> {
     keys,
     notifications: createNotificationsClient(config),
     orders: createOrdersClient(config),
+    storage: createStorageProvider(config),
   });
 
   const relay = startRelay({ conn, redis, logger, service: 'identity', streamPrefix: config.EVENT_STREAM_PREFIX });

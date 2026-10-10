@@ -41,7 +41,7 @@ export function adminUsersRouter(ctx: Ctx): Router {
       filter.$or = or;
     }
     const docs = await User.find(filter).sort(PAGE_SORT).limit(query.limit + 1).lean<UserDoc[]>();
-    res.json(buildPage(docs, query.limit, toUserView));
+    res.json(buildPage(docs, query.limit, (u: UserDoc) => toUserView(u, ctx.imageUrl)));
   });
 
   const vId = validate({ params: IdParams });
@@ -50,7 +50,7 @@ export function adminUsersRouter(ctx: Ctx): Router {
     const id = oid(params.id);
     const user = id ? await User.findById(id).lean<UserDoc>() : null;
     if (!user) throw new DomainError('NOT_FOUND', 'User not found');
-    res.json(toUserView(user));
+    res.json(toUserView(user, ctx.imageUrl));
   });
 
   const vBlock = validate({ params: IdParams, body: BlockBody });
@@ -83,7 +83,7 @@ export function adminUsersRouter(ctx: Ctx): Router {
         return { user: user!, sids };
       });
       await writeRevocations(ctx, sids); // after commit (Redis side effect)
-      res.json(toUserView(user));
+      res.json(toUserView(user, ctx.imageUrl));
     }) as express.RequestHandler;
   r.post('/users/:id/block', manager, vBlock, setStatus('BLOCKED'));
   r.post('/users/:id/unblock', manager, vBlock, setStatus('ACTIVE'));
@@ -97,7 +97,7 @@ export function adminUsersRouter(ctx: Ctx): Router {
       actorRole: actorRole(req),
       ...(ip ? { ip } : {}),
     });
-    res.status(201).json({ user: toUserView(user), oneTimePassword: password });
+    res.status(201).json({ user: toUserView(user, ctx.imageUrl), oneTimePassword: password });
   });
 
   return r;

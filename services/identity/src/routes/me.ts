@@ -1,14 +1,16 @@
-/** `/api/v1/me` — profile, saved addresses (max 10, single default), notification prefs. */
+/** `/api/v1/me` — profile (+ avatar, IDN-3), saved addresses (max 10, single default), notification prefs. */
 import express, { type Router } from 'express';
 import { DomainError, toGeoJsonPoint } from '@thali/contracts';
-import { requireAuth, validate, withTransaction } from '@thali/service-kit';
+import { rateLimit, requireAuth, validate, withTransaction } from '@thali/service-kit';
 import type { Ctx } from '../deps.js';
 import { MAX_ADDRESSES, type UserDoc } from '../models/user.js';
+import { deleteOldAvatar, presignAvatar, verifyAvatar } from '../domain/avatars.js';
 import { oid, toAddressView, toUserView } from '../domain/views.js';
-import { CreateAddressBody, IdParams, NotificationPrefsSchema, PatchAddressBody, PatchMeBody } from '../schemas.js';
+import { AvatarUploadBody, CreateAddressBody, IdParams, NotificationPrefsSchema, PatchAddressBody, PatchMeBody } from '../schemas.js';
 
 export function meRouter(ctx: Ctx): Router {
   const { User } = ctx.m;
+  const { config } = ctx;
   const r = express.Router();
   r.use(requireAuth());
 
@@ -22,23 +24,42 @@ export function meRouter(ctx: Ctx): Router {
   r.get('/', async (req, res) => {
     const user = await User.findById(me(req)).lean<UserDoc>();
     if (!user) throw notFound();
-    res.json(toUserView(user));
+    res.json(toUserView(user, ctx.imageUrl));
   });
 
   const vPatch = validate({ body: PatchMeBody });
   r.patch('/', vPatch, async (req, res) => {
     const { body } = vPatch.get(req);
+    const id = me(req);
     const $set: Record<string, unknown> = {};
     if (body.name !== undefined) $set.name = body.name;
     if (body.email !== undefined) $set.email = body.email;
+    let previousAvatar: string | null | undefined;
+    if (body.avatarKey !== undefined) {
+      const current = await User.findById(id, { avatarKey: 1 }).lean<UserDoc>();
+      if (!current) throw notFound();
+      previousAvatar = current.avatarKey;
+      if (body.avatarKey !== null && body.avatarKey !== current.avatarKey) {
+        await verifyAvatar(ctx.storage, config, String(id), body.avatarKey);
+      }
+      $set.avatarKey = body.avatarKey;
+    }
     try {
-      const user = await User.findByIdAndUpdate(me(req), { $set }, { new: true }).lean<UserDoc>();
+      const user = await User.findByIdAndUpdate(id, { $set }, { new: true }).lean<UserDoc>();
       if (!user) throw notFound();
-      res.json(toUserView(user));
+      if (previousAvatar && previousAvatar !== user.avatarKey) await deleteOldAvatar(ctx.storage, config, String(id), previousAvatar);
+      res.json(toUserView(user, ctx.imageUrl));
     } catch (e) {
       if ((e as { code?: number }).code === 11000) throw new DomainError('CONFLICT', 'That email is already in use');
       throw e;
     }
+  });
+
+  const vUpload = validate({ body: AvatarUploadBody });
+  const uploadLimit = rateLimit({ redis: ctx.redis, name: 'avatar-presign', keyFn: (req) => req.auth?.userId, points: 20, durationSec: 3600 });
+  r.post('/uploads', uploadLimit, vUpload, async (req, res) => {
+    const { body } = vUpload.get(req);
+    res.status(201).json(await presignAvatar(ctx.storage, config, String(me(req)), body));
   });
 
   r.get('/addresses', async (req, res) => {
@@ -111,7 +132,7 @@ export function meRouter(ctx: Ctx): Router {
     const { body } = vPrefs.get(req);
     const user = await User.findByIdAndUpdate(me(req), { $set: { notificationPrefs: body } }, { new: true }).lean<UserDoc>();
     if (!user) throw notFound();
-    res.json(toUserView(user).notificationPrefs);
+    res.json(toUserView(user, ctx.imageUrl).notificationPrefs);
   });
 
   return r;

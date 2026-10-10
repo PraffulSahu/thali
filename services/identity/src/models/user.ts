@@ -13,6 +13,10 @@ export interface AddressDoc {
   line1: string;
   line2?: string;
   landmark?: string;
+  /** IDN-2: neighbourhood, e.g. "Indiranagar". */
+  locality?: string;
+  /** IDN-2: provider-formatted full address (display only). */
+  formattedAddress?: string;
   city: string;
   pincode: string;
   location: { type: 'Point'; coordinates: [number, number] };
@@ -36,6 +40,11 @@ export interface UserDoc {
   status: UserStatus;
   addresses: Types.DocumentArray<AddressDoc & Types.Subdocument>;
   notificationPrefs: NotificationPrefs;
+  /**
+   * IDN-3: avatar image ref. Either a verified upload key under `users/<id>/avatars/` (PATCH /me) or an
+   * absolute https URL on an EXTERNAL_IMAGE_HOSTS host (seed/admin writes only). Views resolve it to `avatarUrl`.
+   */
+  avatarKey?: string | null;
   deletedAt?: Date | null;
   /** Demo seed account (APP_MODE=demo). */
   isDemo: boolean;
@@ -49,6 +58,8 @@ const AddressSchema = new Schema<AddressDoc>(
     line1: { type: String, required: true },
     line2: { type: String },
     landmark: { type: String },
+    locality: { type: String },
+    formattedAddress: { type: String },
     city: { type: String, required: true },
     pincode: { type: String, required: true },
     location: {
@@ -82,6 +93,7 @@ const UserSchema = new Schema<UserDoc>(
       marketingSms: { type: Boolean, default: DEFAULT_NOTIFICATION_PREFS.marketingSms },
       marketingEmail: { type: Boolean, default: DEFAULT_NOTIFICATION_PREFS.marketingEmail },
     },
+    avatarKey: { type: String, default: null },
     deletedAt: { type: Date, default: null },
     isDemo: { type: Boolean, default: false },
   },

@@ -23,7 +23,7 @@ export function internalRouter(ctx: Ctx): Router {
     const id = oid(vId.get(req).params.id);
     const user = id ? await User.findById(id).lean<UserDoc>() : null;
     if (!user) throw notFound();
-    res.json(toInternalUserView(user));
+    res.json(toInternalUserView(user, ctx.imageUrl));
   });
 
   const vGrant = validate({ params: IdParams, body: GrantRoleBody });

@@ -7,6 +7,11 @@ import {
   AdminLoginBody,
   AdminLoginResponse,
   AdminMfaBody,
+  AdminPasswordForgotBody,
+  AdminPasswordForgotResponse,
+  AdminPasswordResetBody,
+  AvatarUploadBody,
+  PresignedUploadResponse,
   AdminUsersQuery,
   AuditLogPageResponse,
   AuditLogsQuery,
@@ -93,6 +98,25 @@ export function createIdentityOpenApi() {
     errors: ['UNAUTHENTICATED', 'INVALID_CREDENTIALS', 'ACCOUNT_LOCKED', 'CONFLICT'],
   });
   openapi.route({
+    method: 'post', path: '/api/v1/auth/admin/password/forgot', tags: ['admin-auth'], summary: 'Request an admin password-reset email',
+    description:
+      'Always 202 with the same body, whether or not the email belongs to an admin (no account enumeration; the email is sent after the response). ' +
+      'Eligible admins (active, not locked, TOTP enabled) get a single-use link `${PUBLIC_WEB_URL}/admin/reset-password?token=…` valid for 30 minutes; ' +
+      'a new request replaces the previous link. Limits: 10 / 15 min per IP, 3 / 15 min per email. Audited (admin.password_reset_requested).',
+    request: { body: { content: json(AdminPasswordForgotBody) } },
+    responses: { 202: { description: 'Accepted', content: json(AdminPasswordForgotResponse) } }, rateLimited: true,
+    errors: ['SERVICE_UNAVAILABLE'],
+  });
+  openapi.route({
+    method: 'post', path: '/api/v1/auth/admin/password/reset', tags: ['admin-auth'], summary: 'Set a new admin password with a reset token + current TOTP code',
+    description:
+      'Requires the token from the reset email, a valid unused TOTP code for that admin (wrong codes count toward the 5-failure lockout) and a password of at least 12 characters that differs from the current one. ' +
+      'Consumes the token, revokes every session of the admin and is audited (admin.password_reset_completed). 10 attempts / 15 min per IP.',
+    request: { body: { content: json(AdminPasswordResetBody) } },
+    responses: noContent, rateLimited: true,
+    errors: ['INVALID_CREDENTIALS', 'ACCOUNT_LOCKED', 'ACCOUNT_BLOCKED'],
+  });
+  openapi.route({
     method: 'post', path: '/api/v1/auth/admin/mfa/setup', tags: ['admin-auth'], summary: 'Start TOTP enrolment (password-only admin token)',
     security: 'bearer', responses: ok('otpauth URI and secret', MfaSetupResponse), errors: ['CONFLICT'],
   });
@@ -105,8 +129,15 @@ export function createIdentityOpenApi() {
   // ---- me ----
   openapi.route({ method: 'get', path: '/api/v1/me', tags: ['me'], summary: 'My profile', security: 'bearer', responses: ok('Profile', UserViewSchema), errors: ['NOT_FOUND'] });
   openapi.route({
-    method: 'patch', path: '/api/v1/me', tags: ['me'], summary: 'Update name / email', security: 'bearer',
-    request: { body: { content: json(PatchMeBody) } }, responses: ok('Profile', UserViewSchema), errors: ['CONFLICT', 'NOT_FOUND'],
+    method: 'patch', path: '/api/v1/me', tags: ['me'], summary: 'Update name / email / avatar', security: 'bearer',
+    description: '`avatarKey` must be a key from POST /api/v1/me/uploads after the file was PUT; the object is verified (size, jpeg/png/webp magic bytes) and deleted if invalid (422 FILE_INVALID). `null` removes the avatar.',
+    request: { body: { content: json(PatchMeBody) } }, responses: ok('Profile', UserViewSchema), errors: ['CONFLICT', 'NOT_FOUND', 'FILE_INVALID'],
+  });
+  openapi.route({
+    method: 'post', path: '/api/v1/me/uploads', tags: ['me'], summary: 'Presign an avatar upload (image/jpeg|png|webp ≤ 2 MB, public bucket)', security: 'bearer',
+    description: 'PUT the file to `upload.url` with exactly `upload.headers`, then PATCH /api/v1/me `{avatarKey: key}`. 20 / hour per user.',
+    request: { body: { content: json(AvatarUploadBody) } },
+    responses: { 201: { description: 'Presigned PUT', content: json(PresignedUploadResponse) } }, errors: ['FILE_INVALID'], rateLimited: true,
   });
   openapi.route({ method: 'get', path: '/api/v1/me/addresses', tags: ['me'], summary: 'My saved addresses', security: 'bearer', responses: ok('Addresses', AddressListResponse) });
   openapi.route({
