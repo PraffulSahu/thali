@@ -1,63 +1,79 @@
 # syntax=docker/dockerfile:1
-# Thali payments service. Build context = repository root:
+# Thali payments service (port 4004). Build context = repository root:
 #   docker build -f services/payments/Dockerfile -t thali-payments .
+#
+# All service Dockerfiles share byte-identical "install" and "packages" stages, so BuildKit builds the
+# workspace install and the shared packages (contracts, pricing, service-kit) once and reuses the cache
+# for every service image. npm ci validates the lockfile against every workspace manifest, so all
+# manifests are copied. Keep this file in sync with the other services/*/Dockerfile.
+ARG NODE_IMAGE=node:22.20.0-alpine3.22
 
-# ---- build: install the payments workspace closure and compile (contracts, service-kit, payments) ----
-FROM node:22.20.0-alpine AS build
+# ---- install: full workspace install (dev deps incl. typescript), no lifecycle scripts ----
+FROM ${NODE_IMAGE} AS install
 WORKDIR /repo
-# npm ci validates the lockfile against every workspace manifest, so all manifests must be present.
-COPY package.json package-lock.json tsconfig.base.json .npmrc ./
+COPY package.json package-lock.json .npmrc tsconfig.base.json ./
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/pricing/package.json packages/pricing/
 COPY packages/service-kit/package.json packages/service-kit/
-COPY services/gateway/package.json services/gateway/
 COPY services/identity/package.json services/identity/
 COPY services/marketplace/package.json services/marketplace/
 COPY services/orders/package.json services/orders/
 COPY services/payments/package.json services/payments/
 COPY services/delivery/package.json services/delivery/
 COPY services/notifications/package.json services/notifications/
+COPY services/gateway/package.json services/gateway/
 COPY apps/web/package.json apps/web/
 COPY e2e/package.json e2e/
-RUN npm ci --workspace @thali/payments --include-workspace-root --ignore-scripts
+RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts --no-audit --no-fund
+
+# ---- packages: compile the shared workspace packages ----
+FROM install AS packages
 COPY packages/contracts packages/contracts
+COPY packages/pricing packages/pricing
 COPY packages/service-kit packages/service-kit
+RUN npx tsc -b packages/contracts packages/pricing packages/service-kit
+
+# ---- build: compile this service ----
+FROM packages AS build
 COPY services/payments services/payments
 RUN npx tsc -b services/payments
 
-# ---- deps: production dependencies only ----
-FROM node:22.20.0-alpine AS deps
+# ---- deps: production dependencies of this service only ----
+FROM ${NODE_IMAGE} AS deps
 WORKDIR /repo
-COPY package.json package-lock.json .npmrc ./
+COPY package.json package-lock.json .npmrc tsconfig.base.json ./
 COPY packages/contracts/package.json packages/contracts/
 COPY packages/pricing/package.json packages/pricing/
 COPY packages/service-kit/package.json packages/service-kit/
-COPY services/gateway/package.json services/gateway/
 COPY services/identity/package.json services/identity/
 COPY services/marketplace/package.json services/marketplace/
 COPY services/orders/package.json services/orders/
 COPY services/payments/package.json services/payments/
 COPY services/delivery/package.json services/delivery/
 COPY services/notifications/package.json services/notifications/
+COPY services/gateway/package.json services/gateway/
 COPY apps/web/package.json apps/web/
 COPY e2e/package.json e2e/
-RUN npm ci --workspace @thali/payments --omit=dev --ignore-scripts && npm cache clean --force
+RUN --mount=type=cache,target=/root/.npm \
+  npm ci --workspace @thali/payments --omit=dev --ignore-scripts --no-audit --no-fund
 
 # ---- runtime ----
-FROM node:22.20.0-alpine AS runtime
-ENV NODE_ENV=production PORT=4004
+FROM ${NODE_IMAGE} AS runtime
+ENV NODE_ENV=production SERVICE_NAME=payments PORT=4004
 WORKDIR /repo
-COPY --from=deps --chown=node:node /repo/node_modules ./node_modules
-COPY --from=deps --chown=node:node /repo/package.json ./package.json
-COPY --from=build --chown=node:node /repo/packages/contracts/package.json packages/contracts/package.json
-COPY --from=build --chown=node:node /repo/packages/contracts/dist packages/contracts/dist
-COPY --from=build --chown=node:node /repo/packages/service-kit/package.json packages/service-kit/package.json
-COPY --from=build --chown=node:node /repo/packages/service-kit/dist packages/service-kit/dist
-COPY --from=build --chown=node:node /repo/services/payments/package.json services/payments/package.json
-COPY --from=build --chown=node:node /repo/services/payments/dist services/payments/dist
+COPY --from=deps /repo/node_modules ./node_modules
+COPY --from=deps /repo/package.json ./package.json
+COPY --from=build /repo/packages/contracts/package.json packages/contracts/package.json
+COPY --from=build /repo/packages/contracts/dist packages/contracts/dist
+COPY --from=build /repo/packages/pricing/package.json packages/pricing/package.json
+COPY --from=build /repo/packages/pricing/dist packages/pricing/dist
+COPY --from=build /repo/packages/service-kit/package.json packages/service-kit/package.json
+COPY --from=build /repo/packages/service-kit/dist packages/service-kit/dist
+COPY --from=build /repo/services/payments/package.json services/payments/package.json
+COPY --from=build /repo/services/payments/dist services/payments/dist
 USER node
 WORKDIR /repo/services/payments
 EXPOSE 4004
-HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
   CMD wget -qO- "http://127.0.0.1:${PORT}/health/live" >/dev/null || exit 1
 CMD ["node", "dist/index.js"]

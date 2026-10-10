@@ -1,0 +1,30 @@
+# Build context = repository root for every image (services/*/Dockerfile).
+# apps/web/Dockerfile has its own apps/web/Dockerfile.dockerignore (BuildKit per-Dockerfile ignore).
+**/node_modules
+**/dist
+# Stale tsbuildinfo without dist would make `tsc -b` skip emitting.
+**/*.tsbuildinfo
+**/coverage
+**/.vite
+**/*.log
+**/.DS_Store
+.git
+.github
+.superpowers
+.playwright-mcp
+docs
+context.md
+playwright-report
+test-results
+e2e/**
+!e2e/package.json
+infra/mongo
+scripts
+# Never send secrets into an image build.
+.env
+.env.*
+!.env.example
+**/*.pem
+# Tests are not part of images (also keeps concurrent test edits from busting the build cache).
+packages/*/test
+services/*/test

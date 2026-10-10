@@ -1,0 +1,503 @@
+# Thali full local stack: 6 services + gateway + web (nginx), Mongo replica set (auth + keyfile),
+# Redis (AOF), MinIO, Mailpit.
+#
+#   cp .env.example .env && npm run stack:up        (docker compose up -d --build --wait)
+#   npm run stack:down
+#
+# Host port map (defaults; every published port is env-overridable, see .env.example):
+#   web (SPA + /api proxy)  http://localhost:5173    WEB_HOST_PORT
+#   gateway (API direct)    http://localhost:8080    GATEWAY_HOST_PORT   (Swagger: /api/docs)
+#   Mailpit inbox           http://localhost:8025    MAILPIT_HOST_PORT
+#   MinIO S3 API            http://localhost:9000    MINIO_HOST_PORT
+#   MinIO console           http://localhost:9001    MINIO_CONSOLE_HOST_PORT
+# Mongo, Redis and the six services are reachable only on the compose network. For debugging, the
+# `debug` profile adds a TCP forwarder (127.0.0.1 only):
+#   docker compose --profile debug up -d debug-ports
+#   identity..notifications -> localhost:14001..14006, mongo -> localhost:27019 (directConnection=true),
+#   redis -> localhost:16379
+#
+# Project name `thali` keeps this stack separate from the infra/test stack (`thali-infra`,
+# docker-compose.infra.yml). Both can run side by side only if the overlapping host ports
+# (8025/9000/9001) are overridden for one of them.
+name: thali
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-service-healthcheck: &service-healthcheck
+  interval: 10s
+  timeout: 5s
+  retries: 6
+  start_period: 40s
+
+# Values every backend service receives. Topology values (peer URLs, JWKS) are fixed here; tunables and
+# secrets come from .env.
+x-common-env: &common-env
+  APP_MODE: ${APP_MODE:-demo}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DOCS_ENABLED: ${DOCS_ENABLED:-true}
+  PUBLIC_WEB_URL: ${PUBLIC_WEB_URL:-http://localhost:5173}
+  PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8080}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://localhost:8080}
+  INTERNAL_SERVICE_SECRET: ${INTERNAL_SERVICE_SECRET:?set INTERNAL_SERVICE_SECRET in .env (cp .env.example .env)}
+  FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:?set FIELD_ENCRYPTION_KEY in .env}
+  REDIS_URL: redis://redis:6379
+  REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-thali:}
+  EVENT_STREAM_PREFIX: ${EVENT_STREAM_PREFIX:-}
+  # One proxy hop in front of every process: nginx -> gateway, gateway -> service (the gateway sets
+  # X-Forwarded-For to the client IP it resolved).
+  TRUST_PROXY: "1"
+  JWKS_URL: http://identity:4001/.well-known/jwks.json
+  IDENTITY_URL: http://identity:4001
+  MARKETPLACE_URL: http://marketplace:4002
+  ORDERS_URL: http://orders:4003
+  PAYMENTS_URL: http://payments:4004
+  DELIVERY_URL: http://delivery:4005
+  NOTIFICATIONS_URL: http://notifications:4006
+  # Provider selections (the gateway mirrors them in /api/v1/meta).
+  PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-mock}
+  SMS_PROVIDER: ${SMS_PROVIDER:-mock}
+  EMAIL_PROVIDER: ${EMAIL_PROVIDER:-mailpit}
+  GEO_PROVIDER: ${GEO_PROVIDER:-demo}
+  STORAGE_PROVIDER: ${STORAGE_PROVIDER:-s3}
+
+x-geo-env: &geo-env
+  GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+  ROAD_FACTOR: ${ROAD_FACTOR:-1.3}
+  AVG_SPEED_KMPH: ${AVG_SPEED_KMPH:-20}
+
+# Services talk to MinIO on the compose network. Public images are served to the browser from the
+# host-published MinIO port via S3_PUBLIC_BASE_URL. NOTE: presigned URLs (uploads, private KYC docs) are
+# signed for S3_ENDPOINT (http://minio:9000), which a browser cannot resolve: service-kit has no separate
+# public presign endpoint yet (integration defect, see task-15 report). Local workaround: add
+# `127.0.0.1 minio` to /etc/hosts and keep MINIO_HOST_PORT=9000.
+x-storage-env: &storage-env
+  S3_ENDPOINT: http://minio:9000
+  S3_REGION: ${S3_REGION:-us-east-1}
+  S3_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-thali}
+  S3_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+  S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-thali-public}
+  S3_PRIVATE_BUCKET: ${S3_PRIVATE_BUCKET:-thali-private}
+  S3_PUBLIC_BASE_URL: http://localhost:${MINIO_HOST_PORT:-9000}/${S3_PUBLIC_BUCKET:-thali-public}
+
+x-backend-depends: &backend-depends
+  mongo-init:
+    condition: service_completed_successfully
+  redis:
+    condition: service_healthy
+
+services:
+  # ------------------------------------------------------------------------------------------ data --
+  mongo:
+    <<: *restart
+    image: mongo:8.0
+    entrypoint: ["/bin/bash", "/infra/mongo/keyfile.sh"]
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:?set MONGO_ROOT_PASSWORD in .env}
+    volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+      - mongo-keyfile:/etc/mongo-keyfile
+      - ./infra/mongo:/infra/mongo:ro
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet -u "$$MONGO_INITDB_ROOT_USERNAME" -p "$$MONGO_INITDB_ROOT_PASSWORD"
+          --authenticationDatabase admin --eval "quit(db.adminCommand('ping').ok === 1 ? 0 : 1)"
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 20s
+
+  # One-shot: initiates rs0 (member host mongo:27017), waits for PRIMARY, creates/updates the per-service
+  # users (readWrite on their own thali_<service> database only). Idempotent; re-runs on every `up`.
+  mongo-init:
+    image: mongo:8.0
+    restart: "no"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+      MONGO_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD}
+      MONGO_RS_HOST: mongo:27017
+      MONGO_IDENTITY_PASSWORD: ${MONGO_IDENTITY_PASSWORD:?set MONGO_IDENTITY_PASSWORD in .env}
+      MONGO_MARKETPLACE_PASSWORD: ${MONGO_MARKETPLACE_PASSWORD:?set MONGO_MARKETPLACE_PASSWORD in .env}
+      MONGO_ORDERS_PASSWORD: ${MONGO_ORDERS_PASSWORD:?set MONGO_ORDERS_PASSWORD in .env}
+      MONGO_PAYMENTS_PASSWORD: ${MONGO_PAYMENTS_PASSWORD:?set MONGO_PAYMENTS_PASSWORD in .env}
+      MONGO_DELIVERY_PASSWORD: ${MONGO_DELIVERY_PASSWORD:?set MONGO_DELIVERY_PASSWORD in .env}
+      MONGO_NOTIFICATIONS_PASSWORD: ${MONGO_NOTIFICATIONS_PASSWORD:?set MONGO_NOTIFICATIONS_PASSWORD in .env}
+    volumes:
+      - ./infra/mongo:/infra/mongo:ro
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - >
+        mongosh --quiet --host mongo:27017 -u "$$MONGO_ROOT_USERNAME" -p "$$MONGO_ROOT_PASSWORD"
+        --authenticationDatabase admin --file /infra/mongo/init-replica.js
+
+  redis:
+    <<: *restart
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Upstream minio/minio images are no longer pullable (see docker-compose.infra.yml); Bitnami's archived
+  # build of the same server is used, pinned by tag.
+  minio:
+    <<: *restart
+    image: bitnamilegacy/minio:2025.7.23-debian-12-r5
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-thali}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+    ports:
+      - "${PUBLISH_ADDR:-127.0.0.1}:${MINIO_HOST_PORT:-9000}:9000"
+      - "${PUBLISH_ADDR:-127.0.0.1}:${MINIO_CONSOLE_HOST_PORT:-9001}:9001"
+    volumes:
+      - minio-data:/bitnami/minio/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+
+  # One-shot: creates the buckets (idempotent); public bucket allows anonymous download.
+  minio-init:
+    image: bitnamilegacy/minio-client:2025.7.21-debian-12-r3
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-thali}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_PUBLIC_BUCKET: ${S3_PUBLIC_BUCKET:-thali-public}
+      S3_PRIVATE_BUCKET: ${S3_PRIVATE_BUCKET:-thali-private}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        i=0
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null && mc ls local >/dev/null; do
+          i=$$((i+1)); [ "$$i" -ge 30 ] && { echo "minio not ready"; exit 1; }
+          sleep 1
+        done
+        mc mb --ignore-existing "local/$$S3_PUBLIC_BUCKET"
+        mc mb --ignore-existing "local/$$S3_PRIVATE_BUCKET"
+        mc anonymous set download "local/$$S3_PUBLIC_BUCKET"
+        mc anonymous set none "local/$$S3_PRIVATE_BUCKET"
+        echo "buckets ready"
+
+  # Demo email inbox. Notifications sends through its HTTP API (POST /api/v1/send); SMTP is not published.
+  mailpit:
+    <<: *restart
+    image: axllent/mailpit:v1.31.4
+    ports:
+      - "${PUBLISH_ADDR:-127.0.0.1}:${MAILPIT_HOST_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # -------------------------------------------------------------------------------------- services --
+  identity:
+    <<: *restart
+    build:
+      context: .
+      dockerfile: services/identity/Dockerfile
+    image: thali/identity:local
+    depends_on: *backend-depends
+    environment:
+      <<: *common-env
+      SERVICE_NAME: identity
+      PORT: "4001"
+      MONGO_URI: mongodb://thali_identity:${MONGO_IDENTITY_PASSWORD}@mongo:27017/?replicaSet=rs0&authSource=admin
+      # optional env-provided signing key; demo/sandbox auto-generate into signing_keys when empty
+      JWT_PRIVATE_KEY_PEM: ${JWT_PRIVATE_KEY_PEM:-}
+      JWT_PUBLIC_KEY_PEM: ${JWT_PUBLIC_KEY_PEM:-}
+      JWT_KID: ${JWT_KID:-}
+      ACCESS_TOKEN_TTL_SEC: ${ACCESS_TOKEN_TTL_SEC:-900}
+      OTP_PEPPER: ${OTP_PEPPER:?set OTP_PEPPER in .env}
+      OTP_TTL_SEC: ${OTP_TTL_SEC:-300}
+      OTP_RESEND_COOLDOWN_SEC: ${OTP_RESEND_COOLDOWN_SEC:-30}
+      OTP_MAX_PER_HOUR: ${OTP_MAX_PER_HOUR:-5}
+      OTP_MAX_PER_IP_PER_HOUR: ${OTP_MAX_PER_IP_PER_HOUR:-20}
+      OTP_MAX_ATTEMPTS: ${OTP_MAX_ATTEMPTS:-5}
+      DEMO_OTP_ENABLED: ${DEMO_OTP_ENABLED:-true}
+      DEMO_PHONES: ${DEMO_PHONES:-+919000000001,+919000000002,+919000000003,+919100000001,+919100000002,+919200000001,+919200000002}
+      SESSION_DAYS: ${SESSION_DAYS:-30}
+      ADMIN_SESSION_HOURS: ${ADMIN_SESSION_HOURS:-12}
+      REFRESH_REUSE_GRACE_SEC: ${REFRESH_REUSE_GRACE_SEC:-10}
+      COOKIE_SECURE: ${COOKIE_SECURE:-}
+      CSRF_ALLOWED_ORIGINS: ${CSRF_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:8080}
+      ADMIN_LOGIN_MAX_PER_WINDOW: ${ADMIN_LOGIN_MAX_PER_WINDOW:-10}
+      ADMIN_LOGIN_WINDOW_SEC: ${ADMIN_LOGIN_WINDOW_SEC:-900}
+      ADMIN_MAX_FAILED_ATTEMPTS: ${ADMIN_MAX_FAILED_ATTEMPTS:-5}
+      ADMIN_LOCK_MINUTES: ${ADMIN_LOCK_MINUTES:-15}
+      TOTP_ISSUER: ${TOTP_ISSUER:-Thali}
+    healthcheck:
+      <<: *service-healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4001/health/ready >/dev/null || exit 1"]
+
+  marketplace:
+    <<: *restart
+    build:
+      context: .
+      dockerfile: services/marketplace/Dockerfile
+    image: thali/marketplace:local
+    depends_on:
+      <<: *backend-depends
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      <<: [*common-env, *geo-env, *storage-env]
+      SERVICE_NAME: marketplace
+      PORT: "4002"
+      MONGO_URI: mongodb://thali_marketplace:${MONGO_MARKETPLACE_PASSWORD}@mongo:27017/?replicaSet=rs0&authSource=admin
+      MONGO_DB_NAME: thali_marketplace
+      REQUIRED_DOCUMENT_TYPES: ${REQUIRED_DOCUMENT_TYPES:-FSSAI,GST,PAN}
+      MAX_DELIVERY_RADIUS_KM: ${MAX_DELIVERY_RADIUS_KM:-15}
+    healthcheck:
+      <<: *service-healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4002/health/ready >/dev/null || exit 1"]
+
+  orders:
+    <<: *restart
+    build:
+      context: .
+      dockerfile: services/orders/Dockerfile
+    image: thali/orders:local
+    depends_on: *backend-depends
+    environment:
+      <<: *common-env
+      SERVICE_NAME: orders
+      PORT: "4003"
+      MONGO_URI: mongodb://thali_orders:${MONGO_ORDERS_PASSWORD}@mongo:27017/?replicaSet=rs0&authSource=admin
+      ACCEPT_WINDOW_SEC: ${ACCEPT_WINDOW_SEC:-300}
+      CHECKOUT_TTL_SEC: ${CHECKOUT_TTL_SEC:-900}
+      FOOD_TAX_BPS: ${FOOD_TAX_BPS:-500}
+      FEE_TAX_BPS: ${FEE_TAX_BPS:-1800}
+      PLATFORM_FEE_PAISE: ${PLATFORM_FEE_PAISE:-500}
+      GUEST_CART_TTL_DAYS: ${GUEST_CART_TTL_DAYS:-7}
+      CHECKOUT_EXPIRY_INTERVAL_MS: ${CHECKOUT_EXPIRY_INTERVAL_MS:-30000}
+      AUTHORIZED_GRACE_SEC: ${AUTHORIZED_GRACE_SEC:-600}
+      CHECKOUT_RATE_LIMIT_PER_MIN: ${CHECKOUT_RATE_LIMIT_PER_MIN:-10}
+      INTERNAL_HTTP_TIMEOUT_MS: ${INTERNAL_HTTP_TIMEOUT_MS:-5000}
+    healthcheck:
+      <<: *service-healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4003/health/ready >/dev/null || exit 1"]
+
+  payments:
+    <<: *restart
+    build:
+      context: .
+      dockerfile: services/payments/Dockerfile
+    image: thali/payments:local
+    depends_on: *backend-depends
+    environment:
+      <<: *common-env
+      SERVICE_NAME: payments
+      PORT: "4004"
+      MONGO_URI: mongodb://thali_payments:${MONGO_PAYMENTS_PASSWORD}@mongo:27017/?replicaSet=rs0&authSource=admin
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+      MOCK_WEBHOOK_SECRET: ${MOCK_WEBHOOK_SECRET:-}
+      PAYMENT_PROVIDER_TIMEOUT_MS: ${PAYMENT_PROVIDER_TIMEOUT_MS:-8000}
+      PAYOUT_HOLD_DAYS: ${PAYOUT_HOLD_DAYS:-0}
+      PARTNER_BASE_PAYOUT_PAISE: ${PARTNER_BASE_PAYOUT_PAISE:-3000}
+      PARTNER_PER_KM_PAISE: ${PARTNER_PER_KM_PAISE:-800}
+      AUTHORIZED_CAPTURE_AFTER_SEC: ${AUTHORIZED_CAPTURE_AFTER_SEC:-300}
+      REFUND_MAX_ATTEMPTS: ${REFUND_MAX_ATTEMPTS:-5}
+      REFUND_BACKOFF_BASE_MS: ${REFUND_BACKOFF_BASE_MS:-60000}
+      REFUND_POLL_AFTER_SEC: ${REFUND_POLL_AFTER_SEC:-600}
+      REFUND_WORKER_INTERVAL_MS: ${REFUND_WORKER_INTERVAL_MS:-5000}
+      RECONCILE_INTERVAL_MS: ${RECONCILE_INTERVAL_MS:-60000}
+    healthcheck:
+      <<: *service-healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4004/health/ready >/dev/null || exit 1"]
+
+  delivery:
+    <<: *restart
+    build:
+      context: .
+      dockerfile: services/delivery/Dockerfile
+    image: thali/delivery:local
+    depends_on:
+      <<: *backend-depends
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      <<: [*common-env, *geo-env, *storage-env]
+      SERVICE_NAME: delivery
+      PORT: "4005"
+      MONGO_URI: mongodb://thali_delivery:${MONGO_DELIVERY_PASSWORD}@mongo:27017/?replicaSet=rs0&authSource=admin
+      MAX_ACTIVE_DELIVERIES: ${MAX_ACTIVE_DELIVERIES:-2}
+      OFFER_TTL_SEC: ${OFFER_TTL_SEC:-45}
+      OFFERS_PER_ROUND: ${OFFERS_PER_ROUND:-3}
+      DISPATCH_RADIUS_KM: ${DISPATCH_RADIUS_KM:-3,5,8}
+      MAX_DISPATCH_ROUNDS: ${MAX_DISPATCH_ROUNDS:-5}
+      BATCH_PICKUP_RADIUS_KM: ${BATCH_PICKUP_RADIUS_KM:-1.5}
+      BATCH_DROP_RADIUS_KM: ${BATCH_DROP_RADIUS_KM:-3}
+      BATCH_MAX_EXTRA_MINUTES: ${BATCH_MAX_EXTRA_MINUTES:-12}
+      LOCATION_STALE_SEC: ${LOCATION_STALE_SEC:-60}
+      DISPATCH_LOCATION_MAX_AGE_SEC: ${DISPATCH_LOCATION_MAX_AGE_SEC:-120}
+      DISPATCH_INTERVAL_MS: ${DISPATCH_INTERVAL_MS:-5000}
+      LOCATION_PING_INTERVAL_SEC: ${LOCATION_PING_INTERVAL_SEC:-3}
+      CODE_MAX_ATTEMPTS: ${CODE_MAX_ATTEMPTS:-5}
+      PARTNER_DOC_MAX_BYTES: ${PARTNER_DOC_MAX_BYTES:-5242880}
+      SIMULATOR_STEP_MS: ${SIMULATOR_STEP_MS:-2000}
+    healthcheck:
+      <<: *service-healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4005/health/ready >/dev/null || exit 1"]
+
+  notifications:
+    <<: *restart
+    build:
+      context: .
+      dockerfile: services/notifications/Dockerfile
+    image: thali/notifications:local
+    depends_on:
+      <<: *backend-depends
+      mailpit:
+        condition: service_healthy
+    environment:
+      <<: *common-env
+      SERVICE_NAME: notifications
+      PORT: "4006"
+      MONGO_URI: mongodb://thali_notifications:${MONGO_NOTIFICATIONS_PASSWORD}@mongo:27017/?replicaSet=rs0&authSource=admin
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_FROM: ${TWILIO_FROM:-}
+      TWILIO_MESSAGING_SERVICE_SID: ${TWILIO_MESSAGING_SERVICE_SID:-}
+      TWILIO_STATUS_CALLBACK_URL: ${TWILIO_STATUS_CALLBACK_URL:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_WEBHOOK_SECRET: ${RESEND_WEBHOOK_SECRET:-}
+      EMAIL_FROM: ${EMAIL_FROM:-Thali <no-reply@thali.local>}
+      MAILPIT_URL: http://mailpit:8025
+      NOTIF_MAX_ATTEMPTS: ${NOTIF_MAX_ATTEMPTS:-6}
+      NOTIF_RETRY_BASE_SEC: ${NOTIF_RETRY_BASE_SEC:-30}
+      NOTIF_RETRY_MAX_SEC: ${NOTIF_RETRY_MAX_SEC:-900}
+      NOTIF_POLL_MS: ${NOTIF_POLL_MS:-1000}
+      NOTIF_SENDING_TIMEOUT_SEC: ${NOTIF_SENDING_TIMEOUT_SEC:-120}
+      PROVIDER_TIMEOUT_MS: ${PROVIDER_TIMEOUT_MS:-10000}
+      SSE_HEARTBEAT_MS: ${SSE_HEARTBEAT_MS:-20000}
+      SSE_MAX_AGE_SEC: ${SSE_MAX_AGE_SEC:-3600}
+      SSE_MAX_STREAMS_PER_USER: ${SSE_MAX_STREAMS_PER_USER:-5}
+    healthcheck:
+      <<: *service-healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:4006/health/ready >/dev/null || exit 1"]
+
+  # ------------------------------------------------------------------------------------------ edge --
+  gateway:
+    <<: *restart
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
+    image: thali/gateway:local
+    depends_on:
+      redis:
+        condition: service_healthy
+      identity:
+        condition: service_healthy
+      marketplace:
+        condition: service_healthy
+      orders:
+        condition: service_healthy
+      payments:
+        condition: service_healthy
+      delivery:
+        condition: service_healthy
+      notifications:
+        condition: service_healthy
+    ports:
+      - "${PUBLISH_ADDR:-127.0.0.1}:${GATEWAY_HOST_PORT:-8080}:8080"
+    environment:
+      <<: *common-env
+      SERVICE_NAME: gateway
+      PORT: "8080"
+      BRAND_NAME: ${BRAND_NAME:-Thali}
+      UPSTREAM_TIMEOUT_MS: ${UPSTREAM_TIMEOUT_MS:-15000}
+      HEALTH_TIMEOUT_MS: ${HEALTH_TIMEOUT_MS:-3000}
+      RATE_LIMIT_GLOBAL_PER_MIN: ${RATE_LIMIT_GLOBAL_PER_MIN:-300}
+      RATE_LIMIT_DISCOVERY_PER_MIN: ${RATE_LIMIT_DISCOVERY_PER_MIN:-60}
+      RATE_LIMIT_OTP_PER_MIN: ${RATE_LIMIT_OTP_PER_MIN:-10}
+    healthcheck:
+      <<: *service-healthcheck
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health/ready >/dev/null || exit 1"]
+
+  # SPA served by nginx (infra/nginx/web.conf); /api/* is proxied to gateway:8080 (SSE unbuffered).
+  web:
+    <<: *restart
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: thali/web:local
+    depends_on:
+      gateway:
+        condition: service_healthy
+    ports:
+      - "${PUBLISH_ADDR:-127.0.0.1}:${WEB_HOST_PORT:-5173}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 5s
+
+  # ----------------------------------------------------------------------------- debug (profile) --
+  # TCP forwarder for internal ports, bound to 127.0.0.1 only. Not started by `stack:up`.
+  # (nginx:alpine has the stream module compiled in statically.)
+  debug-ports:
+    profiles: ["debug"]
+    image: nginx:1.28.0-alpine
+    restart: "no"
+    configs:
+      - source: debug-ports-nginx
+        target: /etc/nginx/nginx.conf
+    ports:
+      - "127.0.0.1:14001:4001"
+      - "127.0.0.1:14002:4002"
+      - "127.0.0.1:14003:4003"
+      - "127.0.0.1:14004:4004"
+      - "127.0.0.1:14005:4005"
+      - "127.0.0.1:14006:4006"
+      - "127.0.0.1:27019:27017"
+      - "127.0.0.1:16379:6379"
+
+configs:
+  debug-ports-nginx:
+    content: |
+      worker_processes 1;
+      events { worker_connections 256; }
+      stream {
+        resolver 127.0.0.11 valid=10s ipv6=off;
+        server { listen 4001; set $$u identity:4001;      proxy_pass $$u; }
+        server { listen 4002; set $$u marketplace:4002;   proxy_pass $$u; }
+        server { listen 4003; set $$u orders:4003;        proxy_pass $$u; }
+        server { listen 4004; set $$u payments:4004;      proxy_pass $$u; }
+        server { listen 4005; set $$u delivery:4005;      proxy_pass $$u; }
+        server { listen 4006; set $$u notifications:4006; proxy_pass $$u; }
+        server { listen 27017; set $$u mongo:27017;       proxy_pass $$u; }
+        server { listen 6379; set $$u redis:6379;         proxy_pass $$u; }
+      }
+
+volumes:
+  mongo-data:
+  mongo-config:
+  mongo-keyfile:
+  redis-data:
+  minio-data:
