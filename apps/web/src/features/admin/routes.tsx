@@ -1,34 +1,47 @@
 /**
- * Admin area routes. OWNED BY THE ADMIN AREA IMPLEMENTER: replace the placeholder.
- * Contract (see src/README-FOUNDATION.md "Role areas"): export `routes` (paths relative to the area root,
- * index = area home, keep a '*' NotFound), optional `nav`, `HeaderActions`, `wide`.
- * Lazy-load pages: { path: 'orders', lazy: () => import('./OrdersPage').then((m) => ({ Component: m.default })) }
+ * Admin area routes (mounted at `/admin/*` behind the ADMIN + MFA guard; `/admin/login` is public).
+ * Pages are lazy-loaded so the Leaflet map and editors only load when needed.
  */
 import type { RouteObject } from 'react-router';
+import { Navigate } from 'react-router';
 import { NotFoundPage } from '../../components/layout/ErrorBoundary';
 import type { NavItem } from '../../components/layout/RoleNav';
-import { EmptyState } from '../../components/ui/EmptyState';
-import { PageHeader } from '../../components/ui/PageHeader';
 
-function Placeholder() {
-  return (
-    <>
-      <PageHeader title="Admin overview" description="Approvals, orders, deliveries, finance and platform health." />
-      <EmptyState icon="shield" title="Coming together" description="This area is being built on the shared foundation." />
-    </>
-  );
-}
+const page = (load: () => Promise<{ default: React.ComponentType }>) => () => load().then((m) => ({ Component: m.default }));
+
+export const routes: RouteObject[] = [
+  { path: 'login', lazy: page(() => import('./AdminLogin')) },
+  { index: true, lazy: page(() => import('./OverviewPage')) },
+  { path: 'approvals', element: <Navigate to="/admin/restaurants?status=APPROVAL_PENDING" replace /> },
+  { path: 'restaurants', lazy: page(() => import('./RestaurantsApprovals')) },
+  { path: 'restaurants/:id', lazy: page(() => import('./RestaurantDetail')) },
+  { path: 'partners', lazy: page(() => import('./PartnersApprovals')) },
+  { path: 'partners/:id', lazy: page(() => import('./PartnerDetail')) },
+  { path: 'users', lazy: page(() => import('./UsersPage')) },
+  { path: 'orders', lazy: page(() => import('./OrdersSearch')) },
+  { path: 'orders/:checkoutId', lazy: page(() => import('./OrderInvestigation')) },
+  { path: 'tms', lazy: page(() => import('./TmsPage')) },
+  { path: 'catalog', lazy: page(() => import('./CatalogPage')) },
+  { path: 'support', lazy: page(() => import('./SupportQueue')) },
+  { path: 'support/:id', lazy: page(() => import('./TicketDetail')) },
+  { path: 'finance', lazy: page(() => import('./FinancePage')) },
+  { path: 'audit', lazy: page(() => import('./AuditLogPage')) },
+  { path: 'health', lazy: page(() => import('./HealthPage')) },
+  { path: '*', element: <NotFoundPage home="/admin" /> },
+];
 
 export const nav: NavItem[] = [
   { to: '/admin', label: 'Overview', icon: 'chart', end: true },
-  { to: '/admin/approvals', label: 'Approvals', icon: 'check' },
+  { to: '/admin/restaurants', label: 'Restaurants', icon: 'store' },
+  { to: '/admin/partners', label: 'Partners', icon: 'bike' },
   { to: '/admin/orders', label: 'Orders', icon: 'receipt' },
-  { to: '/admin/tms', label: 'Deliveries', icon: 'bike' },
+  { to: '/admin/tms', label: 'Deliveries', icon: 'map' },
+  { to: '/admin/support', label: 'Support', icon: 'ticket' },
+  { to: '/admin/users', label: 'Users', icon: 'users' },
+  { to: '/admin/catalog', label: 'Catalog', icon: 'list' },
   { to: '/admin/finance', label: 'Finance', icon: 'wallet' },
+  { to: '/admin/audit', label: 'Audit log', icon: 'shield' },
   { to: '/admin/health', label: 'Health', icon: 'activity' },
 ];
 
-export const routes: RouteObject[] = [
-  { index: true, element: <Placeholder /> },
-  { path: '*', element: <NotFoundPage home="/admin" /> },
-];
+export const wide = false;
