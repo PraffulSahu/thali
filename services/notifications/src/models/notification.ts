@@ -2,11 +2,17 @@
 import { Schema, type Connection, type Model, type Types } from 'mongoose';
 
 export const NOTIFICATION_CHANNELS = ['SMS', 'EMAIL', 'IN_APP'] as const;
-export const NOTIFICATION_STATUSES = ['QUEUED', 'SENDING', 'SENT', 'DELIVERED', 'FAILED', 'DEAD'] as const;
+/**
+ * `SKIPPED` is local (contracts' NotificationStatus has no such value): terminal, nothing was sent because the
+ * recipient opted out / is blocked / has no address / is unknown (reason in `skipReason`).
+ */
+export const NOTIFICATION_STATUSES = ['QUEUED', 'SENDING', 'SENT', 'DELIVERED', 'FAILED', 'DEAD', 'SKIPPED'] as const;
 
 export interface NotificationDoc {
   _id: Types.ObjectId;
   userId?: string | null;
+  /** Recipient not known yet: the user is resolved from the child order at dispatch time (refund events). */
+  recipientChildOrderId?: string | null;
   /** `ADMIN` = broadcast to admins (no single user). */
   audience?: 'ADMIN' | null;
   channel: (typeof NOTIFICATION_CHANNELS)[number];
@@ -28,6 +34,7 @@ export interface NotificationDoc {
   provider?: string | null;
   providerMessageId?: string | null;
   lastError?: string | null;
+  skipReason?: string | null;
   sourceEventId?: string | null;
   dedupeKey: string;
   readAt?: Date | null;
@@ -41,6 +48,7 @@ export interface NotificationDoc {
 const schema = new Schema<NotificationDoc>(
   {
     userId: { type: String, default: null },
+    recipientChildOrderId: { type: String, default: null },
     audience: { type: String, default: null },
     channel: { type: String, enum: NOTIFICATION_CHANNELS, required: true },
     to: { type: String, default: '' },
@@ -56,6 +64,7 @@ const schema = new Schema<NotificationDoc>(
     provider: { type: String, default: null },
     providerMessageId: { type: String, default: null },
     lastError: { type: String, default: null },
+    skipReason: { type: String, default: null },
     sourceEventId: { type: String, default: null },
     dedupeKey: { type: String, required: true },
     readAt: { type: Date, default: null },

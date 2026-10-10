@@ -1,8 +1,8 @@
 /**
- * Event consumers (LLD §9). Handlers run inside the consumer's per-event Mongo transaction: they only look up
- * recipients (idempotent GETs) and insert notification records through the dispatcher, whose unique
- * `dedupeKey` (`<eventId>:<channel>:<recipient>`) makes redelivery harmless. Sending happens after commit
- * (dispatcher kick + poller), never inside the transaction.
+ * Event consumers (LLD §9). Handlers run inside the consumer's per-event Mongo transaction and make NO network
+ * calls: they only insert notification rows through the dispatcher, whose unique `dedupeKey` makes redelivery
+ * harmless. Recipient lookup (identity / orders), preferences and sending happen at dispatch time, after commit,
+ * in the worker (retry/backoff applies there).
  *
  * Consumed: restaurant.submitted, restaurant.email_verification_requested, restaurant.status_changed,
  * membership.activated, order.placed/accepted/rejected/cancelled/out_for_delivery/delivered/delivery_failed,
@@ -15,79 +15,60 @@ import type { Logger } from 'pino';
 import type { EventEnvelope, EventType } from '@thali/contracts';
 import type { ClientSession, EventHandlers } from '@thali/service-kit';
 import type { Dispatcher } from '../domain/dispatcher.js';
-import type { RecipientDirectory } from '../domain/recipients.js';
-import { planChannels } from '../domain/recipients.js';
-import type { TemplateData, TemplateName } from '../domain/templates.js';
-
-/** orders `GET /internal/orders/child/:id` (binding shape): only what we need. */
-export interface OrdersLookup {
-  getChildOrder(childOrderId: string): Promise<{ id: string; userId: string } | null>;
-}
+import { templateDef, type TemplateData, type TemplateName } from '../domain/templates.js';
 
 export interface HandlerDeps {
   dispatcher: Dispatcher;
-  directory: RecipientDirectory;
-  orders: OrdersLookup;
   logger: Pick<Logger, 'info' | 'warn'>;
-  now?: () => Date;
 }
 
 type Env<T extends EventType> = EventEnvelope<T>;
 
 export function createEventHandlers(deps: HandlerDeps): EventHandlers {
-  const { dispatcher, directory, logger } = deps;
-
-  interface Target {
-    userId: string | undefined;
-    template: TemplateName;
-    data: TemplateData;
-  }
+  const { dispatcher, logger } = deps;
 
   /**
-   * In-app + allowed SMS/email for each target user. All recipient lookups happen before the first write so the
-   * (consumer-owned) transaction is not held open across several HTTP calls. Unknown user: logged and skipped.
+   * Handlers never call identity/orders: they only insert notification rows (inside the consumer's transaction).
+   * One row per channel the template supports; the dispatch worker resolves the recipient's phone/email and
+   * preferences outside any transaction and marks rows SKIPPED (opted out / blocked / no address) or retries
+   * them with backoff when identity is unavailable. dedupeKey: `<eventId>:<template>:<channel>:<recipient>`.
    */
-  async function notifyUsers(env: EventEnvelope, targets: Target[], session: ClientSession) {
-    const users = await Promise.all(
-      targets.map(async (t) => {
-        if (!t.userId) {
-          logger.warn({ eventId: env.id, type: env.type }, 'event has no recipient user id; skipping');
-          return null;
-        }
-        const user = await directory.getUser(t.userId);
-        if (!user) logger.info({ eventId: env.id, type: env.type, userId: t.userId }, 'recipient user not found; skipping');
-        return user;
-      }),
-    );
+  async function enqueueFor(
+    env: EventEnvelope,
+    recipient: { userId?: string; childOrderId?: string },
+    template: TemplateName,
+    data: TemplateData,
+    session: ClientSession,
+  ) {
+    const ref = recipient.userId ?? (recipient.childOrderId ? `order:${recipient.childOrderId}` : undefined);
+    if (!ref) {
+      logger.warn({ eventId: env.id, type: env.type }, 'event has no resolvable recipient; skipping');
+      return;
+    }
     const ids: string[] = [];
-    for (const [i, t] of targets.entries()) {
-      const user = users[i];
-      if (!user) continue;
-      for (const channel of planChannels(t.template, user)) {
-        const r = await dispatcher.enqueue(
-          {
-            channel,
-            template: t.template,
-            data: t.data,
-            dedupeKey: `${env.id}:${channel}:${t.userId}`,
-            userId: t.userId,
-            to: channel === 'SMS' ? user.phone! : channel === 'EMAIL' ? user.email! : undefined,
-            sourceEventId: env.id,
-          },
-          { session },
-        );
-        if (r.created) ids.push(r.id);
-      }
+    for (const channel of templateDef(template).channels) {
+      const r = await dispatcher.enqueue(
+        {
+          channel,
+          template,
+          data,
+          dedupeKey: `${env.id}:${template}:${channel}:${ref}`,
+          ...(recipient.userId ? { userId: recipient.userId } : { recipientChildOrderId: recipient.childOrderId }),
+          sourceEventId: env.id,
+        },
+        { session },
+      );
+      if (r.created) ids.push(r.id);
     }
     dispatcher.kick(ids);
   }
 
   const notifyUser = (env: EventEnvelope, userId: string | undefined, template: TemplateName, data: TemplateData, session: ClientSession) =>
-    notifyUsers(env, [{ userId, template, data }], session);
+    enqueueFor(env, { userId }, template, data, session);
 
   async function notifyAdmins(env: EventEnvelope, template: TemplateName, data: TemplateData, session: ClientSession) {
     const r = await dispatcher.enqueue(
-      { channel: 'IN_APP', audience: 'ADMIN', template, data, dedupeKey: `${env.id}:IN_APP:admin`, sourceEventId: env.id },
+      { channel: 'IN_APP', audience: 'ADMIN', template, data, dedupeKey: `${env.id}:${template}:IN_APP:admin`, sourceEventId: env.id },
       { session },
     );
     if (r.created) dispatcher.kick([r.id]);
@@ -103,7 +84,7 @@ export function createEventHandlers(deps: HandlerDeps): EventHandlers {
       const to = e.payload.email.trim().toLowerCase();
       const hash = createHash('sha256').update(to).digest('hex').slice(0, 16);
       const r = await dispatcher.enqueue(
-        { channel: 'EMAIL', template: 'restaurant_email_verification', to, data: { verifyUrl: e.payload.verifyUrl }, dedupeKey: `${e.id}:EMAIL:h:${hash}`, sourceEventId: e.id },
+        { channel: 'EMAIL', template: 'restaurant_email_verification', to, data: { verifyUrl: e.payload.verifyUrl }, dedupeKey: `${e.id}:restaurant_email_verification:EMAIL:h:${hash}`, sourceEventId: e.id },
         { session: s },
       );
       if (r.created) dispatcher.kick([r.id]);
@@ -120,14 +101,8 @@ export function createEventHandlers(deps: HandlerDeps): EventHandlers {
 
     'order.placed': async (e: Env<'order.placed'>, s) => {
       const p = e.payload;
-      await notifyUsers(
-        e,
-        [
-          { userId: p.userId, template: 'order_placed_customer', data: { code: p.code, totalPaise: p.totalPaise } },
-          { userId: p.restaurantOwnerId, template: 'order_placed_restaurant', data: { code: p.code, totalPaise: p.totalPaise, acceptBy: p.acceptBy } },
-        ],
-        s,
-      );
+      await notifyUser(e, p.userId, 'order_placed_customer', { code: p.code, totalPaise: p.totalPaise }, s);
+      await notifyUser(e, p.restaurantOwnerId, 'order_placed_restaurant', { code: p.code, totalPaise: p.totalPaise, acceptBy: p.acceptBy }, s);
     },
 
     // Pickup/delivery codes are deliberately NOT forwarded: they stay inside orders/delivery.
@@ -160,20 +135,15 @@ export function createEventHandlers(deps: HandlerDeps): EventHandlers {
       await notifyAdmins(e, 'delivery_exception_admin', { jobId, childOrderId, reason }, s);
     },
 
-    // refund payload has no user id: resolve through the order (checkout-level refunds without a child order
-    // cannot be attributed to a user and are skipped; see report "Contract gaps").
+    // The refund payload has no user id: the user is resolved from the child order at dispatch time. Checkout-level
+    // refunds without a child order cannot be attributed and are skipped (see report "Contract gaps").
     'refund.succeeded': async (e: Env<'refund.succeeded'>, s) => {
       const { childOrderId, amountPaise, refundId } = e.payload;
       if (!childOrderId) {
         logger.info({ eventId: e.id, refundId }, 'refund has no child order; cannot resolve recipient; skipping');
         return;
       }
-      const order = await deps.orders.getChildOrder(childOrderId);
-      if (!order) {
-        logger.info({ eventId: e.id, childOrderId }, 'child order not found; skipping refund notification');
-        return;
-      }
-      await notifyUser(e, order.userId, 'refund_succeeded', { amountPaise }, s);
+      await enqueueFor(e, { childOrderId }, 'refund_succeeded', { amountPaise }, s);
     },
 
     'partner.status_changed': async (e: Env<'partner.status_changed'>, s) => {

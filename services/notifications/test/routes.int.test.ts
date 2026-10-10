@@ -127,6 +127,10 @@ describe('admin: list notifications', () => {
     expect(JSON.stringify(res.body)).not.toContain('secretEnc');
     expect((await get('/api/v1/admin/notifications', await h.userToken(oid()))).status).toBe(403);
     expect((await get('/api/v1/admin/notifications?status=BOGUS', await h.adminToken())).status).toBe(400);
+    await h.models.Notification.updateOne({ _id: id }, { $set: { status: 'SKIPPED', skipReason: 'OPTED_OUT' } });
+    const skipped = await get('/api/v1/admin/notifications?status=SKIPPED', await h.adminToken());
+    expect(skipped.status).toBe(200);
+    expect(skipped.body.items.find((i: any) => i.id === id)).toMatchObject({ status: 'SKIPPED', skipReason: 'OPTED_OUT' });
   });
 });
 

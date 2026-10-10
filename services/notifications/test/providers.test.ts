@@ -7,7 +7,7 @@ import { MailpitEmailProvider, parseAddress } from '../src/providers/mailpit-ema
 import { MockSmsProvider } from '../src/providers/mock-sms.js';
 import { MockEmailProvider } from '../src/providers/mock-email.js';
 import { isRetryable, nextDelaySec } from '../src/domain/retry.js';
-import { LogCapture } from './helpers.js';
+import { LogCapture } from './fixtures.js';
 
 const jsonRes = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 const stub = (res: Response | (() => Response | Promise<Response>)) =>

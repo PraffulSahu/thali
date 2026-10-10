@@ -107,6 +107,7 @@ const view = (n: NotificationDoc & { _id: unknown }) => ({
   provider: n.provider ?? null,
   providerMessageId: n.providerMessageId ?? null,
   lastError: n.lastError ?? null,
+  skipReason: n.skipReason ?? null,
   sourceEventId: n.sourceEventId ?? null,
   dedupeKey: n.dedupeKey,
   readAt: n.readAt ? n.readAt.toISOString() : null,
@@ -219,7 +220,7 @@ export function adminRouter(deps: AdminDeps): Router {
     const at = now();
     const updated = await withTransaction(conn, async (session) => {
       const doc = await Notification.findOneAndUpdate(
-        { _id: params.id, status: { $in: ['DEAD', 'FAILED'] }, template: { $ne: 'otp' }, $or: [{ channel: 'IN_APP' }, { toEnc: { $ne: null } }] },
+        { _id: params.id, status: { $in: ['DEAD', 'FAILED'] }, template: { $ne: 'otp' }, $or: [{ channel: 'IN_APP' }, { toEnc: { $ne: null } }, { userId: { $ne: null } }, { recipientChildOrderId: { $ne: null } }] },
         { $set: { status: 'QUEUED', attempts: 0, nextAttemptAt: at, updatedAt: at }, $unset: { sendingAt: 1 } },
         { new: true, session },
       ).lean();

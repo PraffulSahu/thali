@@ -2,10 +2,8 @@
  * Shared test harness: real Mongo + Redis (unique DB / key prefix per file), fake providers, fake
  * identity directory, real hub, real app. Never calls the network.
  */
-import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { Writable } from 'node:stream';
 import type { Express } from 'express';
 import type { Connection } from 'mongoose';
 import {
@@ -30,7 +28,8 @@ import type { ServiceName } from '@thali/contracts';
 import { buildApp } from '../src/app.js';
 import { loadNotificationsConfig, type NotificationsConfig } from '../src/config.js';
 import { createDispatcher, type Dispatcher } from '../src/domain/dispatcher.js';
-import type { IdentityUser, RecipientDirectory } from '../src/domain/recipients.js';
+import type { IdentityUser, OrdersLookup, RecipientDirectory } from '../src/domain/recipients.js';
+import { ENC_KEY, LogCapture, RESEND_SECRET, TWILIO_TOKEN, TWILIO_URL, oid, svixHeaders, twilioSign } from './fixtures.js';
 import { createRealtimeHub, type RealtimeHub } from '../src/realtime/hub.js';
 import { createRealtimePublisher } from '../src/realtime/publish.js';
 import { notificationModel, type NotificationModel } from '../src/models/notification.js';
@@ -41,10 +40,7 @@ import type { EmailMessage, EmailProvider } from '../src/providers/email.js';
 import { createFailMode, type FailMode } from '../src/providers/fail-mode.js';
 import type { DeadLetterSource } from '../src/routes/admin.js';
 
-export const ENC_KEY = randomBytes(32).toString('base64');
-export const TWILIO_URL = 'https://api.thali.test/api/v1/webhooks/twilio/status';
-export const TWILIO_TOKEN = 'twilio-auth-token-for-tests';
-export const RESEND_SECRET = `whsec_${randomBytes(24).toString('base64')}`;
+export { ENC_KEY, TWILIO_URL, TWILIO_TOKEN, RESEND_SECRET, LogCapture, oid, twilioSign, svixHeaders };
 
 export class FakeSms implements SmsProvider {
   readonly name = 'twilio' as const;
@@ -97,11 +93,15 @@ export class FakeDirectory implements RecipientDirectory {
   }
 }
 
-export class LogCapture extends Writable {
-  text = '';
-  override _write(chunk: Buffer, _enc: string, cb: () => void) {
-    this.text += chunk.toString();
-    cb();
+export class FakeOrders implements OrdersLookup {
+  map = new Map<string, string>();
+  down = false;
+  lookups = 0;
+  async getChildOrder(id: string) {
+    this.lookups++;
+    if (this.down) throw new Error('orders unavailable');
+    const userId = this.map.get(id);
+    return userId ? { id, userId } : null;
   }
 }
 
@@ -125,6 +125,7 @@ export interface Harness {
   sms: FakeSms;
   email: FakeEmail;
   directory: FakeDirectory;
+  orders: FakeOrders;
   failMode: FailMode;
   clock: { now: Date };
   logs: LogCapture;
@@ -168,6 +169,7 @@ export async function createHarness(name: string, opts: HarnessOptions = {}): Pr
   const sms = new FakeSms();
   const email = new FakeEmail();
   const directory = new FakeDirectory();
+  const orders = new FakeOrders();
   const failMode = createFailMode(tr.redis);
   const clock = { now: new Date('2026-10-10T10:00:00.000Z') };
   const realtime = createRealtimePublisher(tr.redis, logger);
@@ -176,6 +178,8 @@ export async function createHarness(name: string, opts: HarnessOptions = {}): Pr
     sms,
     email,
     realtime,
+    directory,
+    orders,
     encryptionKey: config.FIELD_ENCRYPTION_KEY,
     maxAttempts: config.NOTIF_MAX_ATTEMPTS,
     retryBaseSec: config.NOTIF_RETRY_BASE_SEC,
@@ -204,7 +208,7 @@ export async function createHarness(name: string, opts: HarnessOptions = {}): Pr
   });
   const servers: Server[] = [];
   return {
-    config, db, conn: db.conn, tr, redis: tr.redis, keys, auth, models, sms, email, directory, failMode, clock, logs, dispatcher, hub, app,
+    config, db, conn: db.conn, tr, redis: tr.redis, keys, auth, models, sms, email, directory, orders, failMode, clock, logs, dispatcher, hub, app,
     userToken: (userId, claims = {}) => keys.sign({ sub: userId, roles: ['CONSUMER'], ...claims }),
     adminToken: (userId = 'a'.repeat(24), o = {}) =>
       keys.sign({ sub: userId, roles: ['CONSUMER', 'ADMIN'], adm: ['OPS'], amr: o.mfa === false ? ['pwd'] : ['pwd', 'mfa'] }),
@@ -228,4 +232,3 @@ export async function createHarness(name: string, opts: HarnessOptions = {}): Pr
   };
 }
 
-export const oid = () => randomBytes(12).toString('hex');

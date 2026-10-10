@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHarness, invalidNumber, oid, unavailable, type Harness } from './helpers.js';
 
 let h: Harness;
@@ -9,7 +9,8 @@ beforeAll(async () => {
 afterAll(async () => {
   await h.close();
 });
-beforeEach(() => {
+beforeEach(async () => {
+  await h.models.Notification.deleteMany({}); // dispatchDue() is global
   h.sms.calls = [];
   h.sms.failWith = null;
   h.email.calls = [];
@@ -116,6 +117,57 @@ describe('retry with exponential backoff', () => {
     expect(a.created).toBe(true);
     expect(b.created).toBe(false);
     expect(await h.models.Notification.countDocuments({ dedupeKey: 'same-key' })).toBe(1);
+  });
+});
+
+/** Make the "mark SENT" write fail `times` times (the provider call itself keeps working). */
+function failSentWrites(times: number) {
+  const orig = h.models.Notification.findOneAndUpdate.bind(h.models.Notification);
+  let remaining = times;
+  return vi.spyOn(h.models.Notification, 'findOneAndUpdate').mockImplementation(((filter: unknown, update: any, opts: unknown) => {
+    if (update?.$set?.status === 'SENT' && remaining-- > 0) return { lean: () => Promise.reject(new Error('mongo unavailable')) };
+    return (orig as any)(filter, update, opts);
+  }) as never);
+}
+
+describe('a bookkeeping failure after the provider accepted the message never causes a duplicate send', () => {
+  it('transient write failure: the write is retried, the provider is called once, status ends SENT', async () => {
+    const { id } = await enqueueSms();
+    const spy = failSentWrites(1);
+    try {
+      await h.dispatcher.dispatchById(id);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(h.sms.calls).toHaveLength(1);
+    expect(await load(id)).toMatchObject({ status: 'SENT', attempts: 1, provider: 'twilio' });
+    advance(3600);
+    await h.dispatcher.dispatchDue();
+    expect(h.sms.calls).toHaveLength(1);
+  });
+
+  it('persistent write failure: no FAILED/retry is scheduled (row stays SENDING), nothing is re-sent by the poller', async () => {
+    const { id } = await enqueueSms();
+    const spy = failSentWrites(99);
+    try {
+      await h.dispatcher.dispatchById(id);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(h.sms.calls).toHaveLength(1);
+    const doc = await load(id);
+    expect(doc).toMatchObject({ status: 'SENDING', attempts: 1 });
+    expect(doc!.lastError ?? null).toBeNull();
+    advance(60); // before the stuck-SENDING timeout
+    await h.dispatcher.dispatchDue();
+    expect(h.sms.calls).toHaveLength(1);
+  });
+
+  it('a provider failure is still a failure (FAILED + backoff), unlike a post-send write failure', async () => {
+    h.sms.failWith = unavailable();
+    const { id } = await enqueueSms();
+    await h.dispatcher.dispatchById(id);
+    expect(await load(id)).toMatchObject({ status: 'FAILED', attempts: 1 });
   });
 });
 

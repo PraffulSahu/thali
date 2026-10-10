@@ -38,21 +38,6 @@ async function main() {
   const failMode = createFailMode(redis);
   const sms = createSmsProvider(config, { logger, failMode });
   const email = createEmailProvider(config, { logger, failMode });
-  const dispatcher = createDispatcher({
-    models,
-    sms,
-    email,
-    realtime: createRealtimePublisher(redis, logger),
-    encryptionKey: config.FIELD_ENCRYPTION_KEY,
-    maxAttempts: config.NOTIF_MAX_ATTEMPTS,
-    retryBaseSec: config.NOTIF_RETRY_BASE_SEC,
-    retryMaxSec: config.NOTIF_RETRY_MAX_SEC,
-    sendingTimeoutSec: config.NOTIF_SENDING_TIMEOUT_SEC,
-    statusCallbackUrl: config.TWILIO_STATUS_CALLBACK_URL ?? (config.PUBLIC_API_URL ? `${config.PUBLIC_API_URL.replace(/\/+$/, '')}/api/v1/webhooks/twilio/status` : undefined),
-    logger,
-    onProviderError: (provider) => void recordProviderError(redis, 'notifications', provider).catch(() => undefined),
-  });
-
   const secret = config.INTERNAL_SERVICE_SECRET;
   const directory = createIdentityDirectory(internalClient('identity', config.IDENTITY_URL, { from: 'notifications', secret }));
   const ordersClient = internalClient('orders', config.ORDERS_URL, { from: 'notifications', secret });
@@ -66,6 +51,23 @@ async function main() {
       }
     },
   };
+
+  const dispatcher = createDispatcher({
+    models,
+    sms,
+    email,
+    realtime: createRealtimePublisher(redis, logger),
+    directory,
+    orders,
+    encryptionKey: config.FIELD_ENCRYPTION_KEY,
+    maxAttempts: config.NOTIF_MAX_ATTEMPTS,
+    retryBaseSec: config.NOTIF_RETRY_BASE_SEC,
+    retryMaxSec: config.NOTIF_RETRY_MAX_SEC,
+    sendingTimeoutSec: config.NOTIF_SENDING_TIMEOUT_SEC,
+    statusCallbackUrl: config.TWILIO_STATUS_CALLBACK_URL ?? (config.PUBLIC_API_URL ? `${config.PUBLIC_API_URL.replace(/\/+$/, '')}/api/v1/webhooks/twilio/status` : undefined),
+    logger,
+    onProviderError: (provider) => void recordProviderError(redis, 'notifications', provider).catch(() => undefined),
+  });
 
   const hub = await createRealtimeHub({
     redis,
@@ -85,7 +87,7 @@ async function main() {
     service: 'notifications',
     streamPrefix: config.EVENT_STREAM_PREFIX,
     streams: CONSUMED_STREAMS,
-    handlers: createEventHandlers({ dispatcher, directory, orders, logger }),
+    handlers: createEventHandlers({ dispatcher, logger }),
   });
   const worker = startRetryWorker({ redis, dispatcher, logger, intervalMs: config.NOTIF_POLL_MS });
 

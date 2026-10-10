@@ -14,6 +14,7 @@ import type { ProviderCallbackModel } from '../models/provider-callback.js';
 import type { EmailProvider } from '../providers/email.js';
 import type { SmsProvider } from '../providers/sms.js';
 import type { RealtimePublisher } from '../realtime/publish.js';
+import { skipReason, type OrdersLookup, type RecipientDirectory } from './recipients.js';
 import { describeError, isRetryable, nextDelaySec } from './retry.js';
 import { isTemplateName, maskEmail, maskPhone, renderTemplate, templateDef, type Channel, type TemplateData, type TemplateName } from './templates.js';
 
@@ -23,8 +24,10 @@ export interface EnqueueInput {
   data: TemplateData;
   dedupeKey: string;
   userId?: string;
-  /** Raw phone (E.164) / email address for SMS and EMAIL. */
+  /** Raw phone (E.164) / email address for SMS and EMAIL. Omit to resolve from `userId` at dispatch time. */
   to?: string;
+  /** Resolve the user from this child order at dispatch time (refund events carry no user id). */
+  recipientChildOrderId?: string;
   audience?: 'ADMIN';
   sourceEventId?: string;
 }
@@ -34,6 +37,9 @@ export interface DispatcherDeps {
   sms: SmsProvider;
   email: EmailProvider;
   realtime: RealtimePublisher;
+  /** Recipient phone/email + preferences, looked up at dispatch time (never inside a transaction). */
+  directory: RecipientDirectory;
+  orders: OrdersLookup;
   /** base64 32-byte key (`FIELD_ENCRYPTION_KEY`). */
   encryptionKey: string;
   maxAttempts: number;
@@ -70,8 +76,11 @@ export class Dispatcher {
     if (!def.channels.includes(input.channel)) {
       throw new DomainError('VALIDATION_FAILED', `Template '${input.template}' does not support channel ${input.channel}`);
     }
-    if (input.channel !== 'IN_APP' && !input.to) throw new DomainError('VALIDATION_FAILED', `${input.channel} notifications need a recipient address`);
-    if (input.channel === 'IN_APP' && !input.userId && input.audience !== 'ADMIN') {
+    const hasUser = Boolean(input.userId || input.recipientChildOrderId);
+    if (input.channel !== 'IN_APP' && !input.to && !hasUser) {
+      throw new DomainError('VALIDATION_FAILED', `${input.channel} notifications need a recipient address or user`);
+    }
+    if (input.channel === 'IN_APP' && !hasUser && input.audience !== 'ADMIN') {
       throw new DomainError('VALIDATION_FAILED', 'IN_APP notifications need a userId');
     }
 
@@ -83,10 +92,11 @@ export class Dispatcher {
 
     const doc: Partial<NotificationDoc> = {
       userId: input.userId ?? null,
+      recipientChildOrderId: input.recipientChildOrderId ?? null,
       audience: input.audience ?? null,
       channel: input.channel,
-      to: input.channel === 'SMS' ? maskPhone(input.to!) : input.channel === 'EMAIL' ? maskEmail(input.to!) : '',
-      toEnc: input.channel === 'IN_APP' ? null : encryptField(input.to!, this.d.encryptionKey),
+      to: !input.to ? '' : input.channel === 'SMS' ? maskPhone(input.to) : maskEmail(input.to),
+      toEnc: input.to && input.channel !== 'IN_APP' ? encryptField(input.to, this.d.encryptionKey) : null,
       template: input.template,
       data,
       secretEnc: Object.keys(secret).length ? encryptField(JSON.stringify(secret), this.d.encryptionKey) : null,
@@ -155,26 +165,84 @@ export class Dispatcher {
 
   private async deliver(n: NotificationDoc): Promise<void> {
     const id = String(n._id);
+    const provider = n.channel === 'SMS' ? this.d.sms : this.d.email;
+
+    // 1. Recipient resolution (identity / orders): outside any transaction; an outage is an ordinary retryable failure.
+    let to: string | undefined;
+    try {
+      const resolved = await this.resolveRecipient(n);
+      if ('skip' in resolved) return void (await this.recordSkipped(n, resolved.skip));
+      n = resolved.notification;
+      to = resolved.to;
+    } catch (err) {
+      return void (await this.recordFailure(n, n.channel === 'IN_APP' ? 'in_app' : provider.name, err, false));
+    }
+
     if (n.channel === 'IN_APP') {
-      await this.recordSent(id, { provider: 'in_app', providerMessageId: null });
+      await this.persistSent(id, { provider: 'in_app', providerMessageId: null });
       const push = { id, title: n.title ?? '', body: n.body ?? '' };
       if (n.audience === 'ADMIN') await this.d.realtime.toAdmin('notification', push);
       else if (n.userId) await this.d.realtime.toUser(n.userId, 'notification', push);
       return;
     }
-    const provider = n.channel === 'SMS' ? this.d.sms : this.d.email;
+
+    // 2. The provider call is the only thing whose failure means "not sent".
+    let providerMessageId: string;
     try {
-      const to = decryptField(n.toEnc!, this.d.encryptionKey);
       const secret = n.secretEnc ? (JSON.parse(decryptField(n.secretEnc, this.d.encryptionKey)) as TemplateData) : {};
       const rendered = renderTemplate(n.template as TemplateName, { ...n.data, ...secret }, n.channel);
       const result =
         n.channel === 'SMS'
-          ? await this.d.sms.send({ to, body: rendered.text, notificationId: id, statusCallbackUrl: this.d.statusCallbackUrl })
-          : await this.d.email.send({ to, subject: rendered.subject, html: rendered.html, text: rendered.text, idempotencyKey: n.dedupeKey, notificationId: id });
-      await this.recordSent(id, { provider: provider.name, providerMessageId: result.providerMessageId });
+          ? await this.d.sms.send({ to: to!, body: rendered.text, notificationId: id, statusCallbackUrl: this.d.statusCallbackUrl })
+          : await this.d.email.send({ to: to!, subject: rendered.subject, html: rendered.html, text: rendered.text, idempotencyKey: n.dedupeKey, notificationId: id });
+      providerMessageId = result.providerMessageId;
     } catch (err) {
-      await this.recordFailure(n, provider.name, err);
+      return void (await this.recordFailure(n, provider.name, err));
     }
+
+    // 3. The provider accepted the message: a bookkeeping failure must never turn into a retry (duplicate send).
+    await this.persistSent(id, { provider: provider.name, providerMessageId });
+  }
+
+  /** Decrypt a stored recipient, or look the user up (identity) and apply preferences. */
+  private async resolveRecipient(n: NotificationDoc): Promise<{ skip: string } | { to?: string; notification: NotificationDoc }> {
+    const { Notification } = this.d.models;
+    let userId = n.userId ?? undefined;
+    if (!userId && n.recipientChildOrderId) {
+      const order = await this.d.orders.getChildOrder(n.recipientChildOrderId);
+      if (!order) return { skip: 'RECIPIENT_NOT_FOUND' };
+      userId = order.userId;
+      await Notification.updateOne({ _id: n._id }, { $set: { userId } });
+      n = { ...n, userId };
+    }
+    if (n.channel === 'IN_APP') return { notification: n };
+    if (n.toEnc) return { to: decryptField(n.toEnc, this.d.encryptionKey), notification: n };
+    if (!userId) return { skip: 'RECIPIENT_NOT_FOUND' };
+
+    const user = await this.d.directory.getUser(userId);
+    if (!user) return { skip: 'RECIPIENT_NOT_FOUND' };
+    const reason = skipReason(n.template as TemplateName, n.channel, user);
+    if (reason) return { skip: reason };
+    const to = (n.channel === 'SMS' ? user.phone : user.email)!;
+    await Notification.updateOne(
+      { _id: n._id },
+      { $set: { to: n.channel === 'SMS' ? maskPhone(to) : maskEmail(to), toEnc: encryptField(to, this.d.encryptionKey) } },
+    );
+    return { to, notification: n };
+  }
+
+  /** Bounded retry of the post-send write. If it still fails the row stays SENDING (never re-sent from here). */
+  private async persistSent(id: string, info: { provider: string; providerMessageId: string | null }): Promise<boolean> {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await this.recordSent(id, info);
+        return true;
+      } catch (err) {
+        this.d.logger.error({ err, notificationId: id, provider: info.provider, attempt }, 'message accepted by provider but recording the status failed');
+        if (attempt < 3) await new Promise((r) => setTimeout(r, 100 * attempt));
+      }
+    }
+    return false;
   }
 
   /** SENDING|QUEUED|FAILED -> SENT, then apply any provider callback that raced ahead of this write. */
@@ -188,13 +256,22 @@ export class Dispatcher {
     if (updated && info.providerMessageId) await this.applyPendingCallbacks(info.provider, info.providerMessageId);
   }
 
-  private async recordFailure(n: NotificationDoc, provider: string, err: unknown): Promise<void> {
+  private async recordSkipped(n: NotificationDoc, reason: string): Promise<void> {
+    const now = this.now();
+    this.d.logger.info({ notificationId: String(n._id), channel: n.channel, template: n.template, reason }, 'notification skipped');
+    await this.d.models.Notification.updateOne(
+      { _id: n._id, status: 'SENDING' },
+      { $set: { status: 'SKIPPED', skipReason: reason, nextAttemptAt: null, updatedAt: now } },
+    );
+  }
+
+  private async recordFailure(n: NotificationDoc, provider: string, err: unknown, countProviderError = true): Promise<void> {
     const now = this.now();
     const retryable = isRetryable(err);
     const dead = !retryable || n.attempts >= this.d.maxAttempts;
-    this.d.onProviderError?.(provider);
+    if (countProviderError) this.d.onProviderError?.(provider);
     this.d.logger.warn(
-      { notificationId: String(n._id), channel: n.channel, provider, attempt: n.attempts, retryable, final: dead, status: (err as { status?: number }).status, code: (err as { code?: string }).code },
+      { notificationId: String(n._id), channel: n.channel, provider, attempt: n.attempts, retryable, final: dead, status: (err as { status?: number }).status, code: (err as { code?: string }).code, ...(countProviderError ? {} : { stage: 'recipient-lookup' }) },
       'notification delivery failed',
     );
     await this.d.models.Notification.updateOne(
@@ -232,19 +309,22 @@ export class Dispatcher {
       updatedAt: now,
     });
     const id = String(created._id);
+    let providerMessageId: string;
     try {
       const result = await this.d.sms.send({ to: phone, body: renderTemplate('otp', { code }, 'SMS').text, notificationId: id, statusCallbackUrl: this.d.statusCallbackUrl });
-      await this.recordSent(id, { provider: this.d.sms.name, providerMessageId: result.providerMessageId });
-      return { id };
+      providerMessageId = result.providerMessageId;
     } catch (err) {
       this.d.onProviderError?.(this.d.sms.name);
       this.d.logger.warn({ notificationId: id, provider: this.d.sms.name, status: (err as { status?: number }).status, code: (err as { code?: string }).code }, 'otp delivery failed');
       await this.d.models.Notification.updateOne(
         { _id: id, status: 'SENDING' },
         { $set: { status: 'FAILED', nextAttemptAt: null, lastError: describeError(err), updatedAt: this.now() } },
-      );
+      ).catch((e) => this.d.logger.error({ err: e, notificationId: id }, 'could not record otp failure'));
       throw new DomainError('OTP_DELIVERY_FAILED', 'We could not send the verification code. Please try again shortly.');
     }
+    // The SMS is out: whatever happens to the bookkeeping, the caller must see success (never 503 after sending).
+    await this.persistSent(id, { provider: this.d.sms.name, providerMessageId });
+    return { id };
   }
 
   // ---------- provider status callbacks ----------

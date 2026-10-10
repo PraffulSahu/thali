@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { afterAll, beforeAll, describe, expect, it, beforeEach } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, beforeEach, vi } from 'vitest';
 import { createHarness, unavailable, type Harness } from './helpers.js';
 
 const CODE = '483920';
@@ -41,6 +41,21 @@ describe('POST /internal/notifications/otp', () => {
     expect(doc!.toEnc).toMatch(/^v1:/);
     expect(doc!.title ?? '').not.toContain(CODE);
     expect(doc!.body ?? '').not.toContain(CODE);
+  });
+
+  it('SMS accepted by the provider but the status write fails -> still 202 (never 503 after sending), sent exactly once', async () => {
+    const orig = h.models.Notification.findOneAndUpdate.bind(h.models.Notification);
+    const spy = vi.spyOn(h.models.Notification, 'findOneAndUpdate').mockImplementation(((filter: unknown, update: any, opts: unknown) =>
+      update?.$set?.status === 'SENT' ? { lean: () => Promise.reject(new Error('mongo unavailable')) } : (orig as any)(filter, update, opts)) as never);
+    try {
+      const res = await post({ phone: PHONE, code: CODE });
+      expect(res.status).toBe(202);
+      expect(h.sms.calls).toHaveLength(1);
+      const doc = await h.models.Notification.findById(res.body.notificationId).lean();
+      expect(doc!.status).toBe('SENDING'); // bookkeeping lagged; the OTP itself was delivered
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('normalizes phone variants before sending', async () => {

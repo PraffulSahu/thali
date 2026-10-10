@@ -131,12 +131,21 @@ describe('GET /realtime/stream', () => {
 
   it('admin channel only for ADMIN tokens that completed MFA', async () => {
     const admin = await openStream((await ticketFor(await h.adminToken(oid()))).body.ticket);
-    const pwdOnly = await openStream((await ticketFor(await h.adminToken(oid(), { mfa: false }))).body.ticket);
-    const plain = await openStream((await ticketFor(await h.userToken(oid()))).body.ticket);
+    const pwdUser = oid();
+    const plainUser = oid();
+    const pwdOnly = await openStream((await ticketFor(await h.adminToken(pwdUser, { mfa: false }))).body.ticket);
+    const plain = await openStream((await ticketFor(await h.userToken(plainUser))).body.ticket);
     await Promise.all([admin.waitFor(': ping'), pwdOnly.waitFor(': ping'), plain.waitFor(': ping')]);
     await waitFor(async () => (await publishRealtime(h.redis, 'admin', 'notification', { id: 'a1', title: 'Exception', body: 'x' })) >= 1);
     await admin.waitFor('"Exception"');
-    await new Promise((r) => setTimeout(r, 250));
+    // Redis pub/sub is ordered per connection: a marker published AFTER the admin message and received by the
+    // non-admin streams proves the admin message would already have arrived if they were subscribed to it.
+    const markers = [pwdOnly, plain].map((_, i) => `marker-${i}-${oid()}`);
+    for (const [i, s] of [pwdOnly, plain].entries()) {
+      const uid = i === 0 ? pwdUser : plainUser;
+      await publishRealtime(h.redis, `user:${uid}`, 'notification', { id: markers[i], title: 'm', body: 'm' });
+      await s.waitFor(markers[i]!);
+    }
     expect(pwdOnly.text()).not.toContain('Exception');
     expect(plain.text()).not.toContain('Exception');
     await Promise.all([admin.close(), pwdOnly.close(), plain.close()]);

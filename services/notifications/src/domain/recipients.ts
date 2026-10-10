@@ -58,12 +58,25 @@ export function createIdentityDirectory(identity: InternalClient): RecipientDire
   };
 }
 
-export function planChannels(template: TemplateName, user: IdentityUser): Channel[] {
+/** orders `GET /internal/orders/child/:id` (binding shape): only what we need. */
+export interface OrdersLookup {
+  /** `null` = unknown order. Throws when orders is unreachable. */
+  getChildOrder(childOrderId: string): Promise<{ id: string; userId: string } | null>;
+}
+
+/**
+ * Why SMS/email must NOT be sent to this user (`null` = send). Decided at dispatch time, outside any transaction:
+ * blocked users and missing addresses never get SMS/email; otherwise the preference (or the template's
+ * transactional flag) decides. In-app is never skipped.
+ */
+export function skipReason(template: TemplateName, channel: Channel, user: IdentityUser): string | null {
+  if (channel === 'IN_APP') return null;
   const def = templateDef(template);
-  const out: Channel[] = [];
-  const active = user.status === 'ACTIVE';
-  if (def.channels.includes('IN_APP')) out.push('IN_APP');
-  if (def.channels.includes('SMS') && active && user.phone && (def.transactionalSms || user.notificationPrefs.orderSms)) out.push('SMS');
-  if (def.channels.includes('EMAIL') && active && user.email && (def.transactionalEmail || user.notificationPrefs.orderEmail)) out.push('EMAIL');
-  return out;
+  if (user.status !== 'ACTIVE') return 'USER_BLOCKED';
+  if (channel === 'SMS') {
+    if (!user.phone) return 'NO_PHONE';
+    return def.transactionalSms || user.notificationPrefs.orderSms ? null : 'OPTED_OUT';
+  }
+  if (!user.email) return 'NO_EMAIL';
+  return def.transactionalEmail || user.notificationPrefs.orderEmail ? null : 'OPTED_OUT';
 }
