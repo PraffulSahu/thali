@@ -27,7 +27,7 @@ describe('reconciliation', () => {
     const token = await internalToken('orders');
     const res = await request(h.app).post(`/internal/payment-intents/${intent.id}/reconcile`).set('authorization', `Bearer ${token}`);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ paymentIntentId: intent.id, status: 'CAPTURED', capturedPaise: 25_000 });
+    expect(res.body).toEqual({ paymentIntentId: intent.id, status: 'CAPTURED', capturedPaise: 25_000, refundedPaise: 0, refundReservedPaise: 0 });
     expect(await captured(intent.id)).toBe(1);
     // idempotent: reconciling again emits nothing new
     const again = await reconcileIntent(h.ctx, intent.id);
@@ -36,12 +36,16 @@ describe('reconciliation', () => {
     const doc = await h.ctx.models.PaymentIntent.findById(intent.id).lean();
     expect(doc!.lastReconciledAt).toBeTruthy();
     expect(doc!.providerPaymentId).toBe('pay_r1');
+    // refund progress is reported so orders can refund only what is left on a late payment
+    await h.ctx.models.PaymentIntent.updateOne({ _id: intent.id }, { $set: { refundedPaise: 4_000, refundReservedPaise: 9_000 } });
+    const withRefunds = await request(h.app).post(`/internal/payment-intents/${intent.id}/reconcile`).set('authorization', `Bearer ${token}`);
+    expect(withRefunds.body).toMatchObject({ capturedPaise: 25_000, refundedPaise: 4_000, refundReservedPaise: 9_000 });
   });
 
   it('provider reports nothing → stays CREATED and returns {status:"CREATED"}', async () => {
     const intent = await newIntent();
     const res = await reconcileIntent(h.ctx, intent.id);
-    expect(res).toEqual({ paymentIntentId: intent.id, status: 'CREATED', capturedPaise: 0 });
+    expect(res).toEqual({ paymentIntentId: intent.id, status: 'CREATED', capturedPaise: 0, refundedPaise: 0, refundReservedPaise: 0 });
     expect(await captured(intent.id)).toBe(0);
   });
 

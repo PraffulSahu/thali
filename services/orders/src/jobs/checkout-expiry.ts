@@ -4,7 +4,7 @@
  * captured" / "webhook missed"):
  *   - CAPTURED (amount == total)  → placed exactly like `payment.captured`
  *   - CAPTURED (amount differs), PARTIALLY_REFUNDED, REFUNDED → EXPIRED + `checkout.released` +
- *     `checkout.late_payment` (refund of what was captured)
+ *     `checkout.late_payment` (refund of what is still unrefunded: captured − max(refunded, reserved))
  *   - AUTHORIZED within AUTHORIZED_GRACE_SEC of expiry → left alone (payments auto-captures)
  *   - otherwise (CREATED / FAILED / no intent at all) → EXPIRED + `checkout.released`
  *   - payments unreachable → skipped; retried next tick (never expire without a reconcile)
@@ -61,7 +61,11 @@ export async function sweepCheckout(ctx: OrdersContext, g: Pick<CheckoutGroup, '
       if (!group || group.status !== 'AWAITING_PAYMENT') return 'NOOP';
       const detail = rec!.status === 'CAPTURED' ? 'captured amount mismatch' : `payment ${rec!.status.toLowerCase()} at expiry`;
       await releaseCheckout(ctx, session, group, 'EXPIRED', { detail, paymentStatus: rec!.status });
-      await applyCapturedPayment(ctx, session, { checkoutId: String(g._id), paymentIntentId: intentId, amountPaise: capturedPaise, source: 'reconcile' });
+      // Refund only what has not already been refunded (or reserved for an in-flight refund); a fully refunded
+      // payment yields 0, which payments skips.
+      const alreadyPaise = Math.max(rec!.refundedPaise ?? 0, rec!.refundReservedPaise ?? 0);
+      const refundablePaise = Math.max(0, capturedPaise - alreadyPaise);
+      await applyCapturedPayment(ctx, session, { checkoutId: String(g._id), paymentIntentId: intentId, amountPaise: refundablePaise, source: 'reconcile' });
       return 'EXPIRED_LATE_PAYMENT';
     });
   }

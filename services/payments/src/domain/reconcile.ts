@@ -14,6 +14,10 @@ export interface ReconcileResult {
   paymentIntentId: string;
   status: PaymentIntentDoc['status'];
   capturedPaise: number;
+  /** Provider-confirmed refunds so far. */
+  refundedPaise: number;
+  /** Refunds reserved (requested/in flight + succeeded). */
+  refundReservedPaise: number;
 }
 
 async function apply(ctx: PaymentsContext, intentId: string, signal: PaymentSignal) {
@@ -60,7 +64,13 @@ export async function reconcileIntent(ctx: PaymentsContext, intentId: string): P
     }
   }
   const updated = await PaymentIntent.findOneAndUpdate({ _id: intent._id }, { $set: { lastReconciledAt: ctx.now() } }, { new: true });
-  return { paymentIntentId: intentId, status: updated!.status, capturedPaise: updated!.capturedPaise };
+  return {
+    paymentIntentId: intentId,
+    status: updated!.status,
+    capturedPaise: updated!.capturedPaise,
+    refundedPaise: updated!.refundedPaise ?? 0,
+    refundReservedPaise: updated!.refundReservedPaise ?? 0,
+  };
 }
 
 /** Job: AUTHORIZED beyond the capture threshold, and CREATED intents with no recent reconciliation (missed webhooks). */

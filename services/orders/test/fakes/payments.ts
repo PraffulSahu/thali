@@ -12,7 +12,7 @@ export class FakePayments implements PaymentsClient {
   /** Throw from reconcile. */
   reconcileDown = false;
   /** Status reconcile reports, per intent id (default: the intent's current status). */
-  reconcileStatus = new Map<string, { status: PaymentStatus; capturedPaise: number }>();
+  reconcileStatus = new Map<string, { status: PaymentStatus; capturedPaise: number; refundedPaise?: number; refundReservedPaise?: number }>();
 
   async createIntent(req: CreateIntentRequest): Promise<PaymentIntentView> {
     this.createCalls.push(req);
@@ -43,7 +43,13 @@ export class FakePayments implements PaymentsClient {
     const i = this.intents.get(intentId);
     if (!i) throw new DomainError('NOT_FOUND', 'intent not found', 404);
     const forced = this.reconcileStatus.get(intentId);
-    return { paymentIntentId: intentId, status: forced?.status ?? i.status, capturedPaise: forced?.capturedPaise ?? i.capturedPaise };
+    return {
+      paymentIntentId: intentId,
+      status: forced?.status ?? i.status,
+      capturedPaise: forced?.capturedPaise ?? i.capturedPaise,
+      refundedPaise: forced?.refundedPaise ?? 0,
+      refundReservedPaise: forced?.refundReservedPaise ?? 0,
+    };
   }
 
   async getByReference(purpose: 'CHECKOUT' | 'MEMBERSHIP', refId: string): Promise<PaymentIntentView | null> {

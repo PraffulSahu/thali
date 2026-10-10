@@ -1,7 +1,7 @@
 /**
  * Payments internal client (binding shapes in service-context.md):
  *  - `POST /internal/payment-intents {purpose, referenceId, userId, amountPaise}` → intent (idempotent per purpose+referenceId)
- *  - `POST /internal/payment-intents/:id/reconcile` → `{ paymentIntentId, status, capturedPaise }`
+ *  - `POST /internal/payment-intents/:id/reconcile` → `{ paymentIntentId, status, capturedPaise, refundedPaise, refundReservedPaise }`
  *  - `GET /internal/payment-intents/by-reference/:purpose/:refId` → intent or 404
  */
 import { z } from 'zod';
@@ -25,6 +25,9 @@ export const ReconcileResultSchema = z.object({
   paymentIntentId: z.string(),
   status: z.enum(enumValues(PaymentStatus)),
   capturedPaise: z.number().int().nonnegative(),
+  /** Already refunded / reserved for refunds (older payments builds omit them → 0). */
+  refundedPaise: z.number().int().nonnegative().default(0),
+  refundReservedPaise: z.number().int().nonnegative().default(0),
 });
 export type ReconcileResult = z.output<typeof ReconcileResultSchema>;
 

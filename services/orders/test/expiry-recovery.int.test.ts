@@ -114,6 +114,33 @@ describe('checkout-expiry sweeper (LLD §8 sweeper a)', () => {
     }
   });
 
+  it('late-payment refund = captured − already refunded/reserved (not the full captured amount)', async () => {
+    const lateFor = async (checkoutId: string) => (await outboxEvents(h, 'checkout.late_payment')).filter((e) => e.payload.checkoutId === checkoutId);
+    const total = (c: Awaited<ReturnType<typeof newCheckout>>) => c.checkout.pricing.totalPaise;
+
+    const partly = await newCheckout();
+    await expireNow(partly.checkout.id);
+    h.payments.reconcileStatus.set(partly.payment.intentId, { status: 'PARTIALLY_REFUNDED', capturedPaise: total(partly), refundedPaise: 3000, refundReservedPaise: 3000 });
+    await runCheckoutExpiry(h.ctx);
+    expect((await group(partly.checkout.id))!.status).toBe('EXPIRED');
+    expect((await lateFor(partly.checkout.id)).map((e) => e.payload.amountPaise)).toEqual([total(partly) - 3000]);
+
+    // an in-flight (reserved, not yet refunded) refund also counts
+    const inflight = await newCheckout();
+    await expireNow(inflight.checkout.id);
+    h.payments.reconcileStatus.set(inflight.payment.intentId, { status: 'CAPTURED', capturedPaise: 5000, refundedPaise: 1000, refundReservedPaise: 2500 });
+    await runCheckoutExpiry(h.ctx);
+    expect((await lateFor(inflight.checkout.id)).map((e) => e.payload.amountPaise)).toEqual([2500]);
+
+    // fully refunded → nothing left to refund (0; payments skips zero refunds)
+    const full = await newCheckout();
+    await expireNow(full.checkout.id);
+    h.payments.reconcileStatus.set(full.payment.intentId, { status: 'REFUNDED', capturedPaise: total(full), refundedPaise: total(full), refundReservedPaise: total(full) });
+    await runCheckoutExpiry(h.ctx);
+    expect((await group(full.checkout.id))!.status).toBe('EXPIRED');
+    expect((await lateFor(full.checkout.id)).map((e) => e.payload.amountPaise)).toEqual([0]);
+  });
+
   it('checkout without a stored intent (crash before createIntent) → looks up by reference, then expires', async () => {
     const c = await newCheckout();
     await h.db.conn

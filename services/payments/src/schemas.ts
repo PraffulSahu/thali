@@ -46,7 +46,7 @@ export const IntentViewSchema = z
   .meta({ id: 'PaymentIntent' });
 
 export const ReconcileResultSchema = z
-  .object({ paymentIntentId: z.string(), status: PaymentStatusSchema, capturedPaise: Paise })
+  .object({ paymentIntentId: z.string(), status: PaymentStatusSchema, capturedPaise: Paise, refundedPaise: Paise, refundReservedPaise: Paise })
   .meta({ id: 'ReconcileResult' });
 
 export const IntentIdParams = z.object({ id: Id });
