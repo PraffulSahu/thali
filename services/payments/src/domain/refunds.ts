@@ -7,8 +7,13 @@
  *    (timeout/5xx) and changes only after a definitive rejection.
  *  - "Refunded" (SUCCEEDED, intent.refundedPaise) only on provider confirmation: `processed` in the
  *    create response, `refund.processed` webhook, or a fetchRefund poll.
- * FAILED refunds keep their reservation (they are retried automatically or by an admin), so the
- * reserved total never under-counts money that may still leave.
+ * Failure handling:
+ *  - uncertain failures (timeout/network/5xx/429/409, expired lease) keep the reservation and are
+ *    retried automatically with the SAME provider key (the provider dedupes if it actually refunded);
+ *  - a DEFINITIVE provider rejection (4xx, provider-reported `failed`, payment not captured) ends the
+ *    refund as FAILED, releases its reservation (so a replacement refund is possible) and is never
+ *    retried automatically; an admin retry re-reserves atomically (422 if no longer available) and
+ *    uses a fresh provider key.
  */
 import {
   DomainError,
@@ -180,6 +185,7 @@ export async function markRefundSucceeded(
         lockedUntil: null,
         nextAttemptAt: null,
         lastError: null,
+        reserved: true,
         ...(opts.providerRefundId && !refund.providerRefundId ? { providerRefundId: opts.providerRefundId } : {}),
       },
       $push: { statusHistory: { $each: entries } },
@@ -191,6 +197,14 @@ export async function markRefundSucceeded(
 
   const intent = await PaymentIntent.findById(refund.paymentIntentId).session(session);
   if (!intent) throw new DomainError('NOT_FOUND', 'Payment intent missing for refund');
+  if (!refund.reserved) {
+    // Money left even though the reservation had been released (e.g. a late `refund.processed` after a
+    // definitive failure): re-reserve so refundReservedPaise never under-counts refunded money.
+    if (intent.refundReservedPaise + refund.amountPaise > intent.capturedPaise) {
+      ctx.logger.error({ alert: 'REFUND_OVER_RESERVED', refundId: refund.id, paymentIntentId: intent.id }, 'late refund success exceeds captured');
+    }
+    await PaymentIntent.updateOne({ _id: intent._id }, { $inc: { refundReservedPaise: refund.amountPaise } }, { session });
+  }
   const refunded = intent.refundedPaise + refund.amountPaise;
   if (refunded > intent.capturedPaise) {
     ctx.logger.error({ alert: 'REFUND_OVER_CAPTURE', paymentIntentId: intent.id, refundId: refund.id, refunded, captured: intent.capturedPaise }, 'refunds exceed captured');
@@ -228,8 +242,9 @@ export async function markRefundSucceeded(
 }
 
 /**
- * Attempt failed. `definitive` (provider rejected / reported failed) → next attempt uses a fresh
- * provider key; otherwise (timeout/5xx) the same key is reused so the provider dedupes.
+ * Attempt failed. `definitive` (provider rejected / reported failed) → final FAILED, reservation
+ * released, next (admin) attempt uses a fresh provider key; otherwise (timeout/5xx) backoff and the same
+ * key is reused so the provider dedupes.
  */
 export async function markRefundFailed(
   ctx: PaymentsContext,
@@ -240,7 +255,8 @@ export async function markRefundFailed(
   const from = refund.status;
   assertTransition(refundTransitions, from, 'FAILED', 'SYSTEM');
   const now = ctx.now();
-  const final = refund.attempts >= refund.maxAttempts;
+  const final = opts.definitive || refund.attempts >= refund.maxAttempts;
+  const release = opts.definitive && refund.reserved;
   const nextAttemptAt = final ? null : new Date(now.getTime() + ctx.config.REFUND_BACKOFF_BASE_MS * 2 ** Math.max(0, refund.attempts - 1));
   const updated = await ctx.models.Refund.findOneAndUpdate(
     { _id: refund._id, status: from },
@@ -252,6 +268,7 @@ export async function markRefundFailed(
         lockedUntil: null,
         processingSince: null,
         ...(opts.definitive ? { providerRefundId: null } : {}),
+        ...(release ? { reserved: false } : {}),
       },
       $inc: { version: 1, ...(opts.definitive ? { providerKeySeq: 1 } : {}) },
       $push: { statusHistory: history(from, 'FAILED', now, opts.source) },
@@ -259,8 +276,21 @@ export async function markRefundFailed(
     { session, new: true },
   );
   if (!updated) throw new DomainError('CONCURRENT_MODIFICATION', 'Refund changed concurrently');
+  if (release) {
+    const r = await ctx.models.PaymentIntent.updateOne(
+      { _id: refund.paymentIntentId, refundReservedPaise: { $gte: refund.amountPaise } },
+      { $inc: { refundReservedPaise: -refund.amountPaise, version: 1 } },
+      { session },
+    );
+    if (r.modifiedCount !== 1) {
+      ctx.logger.error({ alert: 'REFUND_RESERVATION_INCONSISTENT', refundId: refund.id, paymentIntentId: refund.paymentIntentId }, 'could not release refund reservation');
+    }
+  }
   if (final) {
-    ctx.logger.error({ alert: 'REFUND_FAILED_FINAL', refundId: refund.id, attempts: refund.attempts, error: opts.error }, 'refund failed after max attempts');
+    ctx.logger.error(
+      { alert: 'REFUND_FAILED_FINAL', refundId: refund.id, attempts: refund.attempts, definitive: opts.definitive, released: release, error: opts.error },
+      opts.definitive ? 'refund definitively rejected by provider; reservation released' : 'refund failed after max attempts',
+    );
     await emitRefund(ctx, session, 'refund.failed', updated, 'FAILED');
   } else {
     ctx.logger.warn({ refundId: refund.id, attempts: refund.attempts, nextAttemptAt, error: opts.error }, 'refund attempt failed; will retry');
@@ -402,7 +432,7 @@ export async function reconcileProcessingRefunds(ctx: PaymentsContext, signal?: 
   }
 }
 
-/** Admin manual retry of a FAILED refund (re-reserves if the original could not be reserved). */
+/** Admin manual retry of a FAILED refund (re-reserves atomically when the reservation was released or never made; 422 if no longer available). */
 export async function adminRetryRefund(ctx: PaymentsContext, refundId: string, actor: { userId: string; ip?: string }, audit: (session: ClientSession, r: RefundDoc) => Promise<void>) {
   const { Refund, PaymentIntent } = ctx.models;
   if (!isValidObjectId(refundId)) throw new DomainError('NOT_FOUND', 'Refund not found');

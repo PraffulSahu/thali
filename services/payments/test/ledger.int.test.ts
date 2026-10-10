@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { withTransaction } from '@thali/service-kit';
 import type { EventPayloads } from '@thali/contracts';
 import { createIntent } from '../src/domain/intents.js';
-import { accountSummary, deliveryEarningPaise } from '../src/domain/ledger.js';
+import { accountSummary, deliveryEarningPaise, postEntry } from '../src/domain/ledger.js';
 import { reconcileIntent } from '../src/domain/reconcile.js';
 import { processDueRefunds } from '../src/domain/refunds.js';
 import { createEventHandlers } from '../src/events/handlers.js';
@@ -62,7 +62,7 @@ describe('ledger on order.delivered', () => {
       accountType: 'RESTAURANT',
       accountId: p.restaurantId,
       entryType: 'ORDER_EARNING',
-      amountPaise: 53_000 - 7_794 - 0 + 2_000,
+      amountPaise: 53_000 + 2_000, // ruling: discounts are platform-funded (not subtracted)
     });
     expect(byKey[`commission:${p.childOrderId}`]).toMatchObject({
       accountType: 'RESTAURANT',
@@ -91,12 +91,12 @@ describe('ledger on order.delivered', () => {
     expect(r).toMatchObject({
       accountType: 'RESTAURANT',
       accountId: p.restaurantId,
-      balancePaise: 2 * (47_206 - 9_540),
-      availablePaise: 2 * (47_206 - 9_540),
+      balancePaise: 2 * (55_000 - 9_540),
+      availablePaise: 2 * (55_000 - 9_540),
       pendingPayoutPaise: 0,
       paidOutPaise: 0,
     });
-    expect(r.totalsByType).toMatchObject({ ORDER_EARNING: 2 * 47_206, COMMISSION: -2 * 9_540 });
+    expect(r.totalsByType).toMatchObject({ ORDER_EARNING: 2 * 55_000, COMMISSION: -2 * 9_540 });
     const partner = await accountSummary(h.ctx, 'PARTNER', p.partnerUserId);
     expect(partner.balancePaise).toBe(7000 + (3000 + 2 * 800));
   });
@@ -108,13 +108,56 @@ describe('ledger on order.delivered', () => {
     cfg.PAYOUT_HOLD_DAYS = 2;
     try {
       const s = await accountSummary(h.ctx, 'RESTAURANT', p.restaurantId);
-      expect(s.balancePaise).toBe(37_666);
+      expect(s.balancePaise).toBe(45_460);
       expect(s.availablePaise).toBe(0);
       h.clock.advance(2 * 86_400_000 + 1000);
-      expect((await accountSummary(h.ctx, 'RESTAURANT', p.restaurantId)).availablePaise).toBe(37_666);
+      expect((await accountSummary(h.ctx, 'RESTAURANT', p.restaurantId)).availablePaise).toBe(45_460);
     } finally {
       cfg.PAYOUT_HOLD_DAYS = 0;
     }
+  });
+
+  it('with a hold period, negative entries apply immediately and available never exceeds balance − pending', async () => {
+    const rid = oid();
+    const post = (amountPaise: number, entryType: 'ORDER_EARNING' | 'REFUND_ADJUSTMENT') =>
+      withTransaction(h.ctx.conn, (s) =>
+        postEntry(h.ctx, s, {
+          accountType: 'RESTAURANT',
+          accountId: rid,
+          entryType,
+          amountPaise,
+          dedupeKey: `t:${randomBytes(6).toString('hex')}`,
+          memo: 't',
+          createdBy: 'test',
+        }),
+      );
+    await post(10_000, 'ORDER_EARNING'); // will be matured
+    const cfg = h.ctx.config as { PAYOUT_HOLD_DAYS: number };
+    cfg.PAYOUT_HOLD_DAYS = 2;
+    try {
+      h.clock.advance(3 * 86_400_000);
+      await post(-6_000, 'REFUND_ADJUSTMENT'); // fresh negative: applies immediately
+      await post(5_000, 'ORDER_EARNING'); // fresh positive: held
+      let s = await accountSummary(h.ctx, 'RESTAURANT', rid);
+      expect(s.balancePaise).toBe(9_000);
+      expect(s.availablePaise).toBe(4_000);
+      await post(-12_000, 'REFUND_ADJUSTMENT'); // balance goes negative → available floors at 0
+      s = await accountSummary(h.ctx, 'RESTAURANT', rid);
+      expect(s.balancePaise).toBe(-3_000);
+      expect(s.availablePaise).toBe(0);
+      h.clock.advance(3 * 86_400_000);
+      expect((await accountSummary(h.ctx, 'RESTAURANT', rid)).availablePaise).toBe(0);
+    } finally {
+      cfg.PAYOUT_HOLD_DAYS = 0;
+    }
+  });
+
+  it('missing deliveryDistanceKm → base rate only + LEDGER_DISTANCE_MISSING alert', async () => {
+    const p = delivered({ deliveryDistanceKm: undefined as unknown as number });
+    await deliver(p);
+    const [e] = await h.ctx.models.LedgerEntry.find({ dedupeKey: `delivery:${p.deliveryJobId}` }).lean();
+    expect(e!.amountPaise).toBe(3000);
+    expect(h.logs.some((l) => l.alert === 'LEDGER_DISTANCE_MISSING' && l.childOrderId === p.childOrderId)).toBe(true);
   });
 
   it('delivery earning uses integer ceil of the distance with float noise removed', () => {

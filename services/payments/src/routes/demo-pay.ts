@@ -71,6 +71,9 @@ export function demoPayRouter(ctx: PaymentsContext): Router {
   r.post('/api/v1/demo-pay/:intentId/complete', vComplete, async (req, res) => {
     const { params, body } = vComplete.get(req);
     const intent = await load(params.intentId);
+    if (!['CREATED', 'AUTHORIZED', 'FAILED'].includes(intent.status)) {
+      throw new DomainError('PAYMENT_INVALID_TRANSITION', `Payment is already ${intent.status}`, 409, { status: intent.status });
+    }
     const mock = ctx.provider as MockProvider;
     const orderId = intent.providerOrderId!;
     const bodies =

@@ -174,6 +174,8 @@ describe('refund lifecycle', () => {
     expect(r.attempts).toBe(1);
     expect(r.nextAttemptAt!.getTime()).toBe(h.clock.now.getTime() + 60_000);
     expect(r.lastError).toMatch(/503/);
+    expect(r.reserved).toBe(true); // uncertain failure keeps the reservation
+    expect((await intentDoc(intent.id)).refundReservedPaise).toBe(4000);
     // not yet due
     await processDueRefunds(h.ctx);
     expect(h.fake.refund).toHaveBeenCalledTimes(1);
@@ -192,21 +194,72 @@ describe('refund lifecycle', () => {
     expect(await outboxCount('refund.succeeded', String(r._id))).toBe(1);
   });
 
-  it('a definitive provider rejection (4xx) retries with a fresh provider idempotency key', async () => {
+  it('a definitive provider rejection (4xx) ends FAILED, releases the reservation, is not auto-retried; a replacement refund is then possible and an admin retry of the original → 422', async () => {
     const { intent, checkoutId } = await capturedIntent(10_000);
     const childOrderId = oid();
     await runHandler(
-      envelope('order.cancelled', { childOrderId, checkoutId, userId: intent.userId, restaurantId: oid(), actor: 'CUSTOMER', reason: 'x', refundPaise: 1000 }),
+      envelope('order.cancelled', { childOrderId, checkoutId, userId: intent.userId, restaurantId: oid(), actor: 'CUSTOMER', reason: 'x', refundPaise: 10_000 }),
+    );
+    expect((await intentDoc(intent.id)).refundReservedPaise).toBe(10_000);
+    h.fake.refund.mockClear();
+    h.fake.refund.mockImplementationOnce(async () => {
+      throw new PaymentProviderError('HTTP 400 BAD_REQUEST_ERROR', { retryable: false, status: 400 });
+    });
+    await processDueRefunds(h.ctx);
+    const r = (await refundsFor(childOrderId))[0]!;
+    expect(r).toMatchObject({ status: 'FAILED', reserved: false, nextAttemptAt: null, providerKeySeq: 1 });
+    expect((await intentDoc(intent.id)).refundReservedPaise).toBe(0);
+    expect(await outboxCount('refund.failed', String(r._id))).toBe(1);
+    h.clock.advance(24 * 3_600_000);
+    await processDueRefunds(h.ctx);
+    expect(h.fake.refund).toHaveBeenCalledTimes(1); // never auto-retried
+
+    const token = await adminToken(h.keys);
+    const replacement = await request(h.app)
+      .post('/api/v1/admin/finance/refunds')
+      .set('authorization', `Bearer ${token}`)
+      .set('idempotency-key', `idem-${randomBytes(6).toString('hex')}`)
+      .send({ paymentIntentId: intent.id, childOrderId, amountPaise: 10_000, note: 'replacement' });
+    expect(replacement.status).toBe(201);
+    const retry = await request(h.app).post(`/api/v1/admin/finance/refunds/${String(r._id)}/retry`).set('authorization', `Bearer ${token}`);
+    expect(retry.status).toBe(422);
+    expect(retry.body.error.code).toBe('REFUND_EXCEEDS_CAPTURED');
+    expect((await refundsFor(childOrderId)).find((x) => String(x._id) === String(r._id))!.status).toBe('FAILED');
+    expect((await intentDoc(intent.id)).refundReservedPaise).toBe(10_000);
+  });
+
+  it('admin retry after a definitive rejection re-reserves atomically and uses a fresh provider key', async () => {
+    const { intent, checkoutId } = await capturedIntent(10_000);
+    const childOrderId = oid();
+    await runHandler(
+      envelope('order.cancelled', { childOrderId, checkoutId, userId: intent.userId, restaurantId: oid(), actor: 'CUSTOMER', reason: 'x', refundPaise: 3_000 }),
     );
     h.fake.refund.mockClear();
     h.fake.refund.mockImplementationOnce(async () => {
       throw new PaymentProviderError('HTTP 400 BAD_REQUEST_ERROR', { retryable: false, status: 400 });
     });
     await processDueRefunds(h.ctx);
-    h.clock.advance(61_000);
-    await processDueRefunds(h.ctx);
+    const r = (await refundsFor(childOrderId))[0]!;
+    expect((await intentDoc(intent.id)).refundReservedPaise).toBe(0);
+    const token = await adminToken(h.keys);
+    const retry = await request(h.app).post(`/api/v1/admin/finance/refunds/${String(r._id)}/retry`).set('authorization', `Bearer ${token}`);
+    expect(retry.status).toBe(200);
+    expect(retry.body.status).toBe('PROCESSING');
     expect(h.fake.refund).toHaveBeenCalledTimes(2);
     expect(h.fake.refund.mock.calls[1]![0].idempotencyKey).not.toBe(h.fake.refund.mock.calls[0]![0].idempotencyKey);
+    expect((await intentDoc(intent.id)).refundReservedPaise).toBe(3_000);
+  });
+
+  it('refund.failed webhook (provider-reported) is definitive: reservation released', async () => {
+    const { intent, checkoutId, paymentId } = await capturedIntent(6_000);
+    const c = oid();
+    await runHandler(envelope('order.rejected', { childOrderId: c, checkoutId, userId: intent.userId, restaurantId: oid(), reason: 'x', refundPaise: 6_000 }));
+    await processDueRefunds(h.ctx);
+    const r = (await refundsFor(c))[0]!;
+    const res = await postWebhook(refundWebhook('refund.failed', { refundId: r.providerRefundId!, paymentId, amount: 6_000 }));
+    expect(res.body.result).toBe('APPLIED');
+    expect((await refundsFor(c))[0]).toMatchObject({ status: 'FAILED', reserved: false });
+    expect((await intentDoc(intent.id)).refundReservedPaise).toBe(0);
   });
 
   it('refund.processed webhook → SUCCEEDED + refund.succeeded; partial then full → PARTIALLY_REFUNDED then REFUNDED', async () => {

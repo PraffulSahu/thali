@@ -59,16 +59,24 @@ export async function ingestWebhook(ctx: PaymentsContext, input: WebhookInput): 
     ctx.logger.warn({ alert: 'WEBHOOK_SIGNATURE_INVALID', bytes: input.rawBody.length }, 'webhook signature verification failed');
     throw new DomainError('WEBHOOK_SIGNATURE_INVALID', 'Webhook signature invalid', 400);
   }
+  const bodyHash = `sha256:${createHash('sha256').update(input.rawBody).digest('hex')}`;
   let json: unknown;
+  let malformed = false;
   try {
     json = JSON.parse(input.rawBody.toString('utf8'));
   } catch {
-    throw new DomainError('VALIDATION_FAILED', 'Malformed webhook JSON');
+    // Correctly signed but unparseable: record it (keyed by the body hash) and acknowledge, so the
+    // provider stops retrying; only signature failures are 400.
+    malformed = true;
+    ctx.logger.error({ alert: 'WEBHOOK_MALFORMED', bytes: input.rawBody.length, eventId: bodyHash }, 'signed webhook with malformed JSON stored');
   }
-  const eventId =
-    input.eventId && EVENT_ID_RE.test(input.eventId) ? input.eventId : `sha256:${createHash('sha256').update(input.rawBody).digest('hex')}`;
-  const rawType = typeof (json as { event?: unknown })?.event === 'string' ? String((json as { event: string }).event).slice(0, 100) : 'unknown';
-  const ev = ctx.provider.parseWebhook(json);
+  const eventId = !malformed && input.eventId && EVENT_ID_RE.test(input.eventId) ? input.eventId : bodyHash;
+  const rawType = malformed
+    ? 'malformed'
+    : typeof (json as { event?: unknown })?.event === 'string'
+      ? String((json as { event: string }).event).slice(0, 100)
+      : 'unknown';
+  const ev = malformed ? null : ctx.provider.parseWebhook(json);
   const { PaymentEvent } = ctx.models;
 
   try {
@@ -90,7 +98,9 @@ export async function ingestWebhook(ctx: PaymentsContext, input: WebhookInput): 
         ],
         { session },
       );
-      const outcome: ApplyOutcome = ev ? await applyEvent(ctx, session, eventId, ev) : { result: 'IGNORED_UNKNOWN', detail: 'unsupported event type' };
+      const outcome: ApplyOutcome = ev
+        ? await applyEvent(ctx, session, eventId, ev)
+        : { result: 'IGNORED_UNKNOWN', detail: malformed ? 'malformed JSON' : 'unsupported event type' };
       await PaymentEvent.updateOne(
         { _id: eventId },
         { $set: { result: outcome.result, resultDetail: outcome.detail ?? null, processedAt: now } },

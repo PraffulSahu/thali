@@ -53,9 +53,10 @@ describe('demo pay (mock provider, ADR-011)', () => {
     expect(events.every((e) => e.result === 'APPLIED' && e.provider === 'mock')).toBe(true);
     const n = await outboxModel(h.ctx.conn).countDocuments({ 'envelope.type': 'payment.captured', 'envelope.payload.paymentIntentId': intent.paymentIntentId });
     expect(n).toBe(1);
-    // completing again cannot double-capture
+    // completing a CAPTURED intent again → 409, and no double capture
     const again = await request(h.app).post(`/api/v1/demo-pay/${intent.paymentIntentId}/complete`).send({ outcome: 'success' });
-    expect(again.status).toBe(200);
+    expect(again.status).toBe(409);
+    expect(again.body.error.code).toBe('PAYMENT_INVALID_TRANSITION');
     expect(
       await outboxModel(h.ctx.conn).countDocuments({ 'envelope.type': 'payment.captured', 'envelope.payload.paymentIntentId': intent.paymentIntentId }),
     ).toBe(1);
@@ -69,6 +70,10 @@ describe('demo pay (mock provider, ADR-011)', () => {
     expect(res.status).toBe(200);
     expect(res.body.status).toBe('FAILED');
     expect(await outboxModel(h.ctx.conn).countDocuments({ 'envelope.type': 'payment.failed', 'envelope.payload.paymentIntentId': intent.paymentIntentId })).toBe(1);
+    // a retry after failure is allowed (FAILED → CAPTURED on the same provider order)
+    const retry = await request(h.app).post(`/api/v1/demo-pay/${intent.paymentIntentId}/complete`).send({ outcome: 'success' });
+    expect(retry.status).toBe(200);
+    expect(retry.body.status).toBe('CAPTURED');
   });
 
   it('external mock webhooks are still signature-checked with MOCK_WEBHOOK_SECRET', async () => {

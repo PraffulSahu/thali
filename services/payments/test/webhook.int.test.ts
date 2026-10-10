@@ -1,7 +1,7 @@
 /**
  * Review Focus #3: webhook signature over the exact raw bytes, dedupe, amount checks, out-of-order handling.
  */
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { outboxModel } from '@thali/service-kit';
@@ -192,6 +192,19 @@ describe('POST /api/v1/webhooks/razorpay', () => {
     const stored = await h.ctx.models.PaymentEvent.findById(id).lean();
     expect(stored).toBeTruthy();
     expect(stored!.providerOrderId).toBe('order_unknown');
+  });
+
+  it('correctly signed but malformed JSON → stored as IGNORED_UNKNOWN (id = sha256 of body) and 200', async () => {
+    const raw = '{"event": "payment.captured", "payload": {';
+    const res = await postRaw(raw);
+    expect(res.status).toBe(200);
+    expect(res.body.result).toBe('IGNORED_UNKNOWN');
+    const id = `sha256:${createHash('sha256').update(raw).digest('hex')}`;
+    expect(res.body.eventId).toBe(id);
+    const stored = await h.ctx.models.PaymentEvent.findById(id).lean();
+    expect(stored).toMatchObject({ result: 'IGNORED_UNKNOWN', type: 'malformed', resultDetail: 'malformed JSON' });
+    // malformed + bad signature is still a 400
+    expect((await postRaw(raw, { sig: hmacHex('nope', raw) })).status).toBe(400);
   });
 
   it('unsupported event types are stored and acknowledged', async () => {

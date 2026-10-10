@@ -1,8 +1,11 @@
 /**
  * Financial ledger (append-only, signed paise, unique dedupeKey) and balances (LLD §3.4).
  *   Balance   = Σ entries for the account.
- *   Available = Σ non-PAYOUT entries older than PAYOUT_HOLD_DAYS + Σ PAYOUT entries (negative)
- *               − amounts of REQUESTED/PROCESSING payouts.
+ *   Available = Σ positive non-PAYOUT entries older than PAYOUT_HOLD_DAYS (only earnings are held)
+ *               + Σ negative entries (commission, adjustments, payouts — applied immediately)
+ *               − amounts of REQUESTED/PROCESSING payouts,
+ *               capped to [0, balance − pending] so it can never exceed what is actually owed.
+ * ORDER_EARNING = itemsSubtotal + packaging (controller ruling: discounts are platform-funded).
  */
 import { bpsOf, type EventPayloads, type LedgerAccountType, type LedgerEntryType } from '@thali/contracts';
 import type { ClientSession } from 'mongoose';
@@ -66,7 +69,9 @@ export async function recordDeliveryEarnings(
   createdBy = 'system:order.delivered',
 ): Promise<void> {
   const b = p.breakdown;
-  const earning = b.itemsSubtotalPaise - b.couponDiscountPaise - b.membershipDiscountPaise + b.packagingFeePaise;
+  // Controller ruling (Task 10 review): discounts (coupon/membership) are platform-funded, so the
+  // restaurant earns the full item subtotal plus packaging.
+  const earning = b.itemsSubtotalPaise + b.packagingFeePaise;
   const commission = bpsOf(b.itemsSubtotalPaise, p.commissionBps);
   await postEntry(ctx, session, {
     accountType: 'RESTAURANT',
@@ -74,7 +79,7 @@ export async function recordDeliveryEarnings(
     entryType: 'ORDER_EARNING',
     amountPaise: earning,
     dedupeKey: `earning:${p.childOrderId}`,
-    memo: `Order earning (items ${b.itemsSubtotalPaise} − coupon ${b.couponDiscountPaise} − membership ${b.membershipDiscountPaise} + packaging ${b.packagingFeePaise})`,
+    memo: `Order earning (items ${b.itemsSubtotalPaise} + packaging ${b.packagingFeePaise}; discounts platform-funded)`,
     createdBy,
     childOrderId: p.childOrderId,
   });
@@ -99,13 +104,21 @@ export async function recordDeliveryEarnings(
     childOrderId: p.childOrderId,
   });
   if (p.deliveryJobId && p.partnerUserId) {
+    const distanceOk = typeof p.deliveryDistanceKm === 'number' && Number.isFinite(p.deliveryDistanceKm) && p.deliveryDistanceKm >= 0;
+    if (!distanceOk) {
+      ctx.logger.error(
+        { alert: 'LEDGER_DISTANCE_MISSING', childOrderId: p.childOrderId, deliveryJobId: p.deliveryJobId, deliveryDistanceKm: p.deliveryDistanceKm },
+        'order.delivered without a valid deliveryDistanceKm; partner credited the base rate only',
+      );
+    }
+    const distanceKm = distanceOk ? p.deliveryDistanceKm : 0;
     await postEntry(ctx, session, {
       accountType: 'PARTNER',
       accountId: p.partnerUserId,
       entryType: 'DELIVERY_EARNING',
-      amountPaise: deliveryEarningPaise(p.deliveryDistanceKm ?? 0, ctx.config.PARTNER_BASE_PAYOUT_PAISE, ctx.config.PARTNER_PER_KM_PAISE),
+      amountPaise: deliveryEarningPaise(distanceKm, ctx.config.PARTNER_BASE_PAYOUT_PAISE, ctx.config.PARTNER_PER_KM_PAISE),
       dedupeKey: `delivery:${p.deliveryJobId}`,
-      memo: `Delivery earning (${p.deliveryDistanceKm ?? 0} km)`,
+      memo: distanceOk ? `Delivery earning (${distanceKm} km)` : 'Delivery earning (distance missing: base rate only)',
       createdBy,
       childOrderId: p.childOrderId,
       deliveryJobId: p.deliveryJobId,
@@ -146,7 +159,8 @@ async function rollup(ctx: PaymentsContext, match: Record<string, unknown>, sess
       $group: {
         _id: { accountId: '$accountId', entryType: '$entryType' },
         total: { $sum: '$amountPaise' },
-        matured: { $sum: { $cond: [{ $lte: ['$createdAt', cutoff] }, '$amountPaise', 0] } },
+        // Only positive earnings are held; negative entries reduce availability immediately.
+        matured: { $sum: { $cond: [{ $or: [{ $lt: ['$amountPaise', 0] }, { $lte: ['$createdAt', cutoff] }] }, '$amountPaise', 0] } },
       },
     },
   ]).session(session ?? null);
@@ -176,7 +190,7 @@ function summarize(ctx: PaymentsContext, accountType: LedgerAccountType, account
     accountType,
     accountId,
     balancePaise: roll.balance,
-    availablePaise: roll.maturedNonPayout + roll.payoutTotal - pending,
+    availablePaise: Math.max(0, Math.min(roll.maturedNonPayout + roll.payoutTotal - pending, roll.balance - pending)),
     pendingPayoutPaise: pending,
     paidOutPaise: 0 - roll.payoutTotal, // avoid -0
     holdDays: ctx.config.PAYOUT_HOLD_DAYS,
