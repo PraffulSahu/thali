@@ -63,7 +63,13 @@ test('API rejects unauthenticated, unauthorized and out-of-order requests', asyn
   await owner.accept(owner1.token, child.id, 10);
   expectError(await call('POST', `/owner/orders/${child.id}/accept`, { token: owner1.token, body: { prepMinutes: 10 } }), [409], /INVALID_TRANSITION/);
   expectError(await call('POST', `/orders/child/${child.id}/cancel`, { token: consumer3.token, body: { reason: 'too late' } }), [409], /INVALID_TRANSITION|CANCEL/);
-  expectError(await call('POST', `/demo-pay/${order.intentId}/complete`, { body: { outcome: 'failure' } }), [409], /INVALID_TRANSITION/);
+  // demo payments are owner-only: no token -> 401; another customer -> 403/404 (nothing revealed or changed)
+  expectError(await call('GET', `/demo-pay/${order.intentId}`), [401], /UNAUTHENTICATED/);
+  expectError(await call('POST', `/demo-pay/${order.intentId}/complete`, { body: { outcome: 'failure' } }), [401], /UNAUTHENTICATED/);
+  expectError(await call('GET', `/demo-pay/${order.intentId}`, { token: consumer1.token }), [403, 404]);
+  expectError(await call('POST', `/demo-pay/${order.intentId}/complete`, { token: consumer1.token, body: { outcome: 'failure' } }), [403, 404]);
+  // the owner may not re-complete an already captured payment
+  expectError(await call('POST', `/demo-pay/${order.intentId}/complete`, { token: consumer3.token, body: { outcome: 'failure' } }), [409], /INVALID_TRANSITION/);
   const after = await getChild(consumer3.token, order.checkoutId, child.id);
   expect(after.status).toBe('ACCEPTED');
   expect(after.refundStatus).toBe('NONE');

@@ -129,7 +129,7 @@ test('server-side totals, demo payment, child orders placed exactly once', async
     }
 
     // a repeated provider confirmation is refused and changes nothing
-    const replay = await call('POST', `/demo-pay/${intentId}/complete`, { body: { outcome: 'success' } });
+    const replay = await call('POST', `/demo-pay/${intentId}/complete`, { token: consumer.token, body: { outcome: 'success' } });
     expect(replay.status).toBe(409);
     const payment = ok(await call('GET', `/payments/checkout/${checkoutId}`, { token: consumer.token }), 'GET payment');
     expect(payment.status).toBe('CAPTURED');

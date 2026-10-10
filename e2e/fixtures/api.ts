@@ -245,7 +245,7 @@ export async function placeOrder(token: string, lines: OrderLine[], opts: { addr
   );
   const checkoutId: string = created.checkout.id;
   if (opts.pay !== false) {
-    ok(await call('POST', `/demo-pay/${created.payment.intentId}/complete`, { body: { outcome: 'success' } }), 'demo-pay complete');
+    ok(await call('POST', `/demo-pay/${created.payment.intentId}/complete`, { token, body: { outcome: 'success' } }), 'demo-pay complete'); // owner-only
     await waitFor('all child orders PLACED', async () => {
       const o = await getOrder(token, checkoutId);
       return o.checkout.children.every((c: Json) => c.status === 'PLACED') ? o : null;

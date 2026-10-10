@@ -42,7 +42,7 @@ test('orders down during payment capture: PLACED within 60 s after restart, exac
     expect(down.status, JSON.stringify(down.body)).toBeGreaterThanOrEqual(502);
 
     // the provider confirms the payment; payments records it durably
-    const paid = ok(await call('POST', `/demo-pay/${order.intentId}/complete`, { body: { outcome: 'success' } }), 'demo-pay complete');
+    const paid = ok(await call('POST', `/demo-pay/${order.intentId}/complete`, { token: consumer.token, body: { outcome: 'success' } }), 'demo-pay complete');
     expect(paid.status).toBe('CAPTURED');
 
     await startService('orders');
