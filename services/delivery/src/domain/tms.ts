@@ -5,7 +5,7 @@
 import { DomainError } from '@thali/contracts';
 import { auditEvent, buildPage, cursorFilter, PAGE_SORT, withTransaction } from '@thali/service-kit';
 import type { DeliveryContext } from '../context.js';
-import type { JobLean } from '../models/delivery-job.js';
+import { UNASSIGNED_JOB_STATUSES, type JobLean } from '../models/delivery-job.js';
 import type { PartnerLean } from '../models/partner.js';
 import { emitAssigned, reserveCapacity } from './accept.js';
 import { cancelOpenOffers, emit, releasePartnerCapacity, transitionJob, unassignJob } from './job-state.js';
@@ -108,18 +108,23 @@ export async function listPartners(ctx: DeliveryContext, q: { status?: string; l
 }
 
 export async function overview(ctx: DeliveryContext) {
-  const [jobAgg, partnerAgg, exceptions, online, liveOffers] = await Promise.all([
+  const [jobAgg, partnerAgg, exceptions, online, onDelivery, liveOffers] = await Promise.all([
     ctx.models.Job.aggregate<{ _id: string; n: number }>([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
     ctx.models.Partner.aggregate<{ _id: string; n: number }>([{ $group: { _id: '$status', n: { $sum: 1 } } }]),
     ctx.models.Job.countDocuments({ exception: true, status: { $in: ['PENDING_ASSIGNMENT', 'OFFERED'] } }),
     ctx.models.Partner.countDocuments({ status: 'APPROVED', online: true }),
+    // DLV-5: approved ∧ online ∧ holding at least one active job
+    ctx.models.Partner.countDocuments({ status: 'APPROVED', online: true, 'activeJobIds.0': { $exists: true } }),
     ctx.models.Offer.countDocuments({ status: 'OFFERED', expiresAt: { $gt: ctx.now() } }),
   ]);
+  const jobsByStatus = Object.fromEntries(jobAgg.map((r) => [r._id, r.n])) as Record<string, number>;
+  const byStatus = Object.fromEntries(partnerAgg.map((r) => [r._id, r.n])) as Record<string, number>;
   return {
-    jobsByStatus: Object.fromEntries(jobAgg.map((r) => [r._id, r.n])) as Record<string, number>,
+    jobsByStatus,
+    unassigned: UNASSIGNED_JOB_STATUSES.reduce((n, s) => n + (jobsByStatus[s] ?? 0), 0),
     exceptions,
     liveOffers,
-    partners: { byStatus: Object.fromEntries(partnerAgg.map((r) => [r._id, r.n])) as Record<string, number>, online },
+    partners: { byStatus, approved: byStatus.APPROVED ?? 0, online, onDelivery },
     generatedAt: ctx.now().toISOString(),
   };
 }

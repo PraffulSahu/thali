@@ -240,9 +240,15 @@ export const DocumentUrlResponse = z.object({ url: z.string(), expiresAt: z.stri
 export const OverviewResponse = z
   .object({
     jobsByStatus: z.record(z.string(), z.number()),
+    unassigned: z.number().int().describe('PENDING_ASSIGNMENT + OFFERED jobs'),
     exceptions: z.number().int(),
     liveOffers: z.number().int(),
-    partners: z.object({ byStatus: z.record(z.string(), z.number()), online: z.number().int() }),
+    partners: z.object({
+      byStatus: z.record(z.string(), z.number()),
+      approved: z.number().int(),
+      online: z.number().int().describe('APPROVED and online'),
+      onDelivery: z.number().int().describe('APPROVED, online and holding at least one active delivery'),
+    }),
     generatedAt: z.string(),
   })
   .meta({ id: 'DeliveryOverview' });
