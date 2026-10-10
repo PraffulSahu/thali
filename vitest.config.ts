@@ -5,7 +5,7 @@ const p = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 
 // THALI_TEST_KIND: unit -> excludes *.int.test.ts, int -> only *.int.test.ts, otherwise all.
 const kind = process.env.THALI_TEST_KIND ?? 'all';
-const include = kind === 'int' ? ['test/**/*.int.test.ts'] : ['test/**/*.test.ts'];
+const include = kind === 'int' ? ['test/**/*.int.test.ts'] : ['test/**/*.test.{ts,tsx}'];
 const exclude = kind === 'unit' ? ['**/node_modules/**', '**/dist/**', '**/*.int.test.ts'] : ['**/node_modules/**', '**/dist/**'];
 
 const workspaces = [
