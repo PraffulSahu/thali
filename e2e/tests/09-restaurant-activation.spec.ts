@@ -103,7 +103,11 @@ test('restaurant goes live only after email verification and admin approval', as
     await expect(a.page.getByRole('table', { name: 'Restaurants' })).toContainText(name);
     await a.page.goto(`/admin/restaurants/${id}`);
     await expect(a.page.getByRole('heading', { name, level: 1 })).toBeVisible();
-    await expect(a.page.getByRole('main')).toContainText('Verified');
+    // the "Business email" detail shows this restaurant's address with the Verified badge
+    const emailRow = a.page.getByRole('definition').filter({ hasText: businessEmail });
+    await expect(emailRow).toHaveCount(1);
+    await expect(emailRow.getByText('Verified', { exact: true })).toBeVisible();
+    await expect(emailRow.getByText('Not verified', { exact: true })).toHaveCount(0);
     await a.page.getByRole('button', { name: 'Approve', exact: true }).click();
     await a.page.getByRole('alertdialog', { name: `Approve ${name}?` }).getByRole('button', { name: 'Approve' }).click();
     await expect(a.page.getByText('Approved', { exact: true }).first()).toBeVisible();

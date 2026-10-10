@@ -3,7 +3,7 @@
  * phones, internal route/OpenAPI introspection inside the compose network, and the Mailpit API.
  */
 import { execFileSync } from 'node:child_process';
-import { MAILPIT_URL, REPO_ROOT, sleep } from './env.js';
+import { ADMIN_EMAIL, API_BASE, MAILPIT_URL, PHONES, REPO_ROOT, sleep } from './env.js';
 
 export function compose(args: string[], opts: { input?: string; timeoutMs?: number } = {}): string {
   return execFileSync('docker', ['compose', ...args], {
@@ -17,19 +17,49 @@ export function compose(args: string[], opts: { input?: string; timeoutMs?: numb
 }
 
 /**
- * Clear the OTP / admin-login rate-limit counters in the demo Redis.
+ * Clear the OTP / admin-login rate-limit counters of the demo users in the demo Redis.
  *
  * The suite signs in ~20 times per run (UI + API) from one IP, while identity allows 20 OTP requests per IP per
  * hour, 5 per phone per hour and a 30 s resend cooldown. Re-running the suite (or running it next to
  * `npm run smoke`) would otherwise lock every demo phone for an hour. Rate limiting itself is covered by the
  * identity/gateway unit + integration tests, not by these flows. Disable with E2E_RESET_RATE_LIMITS=0.
+ *
+ * Guarded: refuses unless `/api/v1/meta` reports mode=demo, and deletes only exact keys — the demo phones'
+ * OTP counters, the OTP/admin counters of this test client's IP (the compose network gateway, as seen by
+ * the services) and the admin-login counter for the demo admin. Nothing else is touched.
  */
-export function resetAuthRateLimits(): void {
+let demoChecked = false;
+let clientIp: string | null = null;
+
+async function assertDemoStack(): Promise<void> {
+  if (demoChecked) return;
+  const r = await fetch(`${API_BASE}/meta`);
+  const meta = (await r.json().catch(() => ({}))) as { mode?: string };
+  if (r.status !== 200 || meta.mode !== 'demo') throw new Error(`refusing to reset rate limits: ${API_BASE}/meta mode=${meta.mode ?? r.status} (demo only)`);
+  demoChecked = true;
+}
+
+/** IP the services see for requests from this host: the gateway of the compose network the gateway is on. */
+function testClientIp(): string {
+  if (clientIp) return clientIp;
+  const id = compose(['ps', '-q', 'gateway']).trim();
+  const ip = execFileSync('docker', ['inspect', id, '--format', '{{range .NetworkSettings.Networks}}{{.Gateway}} {{end}}'], { encoding: 'utf8' }).trim().split(/\s+/)[0];
+  if (!ip) throw new Error('cannot determine the compose network gateway IP');
+  clientIp = ip;
+  return ip;
+}
+
+export async function resetAuthRateLimits(): Promise<void> {
   if (process.env.E2E_RESET_RATE_LIMITS === '0') return;
-  compose(
-    ['exec', '-T', 'redis', 'sh', '-c', "for p in '*rl:*otp*' '*rl:admin-*'; do redis-cli --scan --pattern \"$p\" | xargs -r redis-cli DEL >/dev/null; done"],
-    { timeoutMs: 20_000 },
-  );
+  await assertDemoStack();
+  const prefix = process.env.E2E_REDIS_KEY_PREFIX ?? 'thali:';
+  const ip = testClientIp();
+  const ips = [ip, `::ffff:${ip}`];
+  const keys = [
+    ...Object.values(PHONES).flatMap((p) => [`rl:otp-cooldown:${p}`, `rl:otp-hour:${p}`]),
+    ...ips.flatMap((i) => [`rl:otp-ip:${i}`, `rl:otp-verify-ip:${i}`, `rl:gw-otp:${i}`, `rl:admin-mfa:${i}`, `rl:admin-login:${i}:${ADMIN_EMAIL}`]),
+  ].map((k) => prefix + k);
+  compose(['exec', '-T', 'redis', 'redis-cli', 'DEL', ...keys], { timeoutMs: 20_000 });
 }
 
 export interface RouteInfo {

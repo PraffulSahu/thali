@@ -10,6 +10,13 @@ import { GATEWAY_URL } from '../fixtures/env.js';
 import { introspectService, type RouteInfo } from '../fixtures/stack.js';
 
 const SERVICES = ['identity', 'marketplace', 'orders', 'payments', 'delivery', 'notifications', 'gateway'] as const;
+/**
+ * Floor on registered routes per service (counts on 2026-10-10: 33/77/48/30/40/20/8), so a broken
+ * introspection (e.g. routes mounted somewhere the walker cannot see) cannot pass vacuously.
+ */
+const MIN_ROUTES: Record<(typeof SERVICES)[number], number> = {
+  identity: 30, marketplace: 70, orders: 45, payments: 28, delivery: 38, notifications: 18, gateway: 8,
+};
 /** Routes the gateway intentionally leaves out of the public specs (docs.ts HIDDEN_PATH). */
 const HIDDEN = /^\/(internal|health)(\/|$)|^\/openapi\.json$/;
 const METHODS = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options'];
@@ -30,11 +37,13 @@ const key = (r: RouteInfo) => `${r.method} ${toOpenApi(r.path)}`;
 for (const svc of SERVICES) {
   test(`${svc}: every registered route is in its OpenAPI spec`, async ({ request }) => {
     const { routes, spec } = introspectService(svc);
-    expect(routes.length, 'routes registered').toBeGreaterThan(3);
     const real = routes.filter((r) => r.method !== 'ALL' && r.method !== 'HEAD' && r.method !== 'OPTIONS');
+    expect(real.length, `${svc}: registered routes`).toBeGreaterThanOrEqual(MIN_ROUTES[svc]);
+    if (svc !== 'gateway') expect(real.length).toBeGreaterThan(10);
 
     // 1) the service's own spec documents every route (internal ones included)
     const own = operations(spec);
+    expect(real.length, `${svc}: registered routes ≥ documented operations`).toBeGreaterThanOrEqual(own.size);
     const undocumented = real.map(key).filter((k) => !own.has(k));
     expect(undocumented, `${svc}: routes missing from ${svc}/openapi.json`).toEqual([]);
 

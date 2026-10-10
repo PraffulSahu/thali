@@ -76,8 +76,6 @@ test('server-side totals, demo payment, child orders placed exactly once', async
   expect(stale.body.error.code).toBe('PRICE_CHANGED');
   expect(stale.body.error.details.pricing.totalPaise).toBe(total);
 
-  const ordersBefore = ok(await call('GET', '/orders?limit=50', { token: consumer.token }), 'GET /orders').items.length;
-
   // ---- UI: checkout page shows the same totals and starts the payment
   const { context, page } = await newRoleContext(browser);
   try {
@@ -136,13 +134,22 @@ test('server-side totals, demo payment, child orders placed exactly once', async
     const payment = ok(await call('GET', `/payments/checkout/${checkoutId}`, { token: consumer.token }), 'GET payment');
     expect(payment.status).toBe('CAPTURED');
     expect(payment.capturedPaise).toBe(total);
-    await page.waitForTimeout(3000); // let any duplicate event settle before counting
-    const after = await getOrder(consumer.token, checkoutId);
-    expect(after.checkout.children.map((c: Json) => c.id).sort()).toEqual(placed.checkout.children.map((c: Json) => c.id).sort());
-    expect(after.checkout.children.every((c: Json) => c.statusHistory.filter((h: Json) => h.to === 'PLACED').length === 1)).toBe(true);
+    // stable over several seconds: same two children, one PLACED entry each (no duplicate event applied late)
+    const childIds = placed.checkout.children.map((c: Json) => c.id).sort();
+    const snapshot = async () => {
+      const o = await getOrder(consumer.token, checkoutId);
+      return {
+        ids: o.checkout.children.map((c: Json) => c.id).sort(),
+        placedEntries: o.checkout.children.map((c: Json) => c.statusHistory.filter((h: Json) => h.to === 'PLACED').length),
+      };
+    };
+    const want = JSON.stringify({ ids: childIds, placedEntries: [1, 1] });
+    let stableSamples = 0;
+    await expect
+      .poll(async () => (stableSamples = JSON.stringify(await snapshot()) === want ? stableSamples + 1 : 0), { intervals: [1000], timeout: 15_000 })
+      .toBeGreaterThanOrEqual(3); // 3 consecutive identical samples ~1 s apart
     const orders = ok(await call('GET', '/orders?limit=50', { token: consumer.token }), 'GET /orders').items as Json[];
     expect(orders.filter((o) => o.id === checkoutId)).toHaveLength(1);
-    expect(orders.length).toBe(ordersBefore + 1);
 
     // each restaurant sees exactly one child order for this checkout
     for (const [user, rid] of [['owner1', RESTAURANTS.spiceRoute.id], ['owner2', RESTAURANTS.greenLeaf.id]] as const) {

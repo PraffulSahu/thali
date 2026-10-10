@@ -25,7 +25,7 @@ let cached: { token: string; exp: number } | null = null;
 /** Admin access token via the API (cached for this worker while valid). */
 export async function adminToken(): Promise<string> {
   if (cached && cached.exp - Date.now() > 120_000) return cached.token;
-  resetAuthRateLimits();
+  await resetAuthRateLimits();
   for (let round = 0; round < 3; round++) {
     const login = ok(await call('POST', '/auth/admin/login', { body: { email: ADMIN_EMAIL, password: ADMIN_PASSWORD } }), 'admin login');
     if (!login.mfaToken) throw new Error(`admin login did not ask for MFA: ${JSON.stringify(login)}`);
@@ -46,7 +46,7 @@ export async function adminToken(): Promise<string> {
 
 /** UI: /admin/login -> email + password -> authenticator code -> lands on `next` (default /admin). */
 export async function adminUiLogin(page: Page, next = '/admin'): Promise<void> {
-  resetAuthRateLimits();
+  await resetAuthRateLimits();
   await page.goto('/admin/login');
   await page.getByLabel('Email').fill(ADMIN_EMAIL);
   await page.getByLabel('Password').fill(ADMIN_PASSWORD);

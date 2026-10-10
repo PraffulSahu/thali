@@ -10,7 +10,7 @@ import { resetAuthRateLimits } from './stack.js';
  * (the form auto-submits on the 6th digit). Resolves once the form is gone (signed in).
  */
 export async function fillOtpForm(scope: Page | Locator, phone: string): Promise<void> {
-  resetAuthRateLimits();
+  await resetAuthRateLimits();
   await scope.getByLabel('Mobile number').fill(national(phone));
   await scope.getByRole('button', { name: 'Send code' }).click();
   await expect(scope.getByText('Demo mode: no SMS is sent. Use code 123456.')).toBeVisible();
