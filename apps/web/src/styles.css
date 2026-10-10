@@ -1,0 +1,153 @@
+@import "tailwindcss";
+
+/*
+ * Thali design tokens (Tailwind v4, CSS-first). Every token below becomes a utility:
+ *   --color-brand-600  -> bg-brand-600 / text-brand-600 / border-brand-600 / ring-brand-600
+ *   --radius-card      -> rounded-card
+ *   --shadow-raised    -> shadow-raised
+ *
+ * Colour roles (contrast checked against white / their 50 tint, WCAG AA):
+ *   brand-500 #E8590C  saffron brand mark, focus rings, decorative accents (3.6:1, non-text only)
+ *   brand-600 #C2410C  primary buttons / selected states with white text (5.2:1)
+ *   brand-700 #9A3412  brand-coloured text and links on light surfaces (7.3:1)
+ *   slate-*            neutrals (Tailwind's slate): text slate-900/700, secondary text slate-600 (7.6:1),
+ *                      borders slate-200/300, subtle fills slate-50/100
+ *   success / warn / danger / info: 800 for text on 50/100 tints (>= 6:1), 700 for solid fills with white
+ *                      text and for text on white (>= 4.8:1); 600 only for icons, dots and borders
+ *   veg #15803D (green square + dot), nonveg #8A3214 (brown square + triangle), FSSAI convention
+ */
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Noto Sans", "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Brand: saffron */
+  --color-brand-50: #fff6ef;
+  --color-brand-100: #ffead9;
+  --color-brand-200: #ffd2b0;
+  --color-brand-300: #fdb07e;
+  --color-brand-400: #f5844a;
+  --color-brand-500: #e8590c;
+  --color-brand-600: #c2410c;
+  --color-brand-700: #9a3412;
+  --color-brand-800: #7c2d12;
+  --color-brand-900: #63240f;
+
+  /* Surfaces: a barely-warm canvas so white cards lift without heavy shadows */
+  --color-canvas: #fbf9f7;
+  --color-surface: #fffefd;
+  --color-surface-muted: #f6f3f0;
+
+  /* Semantic */
+  --color-success-50: #f0fdf4;
+  --color-success-100: #dcfce7;
+  --color-success-600: #16a34a;
+  --color-success-700: #15803d;
+  --color-success-800: #166534;
+  --color-warn-50: #fffbeb;
+  --color-warn-100: #fef3c7;
+  --color-warn-600: #d97706;
+  --color-warn-700: #b45309;
+  --color-warn-800: #92400e;
+  --color-danger-50: #fef2f2;
+  --color-danger-100: #fee2e2;
+  --color-danger-600: #dc2626;
+  --color-danger-700: #b91c1c;
+  --color-danger-800: #991b1b;
+  --color-info-50: #eff6ff;
+  --color-info-100: #dbeafe;
+  --color-info-600: #2563eb;
+  --color-info-700: #1d4ed8;
+  --color-info-800: #1e40af;
+
+  /* Food markers (Indian convention) */
+  --color-veg: #15803d;
+  --color-nonveg: #8a3214;
+
+  /* Radius */
+  --radius-control: 0.625rem; /* buttons, inputs */
+  --radius-card: 1rem;
+  --radius-pill: 9999px;
+
+  /* Elevation: low, warm-tinted */
+  --shadow-raised: 0 1px 2px rgb(68 38 20 / 0.06), 0 1px 3px rgb(68 38 20 / 0.08);
+  --shadow-overlay: 0 12px 32px -8px rgb(40 22 12 / 0.22), 0 4px 10px -4px rgb(40 22 12 / 0.12);
+
+  /* Layout */
+  --spacing-touch: 2.75rem; /* 44px minimum touch target: min-h-touch, size-touch */
+  --container-content: 72rem;
+  --container-prose: 42rem;
+
+  /* Motion */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --animate-fade-in: fade-in 160ms var(--ease-out-quart);
+  --animate-sheet-up: sheet-up 220ms var(--ease-out-quart);
+  --animate-sheet-left: sheet-left 220ms var(--ease-out-quart);
+  --animate-sheet-right: sheet-right 220ms var(--ease-out-quart);
+  --animate-pop-in: pop-in 180ms var(--ease-out-quart);
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes pop-in {
+    from { opacity: 0; transform: translateY(6px) scale(0.98); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes sheet-up {
+    from { transform: translateY(100%); }
+    to { transform: none; }
+  }
+  @keyframes sheet-left {
+    from { transform: translateX(-100%); }
+    to { transform: none; }
+  }
+  @keyframes sheet-right {
+    from { transform: translateX(100%); }
+    to { transform: none; }
+  }
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-canvas text-slate-900 antialiased;
+    font-feature-settings: "cv11", "ss01";
+  }
+  /* Visible, consistent keyboard focus everywhere (mouse clicks don't show it). */
+  :focus-visible {
+    outline: 2px solid var(--color-brand-500);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: var(--color-brand-100);
+  }
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+  p {
+    text-wrap: pretty;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Leaflet: keep map panes below our overlays and match radius. */
+.leaflet-container {
+  font: inherit;
+  z-index: 0;
+}
+.thali-marker {
+  background: none;
+  border: none;
+}

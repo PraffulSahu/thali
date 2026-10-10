@@ -16,7 +16,16 @@
     "jsx": "react-jsx",
     "types": [
       "vite/client"
-    ]
+    ],
+    "paths": {
+      "@thali/contracts": [
+        "../../packages/contracts/src/index.ts"
+      ],
+      "@thali/pricing": [
+        "../../packages/pricing/src/index.ts"
+      ]
+    },
+    "noFallthroughCasesInSwitch": true
   },
   "include": [
     "src",
