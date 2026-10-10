@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { createOpenApi, registerOpsRoutes } from '@thali/service-kit';
 import {
   AccountSummarySchema,
+  FinanceSummarySchema,
+  SummaryWindowQuery,
   AdminPaymentViewSchema,
   BalancesQuery,
   ByReferenceParams,
@@ -112,14 +114,14 @@ openapi.route({
 
 // ---- finance ----
 for (const part of ['summary', 'ledger', 'payouts'] as const) {
-  const schema = part === 'summary' ? AccountSummarySchema : part === 'ledger' ? page(LedgerEntryViewSchema, 'LedgerPage') : page(PayoutViewSchema, 'PayoutPage');
+  const schema = part === 'summary' ? FinanceSummarySchema : part === 'ledger' ? page(LedgerEntryViewSchema, 'LedgerPage') : page(PayoutViewSchema, 'PayoutPage');
   openapi.route({
     method: 'get',
     path: `/api/v1/finance/restaurants/:restaurantId/${part}`,
     tags: ['finance'],
-    summary: `Restaurant ${part} (owner only; ownership via marketplace)`,
+    summary: `Restaurant ${part} (owner only; ownership via marketplace)${part === 'summary' ? '; window = earnings in [from, to), default today in Asia/Kolkata, max 93 days' : ''}`,
     security: 'bearer',
-    request: part === 'summary' ? { params: RestaurantParams } : { params: RestaurantParams, query: PageQuery },
+    request: part === 'summary' ? { params: RestaurantParams, query: SummaryWindowQuery } : { params: RestaurantParams, query: PageQuery },
     responses: { 200: json(schema, part) },
     errors: ['NOT_FOUND', 'UPSTREAM_ERROR', 'UPSTREAM_TIMEOUT'],
   });
@@ -127,9 +129,9 @@ for (const part of ['summary', 'ledger', 'payouts'] as const) {
     method: 'get',
     path: `/api/v1/finance/partner/${part}`,
     tags: ['finance'],
-    summary: `My delivery-partner ${part}`,
+    summary: `My delivery-partner ${part}${part === 'summary' ? '; window = earnings in [from, to), default today in Asia/Kolkata, max 93 days' : ''}`,
     security: 'bearer',
-    ...(part === 'summary' ? {} : { request: { query: PageQuery } }),
+    request: { query: part === 'summary' ? SummaryWindowQuery : PageQuery },
     responses: { 200: json(schema, part) },
   });
 }

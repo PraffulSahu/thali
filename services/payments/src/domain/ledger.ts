@@ -7,7 +7,7 @@
  *               capped to [0, balance − pending] so it can never exceed what is actually owed.
  * ORDER_EARNING = itemsSubtotal + packaging (controller ruling: discounts are platform-funded).
  */
-import { bpsOf, type EventPayloads, type LedgerAccountType, type LedgerEntryType } from '@thali/contracts';
+import { DomainError, bpsOf, type EventPayloads, type LedgerAccountType, type LedgerEntryType } from '@thali/contracts';
 import type { ClientSession } from 'mongoose';
 import type { PaymentsContext } from '../context.js';
 import { PLATFORM_ACCOUNT_ID, type LedgerEntryAttrs } from '../models/ledger-entry.js';
@@ -208,6 +208,57 @@ export async function accountSummary(
   const match = { accountType, accountId };
   const [roll, pending] = await Promise.all([rollup(ctx, match, session), pendingPayouts(ctx, match, session)]);
   return summarize(ctx, accountType, accountId, roll.get(accountId), pending.get(accountId) ?? 0);
+}
+
+// ---- PAY-1: windowed earnings ----
+const IST_OFFSET_MS = 330 * 60_000;
+const DAY_MS = 86_400_000;
+export const MAX_EARNINGS_WINDOW_DAYS = 93;
+
+/** The UTC instant of 00:00 Asia/Kolkata (UTC+05:30, no DST) on the IST calendar day containing `at`. */
+export function istDayStart(at: Date): Date {
+  return new Date(Math.floor((at.getTime() + IST_OFFSET_MS) / DAY_MS) * DAY_MS - IST_OFFSET_MS);
+}
+
+export interface EarningsWindow {
+  from: string;
+  to: string;
+  earningsPaise: number;
+  entriesByType: Partial<Record<LedgerEntryType, number>>;
+  deliveries: number;
+}
+
+/** Resolve `from`/`to` (default: today in IST, IST midnight to now). Window is half-open [from, to). */
+export function resolveWindow(ctx: PaymentsContext, q: { from?: Date | undefined; to?: Date | undefined }): { from: Date; to: Date } {
+  const to = q.to ?? ctx.now();
+  const from = q.from ?? istDayStart(to);
+  const bad = (path: string, message: string) => new DomainError('VALIDATION_FAILED', 'Request validation failed', undefined, { issues: [{ path: `query.${path}`, code: 'custom', message }] });
+  if (!(from.getTime() < to.getTime())) throw bad('from', '`from` must be before `to`');
+  if (to.getTime() - from.getTime() > MAX_EARNINGS_WINDOW_DAYS * DAY_MS) throw bad('to', `window must not exceed ${MAX_EARNINGS_WINDOW_DAYS} days`);
+  return { from, to };
+}
+
+/** Σ ledger entries of the account created in [from, to), by entry type; `deliveries` = DELIVERY_EARNING entries (one per job). */
+export async function accountWindow(
+  ctx: PaymentsContext,
+  accountType: LedgerAccountType,
+  accountId: string,
+  q: { from?: Date | undefined; to?: Date | undefined },
+): Promise<EarningsWindow> {
+  const { from, to } = resolveWindow(ctx, q);
+  const rows = await ctx.models.LedgerEntry.aggregate<{ _id: LedgerEntryType; total: number; count: number }>([
+    { $match: { accountType, accountId, createdAt: { $gte: from, $lt: to } } },
+    { $group: { _id: '$entryType', total: { $sum: '$amountPaise' }, count: { $sum: 1 } } },
+  ]);
+  const entriesByType: Partial<Record<LedgerEntryType, number>> = {};
+  let earningsPaise = 0;
+  let deliveries = 0;
+  for (const r of rows) {
+    entriesByType[r._id] = r.total;
+    earningsPaise += r.total;
+    if (r._id === 'DELIVERY_EARNING') deliveries = r.count;
+  }
+  return { from: from.toISOString(), to: to.toISOString(), earningsPaise, entriesByType, deliveries };
 }
 
 /** Admin: balances of every account of a type (sorted by accountId, cursor = last accountId). */

@@ -105,6 +105,21 @@ export const WebhookAckSchema = z
   .meta({ id: 'WebhookAck' });
 
 // ---- finance ----
+/** PAY-1: optional earnings window (ISO instants; default today in Asia/Kolkata). */
+export const SummaryWindowQuery = z
+  .object({ from: z.iso.datetime({ offset: true }).pipe(z.coerce.date()).optional(), to: z.iso.datetime({ offset: true }).pipe(z.coerce.date()).optional() })
+  .meta({ id: 'SummaryWindowQuery' });
+
+export const EarningsWindowSchema = z
+  .object({
+    from: Iso,
+    to: Iso,
+    earningsPaise: z.number().int(),
+    entriesByType: z.record(z.enum(enumValues(LedgerEntryType)), z.number().int()),
+    deliveries: z.number().int().nonnegative(),
+  })
+  .meta({ id: 'EarningsWindow' });
+
 export const AccountSummarySchema = z
   .object({
     accountType: LedgerAccountTypeSchema,
@@ -118,6 +133,9 @@ export const AccountSummarySchema = z
     asOf: Iso,
   })
   .meta({ id: 'AccountSummary' });
+
+/** Owner/partner finance summary: the account summary plus the PAY-1 earnings window. */
+export const FinanceSummarySchema = AccountSummarySchema.extend({ window: EarningsWindowSchema }).meta({ id: 'FinanceSummary' });
 
 export const LedgerEntryViewSchema = z
   .object({

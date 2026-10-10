@@ -60,8 +60,8 @@ export function createProvider(config: PaymentsConfig, conn: Connection, redis: 
     keySecret: config.RAZORPAY_KEY_SECRET!,
     webhookSecret: config.RAZORPAY_WEBHOOK_SECRET!,
     timeoutMs: config.PAYMENT_PROVIDER_TIMEOUT_MS,
-    onError: () => {
-      void recordProviderError(redis, 'payments', 'razorpay').catch(() => undefined);
+    onError: (err) => {
+      void recordProviderError(redis, 'payments', 'razorpay', Date.now(), err.message).catch(() => undefined);
     },
   });
 }
