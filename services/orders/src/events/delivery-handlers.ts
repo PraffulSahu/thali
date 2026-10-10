@@ -10,6 +10,10 @@
  *  - events for a job other than the child's recorded `deliveryJobId` are ignored
  *  - `delivery.assigned` / `delivery.unassigned` only update the mirror (job, partner,
  *    deliveryStatus), ordered by envelope `occurredAt`.
+ *  - `delivery.arrived` (ORD-5, partner at the restaurant) is mirror-only too: `deliveryStatus =
+ *    'AT_PICKUP'` while the child is still before pickup, `order_events` row, realtime `owner.order`
+ *    + `order.updated`. Stale (older than the last mirror update) or post-pickup copies are ignored;
+ *    redelivery is a no-op through the inbox.
  */
 import { Types, type ClientSession } from 'mongoose';
 import type { ChildOrderStatus, EventEnvelope } from '@thali/contracts';
@@ -23,7 +27,16 @@ import type { EventModule } from './types.js';
 
 const PRE_PICKUP: ChildOrderStatus[] = ['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP'];
 
-type DeliveryEventType = 'delivery.assigned' | 'delivery.unassigned' | 'delivery.picked_up' | 'delivery.started' | 'delivery.delivered' | 'delivery.failed';
+type DeliveryEventType =
+  | 'delivery.assigned'
+  | 'delivery.unassigned'
+  | 'delivery.arrived'
+  | 'delivery.picked_up'
+  | 'delivery.started'
+  | 'delivery.delivered'
+  | 'delivery.failed';
+
+export const AT_PICKUP = 'AT_PICKUP';
 
 /** Status path each lifecycle event needs from the child's current status ([] = stale / not applicable). */
 export function pathFor(type: DeliveryEventType, status: ChildOrderStatus): ChildOrderStatus[] {
@@ -163,6 +176,33 @@ export function deliveryHandlers(ctx: OrdersContext): EventHandlers {
       await child.save({ session });
       await appendOrderEvents(ctx.conn, session, [
         { checkoutGroupId: child.checkoutGroupId, childOrderId: child._id, type: e.type, actor: 'SYSTEM', data: { jobId: e.payload.jobId, reason: e.payload.reason }, at: occurred },
+      ]);
+      await publishMirror(ctx, session, child);
+    },
+    'delivery.arrived': async (e, session) => {
+      const child = await loadChild(ctx, session, e);
+      if (!child) return;
+      const occurred = new Date(e.occurredAt);
+      const stale = child.deliveryUpdatedAt && child.deliveryUpdatedAt.getTime() > occurred.getTime();
+      if (!PRE_PICKUP.includes(child.status) || stale) {
+        ctx.logger.info({ childOrderId: String(child._id), status: child.status, eventId: e.id }, 'stale or post-pickup delivery.arrived; ignored');
+        return;
+      }
+      if (child.deliveryStatus === AT_PICKUP) return;
+      if (!child.deliveryJobId) child.deliveryJobId = e.payload.jobId;
+      child.deliveryStatus = AT_PICKUP;
+      child.deliveryUpdatedAt = occurred;
+      await child.save({ session });
+      const at = e.payload.at && !Number.isNaN(Date.parse(e.payload.at)) ? new Date(e.payload.at) : occurred;
+      await appendOrderEvents(ctx.conn, session, [
+        {
+          checkoutGroupId: child.checkoutGroupId,
+          childOrderId: child._id,
+          type: e.type,
+          actor: 'SYSTEM',
+          data: { jobId: e.payload.jobId, partnerUserId: e.payload.partnerUserId },
+          at,
+        },
       ]);
       await publishMirror(ctx, session, child);
     },
