@@ -6,10 +6,12 @@
  *
  * In-app inbox history that matches the other seeds' story (restaurant approvals, partner approvals and a
  * suspension). Rendered with the real templates and stored as already SENT, so the worker never re-sends
- * them. Ids: `notification:<key>`; dedupe keys `seed:<key>`. Order notifications come with the orders seed.
+ * them. Ids: `notification:<key>`; dedupe keys `seed:<key>`. Order notifications follow the shared demo order history
+ * (`@thali/contracts/seed-demo`) and carry checkoutId/childOrderId so the web inbox deep-links to the order.
  */
 import type { Connection } from 'mongoose';
 import { seedId } from '@thali/contracts/seed';
+import { DEMO_CHECKOUTS, demoOrderIds as ids, demoRefundPaise, demoTimeline } from '@thali/contracts/seed-demo';
 import { initEventCollections } from '@thali/service-kit';
 import { ensureDocs, isMainModule, runSeedCli, type SeedReport } from '@thali/service-kit/seed';
 import { renderTemplate, type TemplateName } from './domain/templates.js';
@@ -46,11 +48,46 @@ const IN_APP: InAppSpec[] = [
   },
 ];
 
+/** Customer (and restaurant) in-app history for the demo orders. */
+function orderNotifications(): InAppSpec[] {
+  const out: InAppSpec[] = [];
+  for (const co of DEMO_CHECKOUTS) {
+    const checkoutId = ids.checkout(co);
+    out.push({
+      key: `${co.key}:placed`, user: co.consumer, template: 'order_placed_customer', at: co.placedAt, read: true,
+      data: { code: co.code, totalPaise: co.totals.totalPaise, checkoutId },
+    });
+    for (const c of co.children) {
+      const childOrderId = ids.child(co, c);
+      const t = demoTimeline(co, c);
+      out.push({
+        key: `${co.key}:${c.key}:restaurant`, user: c.restaurant.owner, template: 'order_placed_restaurant', at: co.placedAt, read: true,
+        data: { code: c.code, totalPaise: c.breakdown.totalPaise, acceptBy: new Date(t.placedAt.getTime() + 300_000).toISOString(), childOrderId, restaurantId: ids.restaurant(c.restaurant) },
+      });
+      if (c.outcome.kind === 'DELIVERED') {
+        out.push({ key: `${co.key}:${c.key}:delivered`, user: co.consumer, template: 'order_delivered', at: t.deliveredAt!.toISOString(), read: true, data: { code: c.code, checkoutId, childOrderId } });
+      } else {
+        const template = c.outcome.kind === 'REJECTED' ? 'order_rejected' : 'order_cancelled';
+        const at = (c.outcome.kind === 'REJECTED' ? t.rejectedAt : t.cancelledAt)!;
+        out.push({
+          key: `${co.key}:${c.key}:${c.outcome.kind.toLowerCase()}`, user: co.consumer, template, at: at.toISOString(),
+          data: { code: c.code, reason: c.outcome.reason, refundPaise: demoRefundPaise(c), checkoutId, childOrderId, ...(c.outcome.kind === 'CANCELLED' ? { actor: 'CUSTOMER' } : {}) },
+        });
+        out.push({
+          key: `${co.key}:${c.key}:refund`, user: co.consumer, template: 'refund_succeeded', at: t.refundSucceededAt!.toISOString(),
+          data: { amountPaise: demoRefundPaise(c), checkoutId, childOrderId },
+        });
+      }
+    }
+  }
+  return out;
+}
+
 export async function seedNotifications(conn: Connection): Promise<SeedReport> {
   const report: SeedReport = {};
   await ensureDocs(
     notificationModel(conn),
-    IN_APP.map((n) => {
+    [...IN_APP, ...orderNotifications()].map((n) => {
       const at = new Date(n.at);
       const rendered = renderTemplate(n.template, n.data, 'IN_APP');
       return {

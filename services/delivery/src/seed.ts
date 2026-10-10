@@ -9,13 +9,17 @@
  *   2 Kiran Das    +919200000002  APPROVED, offline
  *   3 Farhan Ali   +919200000003  APPROVAL_PENDING (documents uploaded, awaiting admin review)
  *   4 Deepak Yadav +919200000004  SUSPENDED
+ * Delivered jobs for the demo order history (`@thali/contracts/seed-demo`: TH-DEMOMULTI-A by partner 1,
+ * TH-DEMODONE-A by partner 2) so partner history, tracking and the payments ledger line up. Terminal only.
  * Dispatch only considers partners whose last location ping is fresh (DISPATCH_LOCATION_MAX_AGE_SEC), so the
  * online partner's seeded location is a starting point: the partner app (or smoke test) keeps it fresh.
  */
 import type { Connection } from 'mongoose';
 import { seedId } from '@thali/contracts/seed';
+import { DEMO_CHECKOUTS, demoOrderIds as ids, demoTimeline, type DemoCheckout, type DemoChild } from '@thali/contracts/seed-demo';
 import { demoPdf, ensureDocs, isMainModule, runSeedCli, uploadSeedObjects, type SeedObject, type SeedReport } from '@thali/service-kit/seed';
 import { parseDeliveryConfig, type DeliveryConfig } from './config.js';
+import { hashCode } from './domain/codes.js';
 import { getModels, initDeliveryModels } from './models/index.js';
 
 export type DeliverySeedConfig = Pick<
@@ -83,10 +87,64 @@ function partnerDoc(p: PartnerSpec, maxActive: number) {
   };
 }
 
+const addressLine = (a: { line1: string; city: string; pincode: string }) => `${a.line1}, ${a.city} ${a.pincode}`;
+
+function deliveredJobDoc(co: DemoCheckout, c: DemoChild) {
+  if (c.outcome.kind !== 'DELIVERED') throw new Error('only delivered demo children get a job');
+  const t = demoTimeline(co, c);
+  const childOrderId = ids.child(co, c);
+  const partnerUserId = ids.user(c.outcome.partner);
+  const h = (from: string | null, to: string, at: Date, actor: string, actorId: string | null = null, reason: string | null = null) => ({ from, to, at, actor, actorId, reason });
+  const drop = { lat: co.drop.lat, lng: co.drop.lng };
+  return {
+    _id: ids.job(co, c),
+    childOrderId,
+    checkoutGroupId: ids.checkout(co),
+    restaurantId: ids.restaurant(c.restaurant),
+    customerUserId: ids.user(co.consumer),
+    pickup: { name: c.restaurant.name, address: addressLine(c.restaurant.address), location: { type: 'Point', coordinates: [c.restaurant.location.lng, c.restaurant.location.lat] } },
+    drop: { name: co.consumerName, address: addressLine(co.drop), location: { type: 'Point', coordinates: [drop.lng, drop.lat] }, phoneMasked: `${co.consumerPhone.slice(0, 3)}******${co.consumerPhone.slice(-4)}` },
+    status: 'DELIVERED',
+    partnerId: ids.partnerId(c.outcome.partner),
+    partnerUserId,
+    dispatchRound: 1,
+    distanceKm: c.distanceKm,
+    estimatedMinutes: c.etaMinutes,
+    estimateSource: 'DEMO_HAVERSINE',
+    prepMinutes: c.outcome.prepMinutes,
+    readyEta: new Date(t.acceptedAt!.getTime() + c.outcome.prepMinutes * 60_000),
+    readyAt: t.readyAt,
+    pickupCodeHash: hashCode(childOrderId, c.pickupCode),
+    deliveryCodeHash: hashCode(childOrderId, c.deliveryCode),
+    statusHistory: [
+      h(null, 'PENDING_ASSIGNMENT', t.acceptedAt!, 'SYSTEM', null, 'order.accepted'),
+      h('PENDING_ASSIGNMENT', 'OFFERED', t.acceptedAt!, 'SYSTEM'),
+      h('OFFERED', 'ASSIGNED', t.assignedAt!, 'PARTNER', partnerUserId),
+      h('ASSIGNED', 'AT_PICKUP', t.atPickupAt!, 'PARTNER', partnerUserId),
+      h('AT_PICKUP', 'PICKED_UP', t.pickedUpAt!, 'PARTNER', partnerUserId),
+      h('PICKED_UP', 'OUT_FOR_DELIVERY', t.outForDeliveryAt!, 'PARTNER', partnerUserId),
+      h('OUT_FOR_DELIVERY', 'DELIVERED', t.deliveredAt!, 'PARTNER', partnerUserId),
+    ],
+    lastLocation: { type: 'Point', coordinates: [drop.lng, drop.lat] },
+    lastLocationAt: t.deliveredAt,
+    locationSimulated: true,
+    assignedAt: t.assignedAt,
+    pickedUpAt: t.pickedUpAt,
+    deliveredAt: t.deliveredAt,
+    createdAt: t.acceptedAt,
+    updatedAt: t.deliveredAt,
+  };
+}
+
 export async function seedDelivery(conn: Connection, cfg: DeliverySeedConfig): Promise<SeedReport> {
-  const { Partner } = getModels(conn);
+  const { Partner, Job } = getModels(conn);
   const report: SeedReport = {};
   await ensureDocs(Partner, PARTNERS.map((p) => partnerDoc(p, cfg.MAX_ACTIVE_DELIVERIES)), report);
+  await ensureDocs(
+    Job,
+    DEMO_CHECKOUTS.flatMap((co) => co.children.filter((c) => c.outcome.kind === 'DELIVERED').map((c) => deliveredJobDoc(co, c))),
+    report,
+  );
 
   if (cfg.S3_ENDPOINT || cfg.S3_ACCESS_KEY_ID) {
     const objects: SeedObject[] = PARTNERS.flatMap((p) =>
