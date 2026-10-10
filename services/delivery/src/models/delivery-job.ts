@@ -102,6 +102,7 @@ deliveryJobSchema.index({ status: 1, exception: 1, nextDispatchAt: 1 });
 // DLV-4: admin search by code (prefix) + the backfill's "still missing" scan
 deliveryJobSchema.index({ childOrderCode: 1, codesCheckedAt: 1 });
 deliveryJobSchema.index({ checkoutCode: 1 });
+deliveryJobSchema.index({ checkoutGroupId: 1 }); // admin q= by checkout id (keeps the whole $or indexed)
 // partner history pagination (partnerUserId + PAGE_SORT)
 deliveryJobSchema.index({ partnerUserId: 1, createdAt: -1, _id: -1 });
 

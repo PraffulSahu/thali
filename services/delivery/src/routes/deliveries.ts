@@ -67,7 +67,7 @@ export function deliveriesRouter(ctx: DeliveryContext, locationLimiter: RequestH
     message: 'Too many call requests; try again in a minute',
   });
   const vContact = validate({ params: JobIdParams, body: ContactBody });
-  r.post('/:jobId/contact', auth, contactLimiter, vContact, async (req, res) => {
+  r.post('/:jobId/contact', requireAuth({ roles: ['DELIVERY_PARTNER'] }), contactLimiter, vContact, async (req, res) => {
     const { params, body } = vContact.get(req);
     res.json(await revealContact(ctx, uid(req), params.jobId, body.target, req.ip));
   });

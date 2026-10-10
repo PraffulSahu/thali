@@ -77,14 +77,18 @@ describe('DLV-1 contact — DEMO mode (APP_MODE=demo)', () => {
     expect(after.body.error.details.reason).toBe('NOT_CALLABLE_NOW');
   });
 
-  it('other partners, unassigned jobs and bad targets are refused (404 / 400) and not audited', async () => {
-    const { job } = await assigned(h);
+  it('other partners, unassigned jobs, missing role and bad targets are refused (404 / 403 / 400) and not audited', async () => {
+    const { job, p } = await assigned(h);
     const stranger = await createPartner(h, { location: at(0.2, 0) });
-    const res = await contact(h, job.id, await h.token(stranger.userId), 'RESTAURANT');
+    const strangerToken = await h.token(stranger.userId, ['CONSUMER', 'DELIVERY_PARTNER']);
+    const res = await contact(h, job.id, strangerToken, 'RESTAURANT');
     expect(res.status).toBe(404);
     const { job: open } = await createJob(h);
-    expect((await contact(h, open.id, await h.token(stranger.userId), 'RESTAURANT')).status).toBe(404);
-    expect((await contact(h, job.id, await h.token(stranger.userId), 'ADMIN')).status).toBe(400);
+    expect((await contact(h, open.id, strangerToken, 'RESTAURANT')).status).toBe(404);
+    expect((await contact(h, job.id, strangerToken, 'ADMIN')).status).toBe(400);
+    // the assigned partner without the DELIVERY_PARTNER role (e.g. revoked) is refused
+    const noRole = await contact(h, job.id, await h.token(p.userId, ['CONSUMER']), 'RESTAURANT');
+    expect(noRole.status).toBe(403);
     expect((await request(h.app).post(`/api/v1/deliveries/${job.id}/contact`).send({ target: 'CUSTOMER' })).status).toBe(401);
     expect(await audits(h, job.id)).toHaveLength(0);
   });

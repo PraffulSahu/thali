@@ -78,6 +78,33 @@ describe('DLV-4 order codes', () => {
     expect(h.orders.state.calls).toBe(calls); // nothing left to ask
   });
 
+  it('backfill skips a child orders refuses (4xx) and continues; stops on 5xx', async () => {
+    await h.ctx.models.Job.updateMany({ childOrderCode: null }, { $set: { codesCheckedAt: new Date() } }); // isolate
+    const { job: bad } = await createJob(h);
+    const { job: good } = await createJob(h);
+    h.orders.children.set(good.childOrderId, { id: good.childOrderId, code: 'TH-GOOD0001', checkoutCode: 'TH-GRPGOOD1' });
+    const real = h.orders.client.getChild;
+    h.orders.client.getChild = async (id) => {
+      if (id === bad.childOrderId) throw new UpstreamError('orders', 400, 'VALIDATION_FAILED', 'bad id', 400);
+      return real(id);
+    };
+    try {
+      const res = await runCodeBackfill(h.ctx);
+      expect(res).toMatchObject({ updated: 1, skipped: 1, interrupted: false });
+      expect((await h.ctx.models.Job.findById(bad.id).lean())!.codesCheckedAt).toBeInstanceOf(Date);
+      expect(await h.ctx.models.Job.findById(good.id).lean()).toMatchObject({ childOrderCode: 'TH-GOOD0001', checkoutCode: 'TH-GRPGOOD1' });
+
+      const { job: later } = await createJob(h);
+      h.orders.client.getChild = async () => {
+        throw new UpstreamError('orders', 503, 'SERVICE_UNAVAILABLE', 'down', 503);
+      };
+      expect(await runCodeBackfill(h.ctx)).toMatchObject({ interrupted: true, skipped: 0 });
+      expect((await h.ctx.models.Job.findById(later.id).lean())!.codesCheckedAt).toBeNull();
+    } finally {
+      h.orders.client.getChild = real;
+    }
+  });
+
   it('startCodeBackfill runs at boot under the leader lock (one runner across instances)', async () => {
     const { job } = await createJob(h);
     h.orders.children.set(job.childOrderId, { id: job.childOrderId, code: 'TH-BOOT0001' });

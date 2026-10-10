@@ -75,8 +75,8 @@ export function createMarketplaceClient(config: DeliveryConfig): MarketplaceClie
 export interface OrdersChild {
   id: string;
   code: string;
-  /** Not in the binding shape today; derived from `code` when absent. */
-  checkoutCode?: string;
+  /** Checkout (group) code; null/absent for older orders builds. Never derived from `code`. */
+  checkoutCode?: string | null;
 }
 
 export interface OrdersClient {

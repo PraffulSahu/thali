@@ -121,10 +121,10 @@ step('deliver', 'Confirm delivery with the customer code (OUT_FOR_DELIVERY → D
 step('fail', 'Mark failed with a reason (after pickup)', FailBody);
 openapi.route({
   method: 'post', path: `${API}/deliveries/:jobId/contact`, tags: ['deliveries'], security: 'bearer', rateLimited: true,
-  summary: 'Call the restaurant (ASSIGNED/AT_PICKUP) or the customer (AT_PICKUP/PICKED_UP/OUT_FOR_DELIVERY); assigned partner only; audited; 10/min',
+  summary: 'Call the restaurant (ASSIGNED/AT_PICKUP) or the customer (AT_PICKUP/PICKED_UP/OUT_FOR_DELIVERY); DELIVERY_PARTNER role + assigned partner only; audited; 10/min',
   description: 'DEMO mode (APP_MODE=demo): telUrl null + note "Calling is simulated in demo". DIRECT (pilot): tel: URL with the real number. 409 CONFLICT details.reason NOT_CALLABLE_NOW (wrong state) or NO_PHONE_ON_FILE.',
   request: { params: JobIdParams, body: { content: json(ContactBody) } }, responses: ok('Contact', ContactResponse),
-  errors: ['NOT_FOUND', 'CONFLICT', 'UPSTREAM_UNAVAILABLE', 'UPSTREAM_ERROR'],
+  errors: ['FORBIDDEN', 'NOT_FOUND', 'CONFLICT', 'UPSTREAM_UNAVAILABLE', 'UPSTREAM_ERROR'],
 });
 openapi.route({
   method: 'post', path: `${API}/deliveries/:jobId/location`, tags: ['deliveries'], security: 'bearer', rateLimited: true,

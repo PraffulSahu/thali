@@ -65,6 +65,19 @@ describe('DLV-3 remaining ETA', () => {
     spy.mockRestore();
   });
 
+  it('admin reassign (same status) does not serve the previous rider\'s cached ETA', async () => {
+    const { job, payload, customerToken } = await assigned();
+    await deliverEvent(h, envelope('order.ready', { childOrderId: job.childOrderId, restaurantId: payload.restaurantId, userId: payload.userId }, job.childOrderId));
+    const first = await track(job.childOrderId, customerToken);
+    const other = await createPartner(h, { location: at(3, 0) });
+    await request(h.app).post(`/api/v1/admin/delivery/jobs/${job.id}/assign`).set(bearer(await h.adminToken())).send({ partnerId: other.id }).expect(200);
+    await h.ctx.models.Job.updateOne({ _id: job._id }, { $unset: { lastLocation: 1 } }); // new rider has not pinged on this job yet
+    const second = await track(job.childOrderId, customerToken);
+    const expected = Math.ceil((await leg(at(3, 0), ORIGIN)).etaMinutes + (await leg(ORIGIN, at(0, 4))).etaMinutes);
+    expect(second.body.remaining.minutes).toBe(expected);
+    expect(second.body.remaining.minutes).not.toBe(first.body.remaining.minutes);
+  });
+
   it('pre-pickup ETA includes the remaining prep time until readyEta', async () => {
     const { job, customerToken } = await assigned();
     const prepLeft = (new Date((await h.ctx.models.Job.findById(job.id).lean())!.readyEta!).getTime() - h.clock.now().getTime()) / 60_000;

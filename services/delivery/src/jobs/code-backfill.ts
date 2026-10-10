@@ -9,19 +9,30 @@
  *              shape has no checkout code today; child codes are independent random codes, so it is never
  *              derived), `codesCheckedAt = now`;
  *  - 404     → `codesCheckedAt = now` only (never asked again);
- *  - orders unavailable / any other error → stop this run; the rest is retried on the next tick / start.
+ *  - a non-transient per-row failure (orders 4xx other than 404/429) → logged, `codesCheckedAt = now`, continue;
+ *  - orders unavailable (connection / timeout / 5xx / 429 / unknown error) → stop this run; the rest is
+ *    retried on the next tick / start.
  * Writes are conditional on the code still being missing, so a concurrent order.accepted always wins.
  */
-import { startScheduler, type SchedulerHandle } from '@thali/service-kit';
+import { DomainError } from '@thali/contracts';
+import { startScheduler, UpstreamError, type SchedulerHandle } from '@thali/service-kit';
 import type { DeliveryContext } from '../context.js';
 import type { JobLean } from '../models/delivery-job.js';
 
 const BATCH = 200;
 export const CODE_BACKFILL_INTERVAL_MS = 5 * 60_000;
 
+/** Orders-wide trouble (stop and retry later) vs a problem with this one row (skip it). */
+export function isTransientOrdersError(err: unknown): boolean {
+  if (err instanceof UpstreamError) return err.upstreamStatus === 0 || err.upstreamStatus === 429 || err.upstreamStatus >= 500;
+  return !(err instanceof DomainError) || err.code === 'UPSTREAM_TIMEOUT' || err.code === 'UPSTREAM_UNAVAILABLE' || err.code === 'UPSTREAM_ERROR';
+}
+
 export interface CodeBackfillResult {
   updated: number;
   notFound: number;
+  /** rows skipped after a non-transient orders error (marked checked, not retried). */
+  skipped: number;
   /** true when orders failed and the run stopped early (retried later). */
   interrupted: boolean;
 }
@@ -29,7 +40,7 @@ export interface CodeBackfillResult {
 export async function runCodeBackfill(ctx: DeliveryContext, opts: { signal?: AbortSignal; batch?: number } = {}): Promise<CodeBackfillResult> {
   const batch = opts.batch ?? BATCH;
   const missing = { childOrderCode: null, codesCheckedAt: null };
-  const out: CodeBackfillResult = { updated: 0, notFound: 0, interrupted: false };
+  const out: CodeBackfillResult = { updated: 0, notFound: 0, skipped: 0, interrupted: false };
   let after: unknown = null;
   for (;;) {
     if (opts.signal?.aborted) break;
@@ -45,9 +56,15 @@ export async function runCodeBackfill(ctx: DeliveryContext, opts: { signal?: Abo
       try {
         child = await ctx.orders.getChild(r.childOrderId);
       } catch (err) {
-        ctx.logger.warn({ err, childOrderId: r.childOrderId }, 'order-code backfill: orders unavailable; retrying later');
-        out.interrupted = true;
-        break;
+        if (isTransientOrdersError(err)) {
+          ctx.logger.warn({ err, childOrderId: r.childOrderId }, 'order-code backfill: orders unavailable; retrying later');
+          out.interrupted = true;
+          break;
+        }
+        ctx.logger.warn({ err, childOrderId: r.childOrderId }, 'order-code backfill: orders refused this child; skipping it');
+        const res = await ctx.models.Job.updateOne({ _id: r._id, ...missing }, { $set: { codesCheckedAt: ctx.now() } }, { timestamps: false });
+        out.skipped += res.modifiedCount;
+        continue;
       }
       const now = ctx.now();
       const set: Record<string, unknown> = { codesCheckedAt: now };
@@ -61,7 +78,7 @@ export async function runCodeBackfill(ctx: DeliveryContext, opts: { signal?: Abo
     }
     if (out.interrupted || rows.length < batch) break;
   }
-  if (out.updated || out.notFound || out.interrupted) ctx.logger.info({ result: out }, 'order-code backfill');
+  if (out.updated || out.notFound || out.skipped || out.interrupted) ctx.logger.info({ result: out }, 'order-code backfill');
   return out;
 }
 

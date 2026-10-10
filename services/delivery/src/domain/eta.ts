@@ -6,8 +6,8 @@
  *  - anything else, or no rider position yet: null (clients fall back to the static estimate)
  *
  * Cached per job in Redis `trk:eta:<jobId>` for 30 s (pings every ~5 s must not multiply Google calls).
- * The cached value records the job status it was computed for and its `computedAt` (service clock), so a
- * status change or an expired entry recomputes. Never throws: Redis or geo failures degrade to a fresh
+ * The cached value records the job status and partner it was computed for and its `computedAt` (service
+ * clock), so a status change, a reassignment or an expired entry recomputes. Never throws: Redis or geo failures degrade to a fresh
  * computation / null.
  */
 import { redisKey } from '@thali/service-kit';
@@ -69,9 +69,9 @@ export async function remainingEta(ctx: DeliveryContext, job: EtaJob, opts: { lo
   try {
     const raw = await ctx.redis.get(key);
     if (raw) {
-      const cached = JSON.parse(raw) as RemainingEta & { status: string };
-      if (cached.status === job.status && nowMs - Date.parse(cached.computedAt) < ETA_CACHE_TTL_SEC * 1000) {
-        const { status: _s, ...rest } = cached;
+      const cached = JSON.parse(raw) as RemainingEta & { status: string; partnerId: string };
+      if (cached.status === job.status && cached.partnerId === String(job.partnerId) && nowMs - Date.parse(cached.computedAt) < ETA_CACHE_TTL_SEC * 1000) {
+        const { status: _s, partnerId: _p, ...rest } = cached;
         return rest;
       }
     }
@@ -82,7 +82,7 @@ export async function remainingEta(ctx: DeliveryContext, job: EtaJob, opts: { lo
     const from = await riderLocation(ctx, job, opts.location);
     if (!from) return null;
     const eta = await compute(ctx, job, from);
-    await ctx.redis.set(key, JSON.stringify({ ...eta, status: job.status }), 'EX', ETA_CACHE_TTL_SEC).catch((err) => ctx.logger.debug({ err, jobId: id }, 'eta cache write failed'));
+    await ctx.redis.set(key, JSON.stringify({ ...eta, status: job.status, partnerId: String(job.partnerId) }), 'EX', ETA_CACHE_TTL_SEC).catch((err) => ctx.logger.debug({ err, jobId: id }, 'eta cache write failed'));
     return eta;
   } catch (err) {
     ctx.logger.warn({ err, jobId: id }, 'remaining eta failed');
