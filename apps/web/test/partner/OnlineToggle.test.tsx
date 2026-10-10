@@ -1,6 +1,7 @@
 import '../setup';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PartnerProfile } from '../../src/features/partner/api';
 import { OnlineToggle } from '../../src/features/partner/OnlineToggle';
@@ -67,5 +68,29 @@ describe('OnlineToggle', () => {
     await userEvent.click(screen.getByRole('switch'));
     expect(await screen.findByText(/complete it, or ask thali ops to reassign it/i)).toBeInTheDocument();
     expect(screen.getByRole('switch')).toBeDisabled();
+  });
+
+  it('re-enables the switch once the active deliveries finish after a 409 PARTNER_HAS_ACTIVE_JOBS', async () => {
+    fetchMock.mockResolvedValue(json(409, { error: { code: 'PARTNER_HAS_ACTIVE_JOBS', message: 'x', requestId: 'r' } }));
+    function Harness() {
+      const [count, setCount] = useState(0);
+      return (
+        <>
+          <button type="button" onClick={() => setCount(1)}>job appears</button>
+          <button type="button" onClick={() => setCount(0)}>job delivered</button>
+          <OnlineToggle partner={partner({ online: true })} tracking={tracking} activeCount={count} />
+        </>
+      );
+    }
+    renderWithProviders(<Harness />);
+    await userEvent.click(screen.getByRole('switch'));
+    expect(await screen.findByText(/complete it, or ask thali ops to reassign it/i)).toBeInTheDocument();
+    // The refetch after the 409 shows the job, then it is delivered.
+    await userEvent.click(screen.getByRole('button', { name: 'job appears' }));
+    expect(screen.getByRole('switch')).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: 'job delivered' }));
+    await waitFor(() => expect(screen.getByRole('switch')).toBeEnabled());
+    expect(screen.queryByText(/complete it, or ask thali ops to reassign it/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/switch off to stop receiving offers/i)).toBeInTheDocument();
   });
 });

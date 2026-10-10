@@ -4,7 +4,7 @@
  * tracking hook (owned by PartnerHome) streams locations; this component shows its state and last send time.
  */
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Badge } from '../../components/ui/Badge';
 import { Card } from '../../components/ui/Card';
 import { InlineError } from '../../components/ui/ErrorState';
@@ -74,6 +74,12 @@ export function OnlineToggle({ partner, tracking, activeCount }: OnlineTogglePro
     },
   });
   const hasActiveError = offline.error instanceof ApiError && offline.error.code === 'PARTNER_HAS_ACTIVE_JOBS';
+  // A 409 PARTNER_HAS_ACTIVE_JOBS keeps the switch locked; once the active deliveries are done (count drops to 0)
+  // clear that stale error so the partner can go offline again.
+  const resetOffline = offline.reset;
+  useEffect(() => {
+    if (activeCount === 0) resetOffline();
+  }, [activeCount, resetOffline]);
   const mustFinish = partner.online && (activeCount > 0 || hasActiveError);
 
   const busy = online.isPending || offline.isPending;
