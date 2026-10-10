@@ -409,7 +409,7 @@ PENDING_ASSIGNMENT/OFFERED with no live offers → next round.
 `POST /api/v1/checkouts` body `{ cartId? (implicit user cart), addressId | address, couponCode?,
 useMembership: boolean, expectedTotalPaise? }`, header `Idempotency-Key`.
 1. Load user cart; reject empty (422 `CART_EMPTY`).
-2. Call marketplace `POST /internal/quote` with `{ drop: {lat,lng}, items: [{restaurantId,itemId,quantity,selections}] }` →
+2. Call marketplace `POST /internal/quote` with `{ drop?: {lat,lng}, items: [{lineRef?, restaurantId,itemId,quantity,selections}] }` (lines echo `lineRef`, in request order) →
    per restaurant: `{ restaurantId, name, ownerUserId, location, open: bool, serviceable: bool,
    deliveryFeePaise, distanceKm, etaMinutes, etaSource, packagingFeePaise, lines: [{itemId, name,
    isVeg, unitPricePaise, addOns:[...], available: bool, stockOk: bool}] }` or problems list.
@@ -438,7 +438,7 @@ Consumers in orders:
 - `payment.captured {purpose:CHECKOUT, referenceId, amountPaise}` → if checkout AWAITING_PAYMENT
   and amount == pricing.totalPaise → children PLACED; emit `checkout.confirmed`, `order.placed`×N.
   If checkout EXPIRED/PAYMENT_FAILED → emit `checkout.late_payment {checkoutId, amountPaise}`.
-- `payment.failed` → children PAYMENT_FAILED, `checkout.released`.
+- `payment.failed` → mirror only: record `paymentStatus=FAILED` + timeline entry; checkout stays AWAITING_PAYMENT with reservations held so the customer can retry on the same provider order (LLD §4.3 FAILED→CAPTURED). The expiry sweeper (reconcile-first) moves it to EXPIRED/PAYMENT_FAILED and emits `checkout.released`.
 - `refund.*` → update child `refundStatus`, `refundedPaise`.
 - `delivery.*` → child transitions per §4.1; `delivery.assigned` stores `deliveryJobId`.
 - `restaurant.*` → upsert `restaurant_projection`.
