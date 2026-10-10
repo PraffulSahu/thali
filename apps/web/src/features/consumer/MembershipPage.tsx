@@ -32,8 +32,8 @@ import { fetchMyMemberships, fetchPlans, MEMBERSHIP_KEY, normalizePayment, purch
 import { LoginDialog } from './LoginDialog';
 import { usePaymentLauncher } from './PaymentStep';
 
-export function benefitLines(p: MembershipPlan): string[] {
-  const b = p.benefits ?? {};
+export function benefitLines(p: Pick<MembershipPlan, 'benefits' | 'durationDays'>): string[] {
+  const b = p.benefits;
   const out: string[] = [];
   if (b.freeDeliveriesPerPeriod) {
     out.push(
@@ -45,7 +45,7 @@ export function benefitLines(p: MembershipPlan): string[] {
   return out;
 }
 
-function PlanCard({ plan, current, onBuy, buying }: { plan: MembershipPlan; current: boolean; onBuy: () => void; buying: boolean }) {
+function PlanCard({ plan, current, blockedReason, onBuy, buying }: { plan: MembershipPlan; current: boolean; blockedReason: string | null; onBuy: () => void; buying: boolean }) {
   return (
     <Card as="li" className="flex list-none flex-col">
       <div className="flex items-start justify-between gap-2">
@@ -69,8 +69,8 @@ function PlanCard({ plan, current, onBuy, buying }: { plan: MembershipPlan; curr
           <p className="whitespace-pre-line">{plan.terms}</p>
         </details>
       ) : null}
-      <Button className="mt-auto" onClick={onBuy} loading={buying} disabled={current}>
-        {current ? 'Active' : `Buy for ${formatINR(plan.pricePaise)}`}
+      <Button className="mt-auto" onClick={onBuy} loading={buying} disabled={blockedReason !== null} aria-describedby={blockedReason ? 'membership-blocked' : undefined}>
+        {current ? 'Your active plan' : `Buy for ${formatINR(plan.pricePaise)}`}
       </Button>
     </Card>
   );
@@ -89,7 +89,8 @@ export default function MembershipPage() {
   const [login, setLogin] = useState<string | null>(null);
   const attempt = useRef<{ planId: string; key: string } | null>(null);
 
-  const active = mine.data?.active && mine.data.active.status === 'ACTIVE' ? mine.data.active : null;
+  const active = mine.data?.current?.status === 'ACTIVE' ? mine.data.current : null;
+  const blockedReason = active ? `You already have an active membership${active.endsAt ? ` until ${formatDate(active.endsAt)}` : ''}. You can buy a new plan after it ends.` : null;
   const confirming = !!returningIntent && isAuthenticated && !active;
   usePolling(() => mine.refetch(), 3000, { enabled: confirming, pauseWhenHidden: true });
 
@@ -98,13 +99,13 @@ export default function MembershipPage() {
       setLogin(planId);
       return;
     }
-    if (buyingId) return;
+    if (buyingId || blockedReason) return;
     setBuyError(null);
     setBuyingId(planId);
     if (!attempt.current || attempt.current.planId !== planId) attempt.current = { planId, key: newIdempotencyKey() };
     try {
       const res = await purchaseMembership(planId, attempt.current.key);
-      const payment = normalizePayment(res.payment ?? res.paymentIntent ?? res);
+      const payment = normalizePayment(res.payment);
       if (!payment) throw new ApiError({ code: 'INVALID_RESPONSE', status: 200, message: 'The payment could not be started. Please try again.' });
       attempt.current = null;
       void qc.invalidateQueries({ queryKey: MEMBERSHIP_KEY });
@@ -137,14 +138,19 @@ export default function MembershipPage() {
                   {active ? (
                     <div className="space-y-1">
                       <p className="flex flex-wrap items-center gap-2 font-semibold text-slate-900">
-                        {active.planSnapshot?.name ?? 'Membership'} <StatusPill kind="membership" status={active.status} />
+                        {active.plan.name} <StatusPill kind="membership" status={active.status} />
                       </p>
                       {active.endsAt ? <p className="text-sm text-slate-700">Valid until {formatDate(active.endsAt)}</p> : null}
-                      {active.freeDeliveriesUsed != null && active.planSnapshot?.benefits?.freeDeliveriesPerPeriod ? (
+                      {active.plan.benefits.freeDeliveriesPerPeriod > 0 ? (
                         <p className="text-sm text-slate-700">
-                          Free deliveries used: {active.freeDeliveriesUsed} of {active.planSnapshot.benefits.freeDeliveriesPerPeriod}
+                          Free deliveries left: {active.freeDeliveriesRemaining} of {active.plan.benefits.freeDeliveriesPerPeriod}
                         </p>
                       ) : null}
+                      <ul className="text-sm text-slate-700">
+                        {benefitLines(active.plan).map((l) => (
+                          <li key={l}>· {l}</li>
+                        ))}
+                      </ul>
                       <p className="text-xs text-slate-600">Turn on “Use membership benefits” at checkout. Eligibility is checked on every order.</p>
                     </div>
                   ) : (
@@ -157,12 +163,12 @@ export default function MembershipPage() {
                         {m.history.map((h) => (
                           <li key={h.id} className="flex flex-wrap items-center justify-between gap-2 py-2">
                             <span>
-                              {h.planSnapshot?.name ?? 'Membership'}
+                              {h.plan.name}
                               {h.startsAt ? <span className="text-slate-600"> · {formatDate(h.startsAt)}</span> : null}
                               {h.endsAt ? <span className="text-slate-600"> – {formatDate(h.endsAt)}</span> : null}
                             </span>
                             <span className="flex items-center gap-2">
-                              {h.planSnapshot?.pricePaise != null ? <Price paise={h.planSnapshot.pricePaise} size="sm" /> : null}
+                              <Price paise={h.plan.pricePaise} size="sm" />
                               <StatusPill kind="membership" status={h.status} />
                             </span>
                           </li>
@@ -181,6 +187,11 @@ export default function MembershipPage() {
             Plans
           </h2>
           <InlineError error={buyError ?? launchError} className="mb-3" />
+          {blockedReason ? (
+            <p id="membership-blocked" className="mb-3 rounded-control bg-info-50 px-3 py-2 text-sm text-info-800">
+              {blockedReason}
+            </p>
+          ) : null}
           <QueryState
             query={plans}
             loading={<SkeletonList count={2} />}
@@ -192,7 +203,7 @@ export default function MembershipPage() {
                 {list
                   .filter((p) => p.active !== false)
                   .map((p) => (
-                    <PlanCard key={p.id} plan={p} current={active?.planId === p.id} buying={buyingId === p.id || (opening && attempt.current?.planId === p.id)} onBuy={() => void buy(p.id)} />
+                    <PlanCard key={p.id} plan={p} current={active?.planId === p.id} blockedReason={blockedReason} buying={buyingId === p.id || (opening && attempt.current?.planId === p.id)} onBuy={() => void buy(p.id)} />
                   ))}
               </ul>
             )}

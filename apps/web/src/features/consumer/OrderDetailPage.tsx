@@ -29,7 +29,7 @@ import { RequireAuth } from '../../components/layout/RequireRole';
 import { statusLabel } from '../../components/ui/StatusPill';
 import { useRealtime } from '../../hooks/useRealtime';
 import { errorMessage } from '../../lib/errors';
-import { formatDateTime, formatINR, formatTime } from '../../lib/format';
+import { formatDateTime, formatINR, formatTime, plural } from '../../lib/format';
 import { cn } from '../../lib/cn';
 import {
   cancelChild,
@@ -38,8 +38,9 @@ import {
   refundLabel,
   reorder,
   type AdjustedTotals,
+  type CheckoutView,
   type ChildOrder,
-  type OrderDetail,
+  type OrderExplanation,
   type ReorderChange,
   type TrackingView,
 } from './api';
@@ -56,24 +57,20 @@ const STEPS: { status: string; label: string }[] = [
   { status: 'DELIVERED', label: 'Delivered' },
 ];
 const TRACKABLE = new Set(['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKED_UP', 'OUT_FOR_DELIVERY']);
-const REFUND_PENDING = new Set(['REQUESTED', 'PROCESSING']);
+const REFUND_PENDING = new Set<string>(['REQUESTED', 'PROCESSING']);
 
 export const orderKey = (checkoutId: string) => ['order', checkoutId] as const;
 
-function childRefundAmount(c: ChildOrder): number {
-  if (c.refundStatus === 'SUCCEEDED') return c.refundedPaise || c.refundPaise || c.breakdown.totalPaise;
-  return Math.max(0, (c.refundPaise ?? c.breakdown.totalPaise) - (c.refundedPaise ?? 0)) || c.breakdown.totalPaise;
+/** Amount of this part's refund: the explanation's `refundPaise` (server), else the child's `refundRequestedPaise`. */
+export function childRefundAmount(c: ChildOrder, explanation?: OrderExplanation): number {
+  const requested = explanation?.refundPaise ?? c.refundRequestedPaise ?? 0;
+  if (c.refundStatus === 'SUCCEEDED') return c.refundedPaise || requested;
+  return Math.max(0, requested - (c.refundedPaise ?? 0)) || requested;
 }
 
-/** Local explanation when the server didn't send one (orders lifecycle may be older/newer). */
+/** Local explanation only for states the server doesn't explain (it explains REJECTED/CANCELLED/DELIVERY_FAILED). */
 function localExplanation(c: ChildOrder): string | null {
   switch (c.status) {
-    case 'REJECTED':
-      return `${c.restaurantName} declined your order${c.rejectionReason ? ` (${c.rejectionReason})` : ''}. Your payment for this part is refunded; the rest of your order is unaffected.`;
-    case 'CANCELLED':
-      return `This part of your order was cancelled${c.cancellationReason ? ` (${c.cancellationReason})` : ''}.`;
-    case 'DELIVERY_FAILED':
-      return "The delivery couldn't be completed. Our team is reviewing it and will refund you if it applies.";
     case 'EXPIRED':
       return 'Payment was not completed in time, so this order was not placed. You were not charged.';
     case 'PAYMENT_FAILED':
@@ -81,18 +78,6 @@ function localExplanation(c: ChildOrder): string | null {
     default:
       return null;
   }
-}
-
-export function computeAdjustedTotals(o: OrderDetail): AdjustedTotals {
-  if (o.adjustedTotals) return o.adjustedTotals;
-  const paid = ['AWAITING_PAYMENT', 'PAYMENT_FAILED', 'EXPIRED'].includes(o.status) ? 0 : o.pricing.totalPaise;
-  let refunded = 0;
-  let pending = 0;
-  for (const c of o.children) {
-    refunded += c.refundedPaise ?? 0;
-    if (REFUND_PENDING.has(c.refundStatus)) pending += childRefundAmount(c);
-  }
-  return { paidPaise: paid, refundedPaise: refunded, refundPendingPaise: pending, netPaise: paid - refunded - pending };
 }
 
 function Timeline({ child }: { child: ChildOrder }) {
@@ -103,9 +88,11 @@ function Timeline({ child }: { child: ChildOrder }) {
           <li key={`${h.to}-${h.at}-${i}`} className="relative">
             <span className="absolute -left-[1.05rem] top-1.5 size-2 rounded-full bg-brand-500" aria-hidden />
             <span className="font-medium text-slate-900">{statusLabel('childOrder', h.to)}</span>{' '}
-            <time className="text-slate-600" dateTime={h.at}>
-              {formatTime(h.at)}
-            </time>
+            {h.at ? (
+              <time className="text-slate-600" dateTime={h.at}>
+                {formatTime(h.at)}
+              </time>
+            ) : null}
             {h.reason ? <span className="block text-slate-600">{h.reason}</span> : null}
           </li>
         ))}
@@ -136,7 +123,7 @@ function Timeline({ child }: { child: ChildOrder }) {
   );
 }
 
-function ChildCard({ order, child, explanation }: { order: OrderDetail; child: ChildOrder; explanation: string | null }) {
+function ChildCard({ order, child, explanation }: { order: CheckoutView; child: ChildOrder; explanation: OrderExplanation | undefined }) {
   const qc = useQueryClient();
   const [confirm, setConfirm] = useState(false);
   const refund = refundLabel(child.refundStatus);
@@ -159,12 +146,12 @@ function ChildCard({ order, child, explanation }: { order: OrderDetail; child: C
 
       <div className="mt-3 space-y-3">
         <Timeline child={child} />
-        {explanation ? (
-          <p className="rounded-control bg-warn-50 px-3 py-2 text-sm text-warn-800">{explanation}</p>
+        {explanation || localExplanation(child) ? (
+          <p className="rounded-control bg-warn-50 px-3 py-2 text-sm text-warn-800">{explanation?.message ?? localExplanation(child)}</p>
         ) : null}
         {refund ? (
           <p className={cn('flex items-center gap-1.5 text-sm font-semibold', child.refundStatus === 'SUCCEEDED' ? 'text-success-800' : child.refundStatus === 'FAILED' ? 'text-danger-700' : 'text-info-800')}>
-            {refund} <Price paise={childRefundAmount(child)} size="sm" tone={child.refundStatus === 'SUCCEEDED' ? 'success' : 'default'} />
+            {refund} <Price paise={childRefundAmount(child, explanation)} size="sm" tone={child.refundStatus === 'SUCCEEDED' ? 'success' : 'default'} />
           </p>
         ) : null}
         {child.refundStatus === 'FAILED' ? <p className="text-sm text-slate-600">The refund attempt failed and is being retried. Contact support if it doesn&rsquo;t arrive.</p> : null}
@@ -202,7 +189,7 @@ function ChildCard({ order, child, explanation }: { order: OrderDetail; child: C
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-        {child.status === 'PLACED' ? (
+        {(child.canCancel ?? child.status === 'PLACED') ? (
           <Button size="sm" variant="danger" onClick={() => setConfirm(true)} aria-label={`Cancel ${child.restaurantName} order`}>
             Cancel this order
           </Button>
@@ -231,27 +218,26 @@ function ChildCard({ order, child, explanation }: { order: OrderDetail; child: C
 
 function changeText(c: ReorderChange): string {
   if (c.message) return c.message;
-  const kind = (c.kind ?? c.type ?? '').toUpperCase();
-  const name = c.name ?? 'An item';
-  if (kind.includes('PRICE') && c.oldPricePaise != null && c.newPricePaise != null) return `${name}: price changed from ${formatINR(c.oldPricePaise)} to ${formatINR(c.newPricePaise)}`;
-  if (kind.includes('CLOSED')) return `${name}: restaurant is closed right now`;
-  if (kind.includes('SERVICE')) return `${name}: no longer delivers to your address`;
-  if (kind.includes('UNAVAILABLE') || kind.includes('STOCK')) return `${name} is unavailable and was not added`;
-  return `${name}: ${kind.toLowerCase().replace(/_/g, ' ') || 'changed'}`;
+  if (c.kind === 'PRICE_CHANGED' && c.oldUnitPricePaise != null && c.newUnitPricePaise != null) {
+    return `${c.name}: price changed from ${formatINR(c.oldUnitPricePaise)} to ${formatINR(c.newUnitPricePaise)}`;
+  }
+  return `${c.name} (${c.restaurantName}): ${c.added ? 'added with changes' : 'not added'}`;
 }
 
 export function ReorderButton({ checkoutId, size = 'sm' }: { checkoutId: string; size?: 'sm' | 'md' }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [changes, setChanges] = useState<ReorderChange[] | null>(null);
+  const [result, setResult] = useState<{ changes: ReorderChange[]; addedCount: number } | null>(null);
   const m = useMutation({
     mutationFn: () => reorder(checkoutId),
     onSuccess: (res) => {
       void qc.invalidateQueries({ queryKey: CART_KEY });
-      const list = res?.changes ?? [];
-      if (list.length) setChanges(list);
-      else navigate('/cart');
+      if (res.changes.length) setResult({ changes: res.changes, addedCount: res.addedCount });
+      else {
+        toast({ title: `Added ${plural(res.addedCount, 'item')} to your cart`, tone: 'success' });
+        navigate('/cart');
+      }
     },
     onError: (e) => toast({ title: "Couldn't reorder", description: errorMessage(e), tone: 'danger' }),
   });
@@ -261,24 +247,28 @@ export function ReorderButton({ checkoutId, size = 'sm' }: { checkoutId: string;
         Reorder
       </Button>
       <Dialog
-        open={changes !== null}
-        onClose={() => setChanges(null)}
+        open={result !== null}
+        onClose={() => setResult(null)}
         title="Some things changed"
-        description="We re-checked prices, availability and delivery for your address. Available items were added to your cart."
+        description={
+          result && result.addedCount > 0
+            ? `We re-checked prices and availability: ${plural(result.addedCount, 'item')} added to your cart. See what changed below.`
+            : 'We re-checked prices and availability. Nothing could be added to your cart right now.'
+        }
         footer={
           <div className="flex w-full justify-end gap-2">
-            <Button variant="secondary" onClick={() => setChanges(null)}>
+            <Button variant="secondary" onClick={() => setResult(null)}>
               Close
             </Button>
-            <ButtonLink to="/cart" onClick={() => setChanges(null)}>
+            <ButtonLink to="/cart" onClick={() => setResult(null)}>
               Go to cart
             </ButtonLink>
           </div>
         }
       >
         <ul className="list-disc space-y-1 pl-5 text-sm text-slate-700">
-          {(changes ?? []).map((c, i) => (
-            <li key={`${c.itemId ?? c.restaurantId ?? i}-${i}`}>{changeText(c)}</li>
+          {(result?.changes ?? []).map((c, i) => (
+            <li key={`${c.restaurantId}-${c.itemId}-${i}`}>{changeText(c)}</li>
           ))}
         </ul>
       </Dialog>
@@ -286,9 +276,8 @@ export function ReorderButton({ checkoutId, size = 'sm' }: { checkoutId: string;
   );
 }
 
-function TotalsCard({ order }: { order: OrderDetail }) {
-  const t = computeAdjustedTotals(order);
-  const adjusted = t.refundedPaise > 0 || t.refundPendingPaise > 0;
+function TotalsCard({ order, totals: t }: { order: CheckoutView; totals: AdjustedTotals }) {
+  const pending = t.refundPendingPaise > 0;
   return (
     <Card as="section" aria-label="Payment summary">
       <h2 className="mb-2 text-lg font-semibold text-slate-900">Payment summary</h2>
@@ -302,15 +291,18 @@ function TotalsCard({ order }: { order: OrderDetail }) {
             −{formatINR(t.refundedPaise)}
           </Row>
         ) : null}
-        {t.refundPendingPaise > 0 ? (
-          <Row label="Refund pending">
-            −{formatINR(t.refundPendingPaise)}
-          </Row>
-        ) : null}
-        {adjusted ? (
-          <Row label="Net paid" strong>
+        {t.refundedPaise > 0 || pending ? (
+          <Row label="Net paid" strong={!pending}>
             <Price paise={t.netPaise} />
           </Row>
+        ) : null}
+        {pending ? (
+          <>
+            <Row label="Refund pending">−{formatINR(t.refundPendingPaise)}</Row>
+            <Row label="Net after pending refund" strong>
+              <Price paise={t.netPaise - t.refundPendingPaise} />
+            </Row>
+          </>
         ) : null}
       </dl>
       {order.isDemo ? <p className="mt-2 text-xs text-info-800">Demo order — paid with simulated money.</p> : null}
@@ -331,7 +323,7 @@ function OrderView({ checkoutId }: { checkoutId: string }) {
         );
         return;
       }
-      if (e.data.checkoutId === checkoutId || order.data?.children.some((c) => c.id === e.data.childOrderId)) {
+      if (e.data.checkoutId === checkoutId || order.data?.checkout.children.some((c) => c.id === e.data.childOrderId)) {
         void order.refetch();
         if (e.data.childOrderId) void qc.invalidateQueries({ queryKey: trackingKey(e.data.childOrderId) });
       }
@@ -341,8 +333,9 @@ function OrderView({ checkoutId }: { checkoutId: string }) {
 
   return (
     <QueryState query={order} loading={<SkeletonList count={2} />} errorTitle="Couldn't load this order">
-      {(o) => {
-        const byChild = new Map((o.explanations ?? []).map((x) => [x.childOrderId, x.message]));
+      {(detail) => {
+        const o = detail.checkout;
+        const byChild = new Map(detail.explanations.map((x) => [x.childOrderId, x]));
         return (
           <>
             <PageHeader
@@ -380,11 +373,11 @@ function OrderView({ checkoutId }: { checkoutId: string }) {
             <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
               <div className="space-y-4">
                 {o.children.map((c) => (
-                  <ChildCard key={c.id} order={o} child={c} explanation={byChild.get(c.id) ?? localExplanation(c)} />
+                  <ChildCard key={c.id} order={o} child={c} explanation={byChild.get(c.id)} />
                 ))}
               </div>
               <aside className="space-y-4 lg:sticky lg:top-20 lg:self-start">
-                <TotalsCard order={o} />
+                <TotalsCard order={o} totals={detail.adjustedTotals} />
                 {o.deliveryAddress ? (
                   <Card>
                     <h2 className="mb-1 text-sm font-semibold text-slate-900">Delivering to</h2>

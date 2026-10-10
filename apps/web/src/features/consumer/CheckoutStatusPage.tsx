@@ -17,7 +17,9 @@ import { DemoBadge, SeparateDeliveryNote } from './parts';
 import { PayButton } from './PaymentStep';
 
 export const checkoutKey = (id: string) => ['checkout', id] as const;
-const PLACED = new Set(['PAID_PLACED', 'IN_PROGRESS', 'COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED']);
+const PLACED = new Set(['PAID_PLACED', 'IN_PROGRESS', 'COMPLETED', 'PARTIALLY_COMPLETED']);
+/** Paid, then every part was cancelled/rejected (refunds follow) — not "placed" copy. */
+const SETTLED = new Set(['PAID_PLACED', 'IN_PROGRESS', 'COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED']);
 
 function StatusBody({ data }: { data: CheckoutResponse }) {
   const { checkout: c, payment } = data;
@@ -48,6 +50,19 @@ function StatusBody({ data }: { data: CheckoutResponse }) {
         {c.children.length > 1 ? <p className="mb-4 text-sm text-slate-600">Each restaurant confirms and delivers its part separately — track them on the order page.</p> : null}
         <ButtonLink to={`/orders/${c.id}`} fullWidth size="lg" iconRight="chevron-right">
           Track your order
+        </ButtonLink>
+      </Card>
+    );
+  }
+
+  if (c.status === 'CANCELLED') {
+    return (
+      <Card className="mx-auto max-w-xl text-center" padding="lg">
+        <Icon name="info" size={32} className="mx-auto mb-2 text-slate-500" />
+        <h2 className="text-xl font-bold text-slate-900">This order was cancelled</h2>
+        <p className="my-3 text-sm text-slate-700">Your payment was received, but the order didn&rsquo;t go ahead. Any refund and the reason are shown on the order page.</p>
+        <ButtonLink to={`/orders/${c.id}`} size="lg">
+          View order and refund
         </ButtonLink>
       </Card>
     );
@@ -124,7 +139,7 @@ function StatusView({ checkoutId }: { checkoutId: string }) {
     },
     { fallbackRefetch: q.refetch, enabled: awaiting },
   );
-  const placed = q.data && PLACED.has(q.data.checkout.status);
+  const placed = q.data && SETTLED.has(q.data.checkout.status);
   useEffect(() => {
     if (placed) {
       void qc.invalidateQueries({ queryKey: CART_KEY });

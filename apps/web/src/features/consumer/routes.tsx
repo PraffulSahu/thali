@@ -1,7 +1,7 @@
 /**
  * Consumer area routes (Task 17). Guests can browse, build a cart and pay only after OTP sign-in; private pages
- * wrap themselves in <RequireAuth>. Pages are code-split with React.lazy + Suspense because area routes are
- * descendant routes rendered by `useRoutes` (route-object `lazy` is a data-router-only feature).
+ * wrap themselves in <RequireAuth>. Pages are code-split with React.lazy + a page-level Suspense skeleton
+ * (works with the foundation's patched data-router children).
  */
 import { lazy, Suspense, type ComponentType, type LazyExoticComponent } from 'react';
 import type { RouteObject } from 'react-router';

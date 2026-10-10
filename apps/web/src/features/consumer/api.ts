@@ -9,9 +9,10 @@
  *   identity     /me, /me/addresses, /me/notification-prefs
  *   delivery     GET /deliveries/tracking/:childOrderId
  *   notifications GET /notifications, POST /notifications/:id/read
- * Coded against LLD §10 (services not written yet; parsed tolerantly):
+ * Lifecycle / commerce (orders order-schemas.ts, marketplace memberships.ts, coupons.ts):
  *   orders       GET /orders, GET /orders/:checkoutId, POST /orders/child/:id/cancel, POST /orders/:id/reorder, /support/tickets*
  *   marketplace  GET /coupons/available, GET /memberships/plans|me, POST /memberships/purchase
+ * (all of the above re-verified against the implemented services in review round 1)
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Breakdown, GeoPoint, Selection } from '@thali/contracts';
@@ -370,11 +371,11 @@ export type CheckoutStatus =
 export type ChildRefundStatus = 'NONE' | 'REQUESTED' | 'PROCESSING' | 'SUCCEEDED' | 'FAILED' | (string & {});
 
 export interface StatusHistoryEntry {
-  from?: string | null;
+  from: string | null;
   to: string;
-  at: string;
-  reason?: string | null;
-  actor?: string;
+  actor: string;
+  reason: string | null;
+  at: string | null;
 }
 export interface ChildOrder {
   id: string;
@@ -392,11 +393,15 @@ export interface ChildOrder {
   deliveryStatus: string | null;
   eta: { distanceKm: number | null; etaMinutes: number | null; etaSource: string | null };
   delivery: DeliveryMode;
-  /** Task 12 additions (LLD; optional until orders lifecycle ships). */
-  statusHistory?: StatusHistoryEntry[];
+  /** Customer lifecycle fields (`CustomerChildOrder`, GET /orders/:checkoutId); absent on GET /checkouts/:id. */
+  prepMinutes?: number | null;
+  readyEta?: string | null;
   rejectionReason?: string | null;
   cancellationReason?: string | null;
-  refundPaise?: number;
+  refundRequestedPaise?: number;
+  partner?: { name: string; vehicleType: string | null } | null;
+  canCancel?: boolean;
+  statusHistory?: StatusHistoryEntry[];
 }
 export interface CheckoutView {
   id: string;
@@ -510,59 +515,75 @@ export function normalizePayment(raw: unknown): PaymentView | null {
   };
 }
 
-/* ------------------------------------------------------------------ orders lifecycle (Task 12, LLD shapes) */
+/* ------------------------------------------------------------------ orders lifecycle (orders order-schemas.ts) */
 
 export interface OrderExplanation {
   childOrderId: string;
-  kind: string;
+  restaurantName: string;
+  kind: 'REJECTED' | 'CANCELLED' | 'DELIVERY_FAILED';
+  reason: string | null;
+  refundPaise: number;
+  refundStatus: ChildRefundStatus;
   message: string;
-  refundStatus?: ChildRefundStatus;
 }
+/** Server rule (orders derive.ts): netPaise = paidPaise − refundedPaise (pending refunds NOT subtracted). */
 export interface AdjustedTotals {
   paidPaise: number;
   refundedPaise: number;
   refundPendingPaise: number;
   netPaise: number;
 }
-export interface OrderDetail extends CheckoutView {
-  explanations?: OrderExplanation[];
-  adjustedTotals?: AdjustedTotals;
+/** `GET /orders/:checkoutId` → `OrderDetail`. */
+export interface OrderDetail {
+  checkout: CheckoutView;
+  explanations: OrderExplanation[];
+  adjustedTotals: AdjustedTotals;
 }
-/** `GET /orders/:checkoutId` may return the group directly or wrapped as `{checkout}`/`{order}`. */
-export async function fetchOrder(checkoutId: string): Promise<OrderDetail> {
-  const raw = await api<Record<string, unknown>>(`/orders/${checkoutId}`);
-  const inner = (raw.checkout ?? raw.order ?? raw) as OrderDetail;
-  return {
-    ...inner,
-    explanations: (raw.explanations as OrderExplanation[] | undefined) ?? inner.explanations,
-    adjustedTotals: (raw.adjustedTotals as AdjustedTotals | undefined) ?? inner.adjustedTotals,
-  };
-}
+export const fetchOrder = (checkoutId: string) => api<OrderDetail>(`/orders/${checkoutId}`);
+
+/** `GET /orders` items (`orderSummary()`). */
 export interface OrderSummary {
   id: string;
   code: string;
   status: CheckoutStatus;
   createdAt: string | null;
   placedAt: string | null;
-  pricing: Breakdown;
-  isDemo?: boolean;
-  children: Pick<ChildOrder, 'id' | 'restaurantName' | 'status' | 'refundStatus'>[];
+  totalPaise: number;
+  adjustedTotals: AdjustedTotals;
+  children: {
+    id: string;
+    code: string;
+    restaurantId: string;
+    restaurantName: string;
+    status: ChildOrderStatus;
+    itemCount: number;
+    totalPaise: number;
+    refundStatus: ChildRefundStatus;
+  }[];
 }
 export const fetchOrders = (cursor?: string | null) =>
   api<{ items: OrderSummary[]; nextCursor: string | null }>('/orders', { query: { limit: 10, cursor: cursor ?? undefined } });
-export const cancelChild = (childId: string) => api<unknown>(`/orders/child/${childId}/cancel`, { method: 'POST' });
+/** `CustomerCancelBody { reason? }`. */
+export const cancelChild = (childId: string, reason?: string) =>
+  api<unknown>(`/orders/child/${childId}/cancel`, { method: 'POST', body: reason ? { reason } : {} });
 export interface ReorderChange {
-  kind?: string;
-  type?: string;
-  itemId?: string;
-  restaurantId?: string;
-  name?: string;
-  message?: string;
-  oldPricePaise?: number;
-  newPricePaise?: number;
+  kind: 'PRICE_CHANGED' | 'ITEM_UNAVAILABLE' | 'OUT_OF_STOCK' | 'INVALID_SELECTION' | 'RESTAURANT_CLOSED' | 'QUANTITY_LIMIT' | (string & {});
+  restaurantId: string;
+  restaurantName: string;
+  itemId: string;
+  name: string;
+  quantity: number;
+  added: boolean;
+  oldUnitPricePaise?: number;
+  newUnitPricePaise?: number;
+  message: string;
 }
-export const reorder = (checkoutId: string) =>
-  api<{ changes?: ReorderChange[]; cart?: Cart; addedCount?: number }>(`/orders/${checkoutId}/reorder`, { method: 'POST' });
+export interface ReorderResult {
+  cart: Cart;
+  addedCount: number;
+  changes: ReorderChange[];
+}
+export const reorder = (checkoutId: string) => api<ReorderResult>(`/orders/${checkoutId}/reorder`, { method: 'POST' });
 
 export interface TrackingView {
   childOrderId: string;
@@ -623,93 +644,97 @@ export const addressToInput = (a: SavedAddress | AddressSnapshot): DeliveryAddre
 export const formatAddress = (a: Pick<SavedAddress, 'line1' | 'line2' | 'city' | 'pincode'>) =>
   [a.line1, a.line2, a.city, a.pincode].filter(Boolean).join(', ');
 
-/* ------------------------------------------------------------------ memberships (Task 9, LLD shapes) */
+/* ------------------------------------------------------------------ memberships (marketplace routes/memberships.ts) */
 
+export interface PlanBenefits {
+  freeDeliveryMinOrderPaise: number;
+  freeDeliveriesPerPeriod: number;
+  extraDiscountBps: number;
+  extraDiscountCapPaise: number;
+}
 export interface MembershipPlan {
   id: string;
   name: string;
   pricePaise: number;
   durationDays: number;
-  benefits: {
-    freeDeliveryMinOrderPaise?: number;
-    freeDeliveriesPerPeriod?: number;
-    extraDiscountBps?: number;
-    extraDiscountCapPaise?: number;
-  };
+  benefits: PlanBenefits;
   terms: string;
-  active?: boolean;
+  active: boolean;
 }
 export interface Membership {
   id: string;
   planId: string;
-  planSnapshot?: Partial<MembershipPlan>;
-  status: 'PENDING_PAYMENT' | 'ACTIVE' | 'EXPIRED' | 'CANCELLED' | (string & {});
+  plan: { name: string; pricePaise: number; durationDays: number; benefits: PlanBenefits; terms: string };
+  status: 'PENDING_PAYMENT' | 'ACTIVE' | 'EXPIRED' | 'CANCELLED';
   startsAt: string | null;
   endsAt: string | null;
-  freeDeliveriesUsed?: number;
-  createdAt?: string;
+  paymentIntentId: string | null;
+  freeDeliveriesUsed: number;
+  freeDeliveriesRemaining: number;
+  createdAt: string | null;
 }
-const listOf = <T>(raw: unknown, ...keys: string[]): T[] => {
-  if (Array.isArray(raw)) return raw as T[];
-  if (raw && typeof raw === 'object') {
-    for (const k of keys) {
-      const v = (raw as Record<string, unknown>)[k];
-      if (Array.isArray(v)) return v as T[];
-    }
-  }
-  return [];
-};
-export const fetchPlans = () => api<unknown>('/memberships/plans', { auth: false }).then((r) => listOf<MembershipPlan>(r, 'items', 'plans'));
 export interface MyMemberships {
-  active: Membership | null;
+  current: Membership | null;
   history: Membership[];
 }
-export async function fetchMyMemberships(): Promise<MyMemberships> {
-  const raw = await api<unknown>('/memberships/me');
-  const obj = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  const history = listOf<Membership>(raw, 'history', 'items', 'memberships');
-  const active =
-    (obj.active as Membership | null | undefined) ??
-    (obj.membership as Membership | null | undefined) ??
-    history.find((m) => m.status === 'ACTIVE') ??
-    ((obj.status === 'ACTIVE' ? (obj as unknown as Membership) : null) || null);
-  return { active: active ?? null, history };
-}
+export const fetchPlans = () => api<{ items: MembershipPlan[] }>('/memberships/plans', { auth: false }).then((r) => r.items);
+export const fetchMyMemberships = () => api<MyMemberships>('/memberships/me');
 export const MEMBERSHIP_KEY = ['memberships', 'me'] as const;
+export interface MembershipPaymentIntent {
+  paymentIntentId: string;
+  provider: 'razorpay' | 'mock';
+  providerOrderId: string;
+  keyId: string | null;
+  amountPaise: number;
+  currency: 'INR';
+  status: string;
+  demoPayUrl: string | null;
+}
 export const purchaseMembership = (planId: string, idempotencyKey: string) =>
-  api<Record<string, unknown>>('/memberships/purchase', { method: 'POST', body: { planId }, idempotencyKey });
+  api<{ membership: Membership; payment: MembershipPaymentIntent }>('/memberships/purchase', { method: 'POST', body: { planId }, idempotencyKey });
 
 export interface AvailableCoupon {
   code: string;
-  description?: string;
+  description: string;
   minOrderPaise?: number;
 }
-export const fetchCoupons = () => api<unknown>('/coupons/available').then((r) => listOf<AvailableCoupon>(r, 'items', 'coupons'));
+export const fetchCoupons = () => api<{ items: AvailableCoupon[] }>('/coupons/available').then((r) => r.items);
 
-/* ------------------------------------------------------------------ support (Task 12, LLD shapes) */
+/* ------------------------------------------------------------------ support (orders TicketView) */
 
 export type TicketCategory = 'ORDER_ISSUE' | 'PAYMENT' | 'DELIVERY' | 'ACCOUNT' | 'OTHER';
 export interface TicketMessage {
-  authorId?: string;
-  authorRole: string;
+  authorId: string;
+  authorRole: 'CUSTOMER' | 'ADMIN';
   body: string;
-  at: string;
+  at: string | null;
 }
 export interface SupportTicket {
   id: string;
-  code?: string;
+  code: string;
+  userId: string;
+  childOrderId: string | null;
+  checkoutGroupId: string | null;
   subject: string;
   category: TicketCategory;
-  status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED' | (string & {});
-  childOrderId?: string | null;
-  checkoutGroupId?: string | null;
-  messages?: TicketMessage[];
-  createdAt?: string;
-  updatedAt?: string;
+  status: 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
+  priority: string;
+  assigneeId: string | null;
+  messages: TicketMessage[];
+  createdAt: string | null;
+  updatedAt: string | null;
 }
-export const fetchTickets = () => api<unknown>('/support/tickets').then((r) => listOf<SupportTicket>(r, 'items', 'tickets'));
-export const fetchTicket = (id: string) =>
-  api<Record<string, unknown>>(`/support/tickets/${id}`).then((r) => ((r.ticket ?? r) as SupportTicket));
+export interface CreateTicketInput {
+  subject: string;
+  category: TicketCategory;
+  body: string;
+  childOrderId?: string;
+  checkoutGroupId?: string;
+}
+export const fetchTickets = () => api<{ items: SupportTicket[]; nextCursor: string | null }>('/support/tickets').then((r) => r.items);
+export const fetchTicket = (id: string) => api<SupportTicket>(`/support/tickets/${id}`);
+export const createTicket = (input: CreateTicketInput) => api<SupportTicket>('/support/tickets', { method: 'POST', body: input });
+export const replyTicket = (id: string, body: string) => api<SupportTicket>(`/support/tickets/${id}/messages`, { method: 'POST', body: { body } });
 
 /* ------------------------------------------------------------------ notifications */
 

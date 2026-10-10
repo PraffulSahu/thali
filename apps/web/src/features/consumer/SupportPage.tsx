@@ -21,11 +21,10 @@ import {
   Textarea,
 } from '../../components/ui';
 import { RequireAuth } from '../../components/layout/RequireRole';
-import { api } from '../../lib/api';
 import { fieldErrors } from '../../lib/errors';
 import { formatDateTime } from '../../lib/format';
 import { cn } from '../../lib/cn';
-import { fetchTicket, fetchTickets, type SupportTicket, type TicketCategory } from './api';
+import { createTicket, fetchTicket, fetchTickets, replyTicket, type TicketCategory } from './api';
 
 const CATEGORIES: { value: TicketCategory; label: string }[] = [
   { value: 'ORDER_ISSUE', label: 'Problem with an order' },
@@ -48,24 +47,16 @@ function NewTicketForm() {
   const [local, setLocal] = useState<Record<string, string>>({});
   const create = useMutation({
     mutationFn: () =>
-      api<Record<string, unknown>>('/support/tickets', {
-        method: 'POST',
-        body: {
-          subject: subject.trim(),
-          category,
-          message: message.trim(),
-          ...(checkoutId ? { checkoutGroupId: checkoutId } : {}),
-          ...(childOrderId ? { childOrderId } : {}),
-        },
+      createTicket({
+        subject: subject.trim(),
+        category,
+        body: message.trim(),
+        ...(checkoutId ? { checkoutGroupId: checkoutId } : {}),
+        ...(childOrderId ? { childOrderId } : {}),
       }),
-    onSuccess: (res) => {
+    onSuccess: (t) => {
       void qc.invalidateQueries({ queryKey: TICKETS_KEY });
-      const t = (res.ticket ?? res) as SupportTicket;
-      if (t?.id) navigate(`/support/${t.id}`);
-      else {
-        setSubject('');
-        setMessage('');
-      }
+      navigate(`/support/${t.id}`);
     },
   });
   const errs = { ...fieldErrors(create.error), ...local };
@@ -91,10 +82,10 @@ function NewTicketForm() {
           <Select value={category} onChange={(e) => setCategory(e.target.value as TicketCategory)} options={CATEGORIES} />
         </Field>
         <Field label="Subject" required error={errs.subject}>
-          <Input value={subject} maxLength={120} onChange={(e) => setSubject(e.target.value)} />
+          <Input value={subject} maxLength={200} onChange={(e) => setSubject(e.target.value)} />
         </Field>
         <Field label="What happened?" required error={errs.message ?? errs.body}>
-          <Textarea value={message} rows={4} maxLength={2000} onChange={(e) => setMessage(e.target.value)} />
+          <Textarea value={message} rows={4} maxLength={5000} onChange={(e) => setMessage(e.target.value)} />
         </Field>
         <InlineError error={create.error && !Object.keys(fieldErrors(create.error)).length ? create.error : null} />
         <FormActions>
@@ -155,7 +146,7 @@ function TicketThread({ id }: { id: string }) {
   const q = useQuery({ queryKey: ['support', 'ticket', id], queryFn: () => fetchTicket(id), refetchInterval: 30_000 });
   const [reply, setReply] = useState('');
   const send = useMutation({
-    mutationFn: () => api(`/support/tickets/${id}/messages`, { method: 'POST', body: { body: reply.trim() } }),
+    mutationFn: () => replyTicket(id, reply.trim()),
     onSuccess: () => {
       setReply('');
       void qc.invalidateQueries({ queryKey: ['support', 'ticket', id] });
@@ -176,11 +167,12 @@ function TicketThread({ id }: { id: string }) {
           ) : null}
           <ol className="mb-4 space-y-3" aria-label="Messages">
             {(t.messages ?? []).map((m, i) => {
-              const mine = m.authorRole === 'CONSUMER' || m.authorRole === 'CUSTOMER';
+              const mine = m.authorRole === 'CUSTOMER';
               return (
                 <li key={`${m.at}-${i}`} className={cn('max-w-[85%] rounded-card px-3 py-2 text-sm', mine ? 'ml-auto bg-brand-50 text-slate-900' : 'bg-surface-muted text-slate-900')}>
                   <p className="mb-1 text-xs font-semibold text-slate-600">
-                    {mine ? 'You' : 'Thali support'} · {formatDateTime(m.at)}
+                    {mine ? 'You' : 'Thali support'}
+                    {m.at ? ` · ${formatDateTime(m.at)}` : ''}
                   </p>
                   <p className="whitespace-pre-line">{m.body}</p>
                 </li>

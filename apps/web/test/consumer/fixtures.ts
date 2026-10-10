@@ -135,3 +135,36 @@ export function checkoutView(over: Record<string, unknown> = {}) {
     ...over,
   };
 }
+
+/** `CustomerChildOrder` (orders order-schemas.ts): ChildOrderView + lifecycle fields. */
+export function customerChild(over: Record<string, unknown> = {}) {
+  return {
+    ...childOrder(),
+    prepMinutes: null,
+    readyEta: null,
+    rejectionReason: null,
+    cancellationReason: null,
+    refundRequestedPaise: 0,
+    partner: null,
+    canCancel: false,
+    statusHistory: [{ from: 'AWAITING_PAYMENT', to: 'PLACED', actor: 'SYSTEM', reason: null, at: '2026-10-10T08:00:00.000Z' }],
+    acceptedAt: null,
+    readyAt: null,
+    pickedUpAt: null,
+    deliveredAt: null,
+    cancelledAt: null,
+    ...over,
+  };
+}
+
+/** `GET /orders/:checkoutId` → `OrderDetail {checkout, explanations, adjustedTotals}` (derive.ts: net = paid − refunded). */
+export function orderDetail(children: ReturnType<typeof customerChild>[], explanations: unknown[] = [], checkoutOver: Record<string, unknown> = {}) {
+  const paidPaise = 81240;
+  const refundedPaise = children.reduce((s, c) => s + (c.refundedPaise as number), 0);
+  const refundPendingPaise = children.reduce((s, c) => s + Math.max(0, (c.refundRequestedPaise as number) - (c.refundedPaise as number)), 0);
+  return {
+    checkout: checkoutView({ children, ...checkoutOver }),
+    explanations,
+    adjustedTotals: { paidPaise, refundedPaise, refundPendingPaise, netPaise: paidPaise - refundedPaise },
+  };
+}

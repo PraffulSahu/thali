@@ -256,7 +256,7 @@ function CheckoutContent() {
     queryFn: () => previewCart({ address: addressToInput(address!), couponCode: coupon ?? null, useMembership }),
     enabled: !!address && hasItems && coupon !== undefined,
   });
-  const activeMembership = membership.data?.active && membership.data.active.status === 'ACTIVE' ? membership.data.active : null;
+  const activeMembership = membership.data?.current?.status === 'ACTIVE' ? membership.data.current : null;
 
   const applyCoupon = (code: string | null) => {
     const c = code?.trim().toUpperCase() || null;
@@ -363,7 +363,7 @@ function CheckoutContent() {
             {activeMembership ? (
               <Switch
                 label="Use membership benefits"
-                description="Free deliveries and extra discounts from your plan, checked by the server."
+                description={`${activeMembership.plan.name}: ${activeMembership.freeDeliveriesRemaining} free deliveries left. Benefits are checked by the server.`}
                 checked={useMembership}
                 onChange={(e) => setUseMembership(e.target.checked)}
               />

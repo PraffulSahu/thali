@@ -11,12 +11,18 @@ import { fetchNotifications, type InAppNotification } from './api';
 
 export const NOTIFICATIONS_KEY = ['notifications'] as const;
 
-function targetOf(n: InAppNotification): string | null {
+/**
+ * Deep link for a notification. Customer order templates currently carry no ids (notifications handlers send
+ * `{code, totalPaise}` etc.), so: checkoutId → order; childOrderId → orders list resolves the child; any
+ * other order_* template → orders list.
+ */
+export function targetOf(n: InAppNotification): string | null {
   const d = n.data ?? {};
-  const checkoutId = typeof d.checkoutId === 'string' ? d.checkoutId : null;
-  if (checkoutId) return `/orders/${checkoutId}`;
+  if (typeof d.checkoutId === 'string') return `/orders/${d.checkoutId}`;
+  if (typeof d.childOrderId === 'string') return `/orders?child=${encodeURIComponent(d.childOrderId)}`;
   if (typeof d.ticketId === 'string') return `/support/${d.ticketId}`;
   if (n.template.startsWith('membership')) return '/membership';
+  if (n.template.startsWith('order_')) return '/orders';
   return null;
 }
 

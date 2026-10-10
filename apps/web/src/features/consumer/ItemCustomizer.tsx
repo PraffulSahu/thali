@@ -55,7 +55,7 @@ export function ItemCustomizer({ item, open, onClose, onAdd, error, busy }: Item
   const toggle = (g: CustomizationGroup, optionId: string) => {
     setChosen((prev) => {
       const cur = prev[g.id] ?? [];
-      if (g.maxSelect === 1) return { ...prev, [g.id]: [optionId] };
+      if (g.maxSelect === 1) return { ...prev, [g.id]: cur.includes(optionId) && g.minSelect === 0 ? [] : [optionId] };
       if (cur.includes(optionId)) return { ...prev, [g.id]: cur.filter((x) => x !== optionId) };
       if (cur.length >= g.maxSelect) return prev;
       return { ...prev, [g.id]: [...cur, optionId] };
@@ -116,8 +116,9 @@ export function ItemCustomizer({ item, open, onClose, onAdd, error, busy }: Item
         </p>
         {item.customizationGroups.map((g) => {
           const cur = chosen[g.id] ?? [];
-          const single = g.maxSelect === 1;
-          const atMax = !single && cur.length >= g.maxSelect;
+          // Required single choice = radios; optional single choice = checkboxes (so it can be cleared).
+          const single = g.maxSelect === 1 && g.minSelect >= 1;
+          const atMax = g.maxSelect > 1 && cur.length >= g.maxSelect;
           return (
             <fieldset key={g.id} className="space-y-1">
               <legend className="flex w-full items-baseline justify-between gap-2">

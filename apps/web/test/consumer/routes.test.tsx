@@ -3,7 +3,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { appRoutes } from '../../src/routes';
+import { createAppRouterConfig } from '../../src/routes';
 import { AuthContext } from '../../src/lib/auth';
 import { __resetApiForTests } from '../../src/lib/api';
 import { ToastProvider } from '../../src/components/ui/Toast';
@@ -14,7 +14,8 @@ import { mockApi } from './fetchMock';
 vi.mock('../../src/components/ui/Map', () => ({ MapView: () => <div data-testid="map" /> }));
 
 function renderApp(path: string, auth = makeAuth()) {
-  const router = createMemoryRouter(appRoutes, { initialEntries: [path] });
+  const cfg = createAppRouterConfig();
+  const router = createMemoryRouter(cfg.routes, { initialEntries: [path], patchRoutesOnNavigation: cfg.patchRoutesOnNavigation });
   render(
     <QueryClientProvider client={makeQueryClient()}>
       <AuthContext.Provider value={auth}>

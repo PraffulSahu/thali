@@ -41,7 +41,7 @@ export default function SearchPage() {
         <div className="space-y-5">
           <form role="search" onSubmit={(e) => e.preventDefault()}>
             <Field label="Search restaurants or dishes" hideLabel>
-              <Input icon="search" type="search" placeholder="Biryani, dosa, pizza…" value={input} maxLength={100} onChange={(e) => setInput(e.target.value)} autoFocus />
+              <Input icon="search" type="search" placeholder="Biryani, dosa, pizza…" value={input} maxLength={100} onChange={(e) => setInput(e.target.value)} />
             </Field>
           </form>
           {!q ? (
