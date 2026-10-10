@@ -11,6 +11,8 @@ export const ERROR_STATUS = {
   FORBIDDEN: 403,
   NOT_FOUND: 404,
   CONFLICT: 409,
+  CONCURRENT_MODIFICATION: 409, // optimistic-concurrency (mongoose VersionError) conflict
+  PAYLOAD_TOO_LARGE: 413, // request body over the JSON limit
   RATE_LIMITED: 429,
   INTERNAL_ERROR: 500,
   INVALID_TRANSITION: 409, // generic fallback for unregistered state tables
