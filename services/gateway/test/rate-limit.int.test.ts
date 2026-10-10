@@ -55,6 +55,22 @@ describe('rate limits (LLD 5.4)', () => {
     expect((await request(app).get('/api/v1/me')).status).toBe(200);
   });
 
+  it('admin password forgot/reset share a fail-closed per-IP limiter (like OTP); admin login is unaffected', async () => {
+    const app = gateway({ RATE_LIMIT_ADMIN_PASSWORD_PER_MIN: '3' });
+    const before = identity.hits.length;
+    for (let i = 1; i <= 2; i++) {
+      expect((await request(app).post('/api/v1/auth/admin/password/forgot').send({ email: 'a@b.co' })).status, `forgot ${i}`).toBe(200);
+    }
+    expect((await request(app).post('/api/v1/auth/admin/password/reset').send({})).status).toBe(200);
+    const res = await request(app).post('/api/v1/auth/admin/password/forgot').send({ email: 'a@b.co' });
+    expect(res.status).toBe(429);
+    expect(res.body.error.code).toBe('RATE_LIMITED');
+    expect(identity.hits.length - before).toBe(3);
+    // proxied to identity unchanged (prefix /api/v1/auth), login not under this limiter
+    expect(identity.hits.at(-1)!.url).toBe('/api/v1/auth/admin/password/reset');
+    expect((await request(app).post('/api/v1/auth/admin/login').send({})).status).toBe(200);
+  });
+
   it('discovery: 60/min/IP — the 61st is 429', async () => {
     const app = gateway();
     for (let i = 1; i <= 60; i++) {

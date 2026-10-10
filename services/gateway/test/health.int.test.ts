@@ -138,6 +138,13 @@ describe('GET /api/v1/admin/health', () => {
     expect(services.notifications.errorCode).toBe('UPSTREAM_TIMEOUT');
     expect(services.notifications.details).toBeUndefined();
 
+    // GW-1 explanations
+    expect(services.identity).toMatchObject({ degradedReasons: [], summary: 'All checks passing', providers: {} });
+    expect(services.payments.degradedReasons).toEqual(['redis unreachable']);
+    expect(services.payments.providers).toEqual({ payment: 'up' });
+    expect(services.delivery).toMatchObject({ degradedReasons: [], providers: {} });
+    expect(services.delivery.summary).toMatch(/^Unreachable: /);
+
     expect(overall).toBe('degraded');
     expect(gateway).toMatchObject({ status: 'up', redis: 'up', mode: 'demo' });
     expect(new Date(res.body.checkedAt).getTime()).toBeGreaterThan(t0 - 1000);
@@ -168,6 +175,40 @@ describe('GET /api/v1/admin/health', () => {
       expect(res.body.overall).toBe('down');
     } finally {
       await bad.close();
+    }
+  });
+});
+
+describe('GW-1: a failing provider is "provider failing", never "down"', () => {
+  it('notifications reachable with SMTP errors → degraded, providers.email failing, summary carries the scrubbed message', async () => {
+    const notif = await startUpstream('notifications', (_req, res) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(
+        JSON.stringify({
+          ...detailsFor('notifications'),
+          providerErrorsLastHour: 12,
+          providerErrorsByProvider: { mailpit: 12 },
+          lastProviderErrors: { mailpit: { message: 'SMTP connect ECONNREFUSED 10.0.3.12:587', at: new Date().toISOString() } },
+        }),
+      );
+    });
+    try {
+      const a = buildApp({
+        config: testGatewayConfig({ ...Object.fromEntries(Object.entries(ups).map(([k, u]) => [k, u.url])), notifications: notif.url }, { REDIS_KEY_PREFIX: tr.prefix, HEALTH_TIMEOUT_MS: '400' }),
+        logger: testLogger('gateway'),
+        redis: tr.redis,
+        auth: createAuthVerifier({ jwks: keys.jwks, redis: tr.redis }),
+      });
+      const res = await request(a).get('/api/v1/admin/health').set('authorization', `Bearer ${adminToken}`);
+      expect(res.status).toBe(200);
+      const n = res.body.services.notifications;
+      expect(n.status).toBe('degraded');
+      expect(n.error).toBeUndefined();
+      expect(n.providers).toEqual({ email: 'failing', sms: 'up' });
+      expect(n.degradedReasons).toEqual(['email provider failing (12 errors in the last hour): SMTP connect ECONNREFUSED 10.0.3.12:587']);
+      expect(n.summary).toBe('Email provider failing: SMTP connect ECONNREFUSED 10.0.3.12:587');
+    } finally {
+      await notif.close();
     }
   });
 });

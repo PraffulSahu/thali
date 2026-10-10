@@ -70,6 +70,11 @@ export function buildApp(deps: GatewayDeps): Express {
           '/api/v1/auth/otp',
           rateLimit({ redis, name: 'gw-otp', keyFn: byIp, points: config.RATE_LIMIT_OTP_PER_MIN, durationSec: 60 }),
         );
+        // Admin forgot/reset password (IDN-1): unauthenticated, abuse-prone -> same fail-closed treatment as OTP.
+        app.use(
+          '/api/v1/auth/admin/password',
+          rateLimit({ redis, name: 'gw-admin-password', keyFn: byIp, points: config.RATE_LIMIT_ADMIN_PASSWORD_PER_MIN, durationSec: 60 }),
+        );
       }
 
       app.get('/api/v1/meta', metaHandler(config));

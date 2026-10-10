@@ -13,6 +13,8 @@ export const MetaSchema = z
     brand: z.string(),
     currency: z.literal('INR'),
     timezone: z.literal('Asia/Kolkata'),
+    /** GW-3: the city the platform serves (static config). */
+    city: z.object({ name: z.string(), pilot: z.boolean() }),
     providers: z.object({
       payment: ProviderLabelSchema,
       sms: ProviderLabelSchema,
@@ -46,6 +48,7 @@ export function buildMeta(config: GatewayConfig): Meta {
     brand: config.BRAND_NAME,
     currency: 'INR',
     timezone: 'Asia/Kolkata',
+    city: { name: config.CITY_NAME, pilot: config.CITY_PILOT },
     providers: {
       payment: providerLabel(mode, config.PAYMENT_PROVIDER),
       sms: providerLabel(mode, config.SMS_PROVIDER),

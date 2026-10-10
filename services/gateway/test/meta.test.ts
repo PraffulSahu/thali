@@ -45,6 +45,12 @@ describe('GET /api/v1/meta', () => {
     expect(Object.values(res.body.providers)).toEqual(['live', 'live', 'live', 'live', 'live']);
   });
 
+  it('GW-3: city from config (default Bengaluru pilot)', async () => {
+    expect((await request(app({})).get('/api/v1/meta')).body.city).toEqual({ name: 'Bengaluru', pilot: true });
+    const res = await request(app({ CITY_NAME: 'Mysuru', CITY_PILOT: 'false' })).get('/api/v1/meta');
+    expect(res.body.city).toEqual({ name: 'Mysuru', pilot: false });
+  });
+
   it('is public (no auth) and cacheable briefly', async () => {
     const res = await request(app({})).get('/api/v1/meta');
     expect(res.status).toBe(200);

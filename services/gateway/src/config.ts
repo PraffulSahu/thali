@@ -11,7 +11,7 @@
  * `X-Forwarded-For` and sidestep the limits.
  */
 import { z } from 'zod';
-import { envTrustProxy, loadConfig, type BaseConfig } from '@thali/service-kit';
+import { envBool, envTrustProxy, loadConfig, type BaseConfig } from '@thali/service-kit';
 
 const upstreamUrl = (port: number) => z.url().default(`http://localhost:${port}`);
 
@@ -38,6 +38,8 @@ export const GatewayConfigShape = {
   RATE_LIMIT_GLOBAL_PER_MIN: z.coerce.number().int().min(1).default(300),
   RATE_LIMIT_DISCOVERY_PER_MIN: z.coerce.number().int().min(1).default(60),
   RATE_LIMIT_OTP_PER_MIN: z.coerce.number().int().min(1).default(10),
+  /** Admin forgot/reset password (IDN-1), per IP, fail-closed like OTP. Identity applies its own stricter limits too. */
+  RATE_LIMIT_ADMIN_PASSWORD_PER_MIN: z.coerce.number().int().min(1).default(10),
 
   /** Inputs for `/api/v1/meta`: must mirror what the services run with. */
   BRAND_NAME: z.string().min(1).default('Thali'),
@@ -46,6 +48,9 @@ export const GatewayConfigShape = {
   EMAIL_PROVIDER: z.enum(['resend', 'mailpit', 'mock']).default('mock'),
   GEO_PROVIDER: z.enum(['google', 'demo']).default('demo'),
   STORAGE_PROVIDER: z.enum(['s3']).default('s3'),
+  /** GW-3: city shown by the SPA (`/api/v1/meta.city`). */
+  CITY_NAME: z.string().trim().min(1).max(60).default('Bengaluru'),
+  CITY_PILOT: envBool(true),
 };
 
 export type GatewayConfig = BaseConfig & z.infer<z.ZodObject<typeof GatewayConfigShape>>;
