@@ -54,12 +54,12 @@ APIs or event-fed local projections (e.g. orders keeps `restaurant_projection`).
 
 | Prefix | Service |
 |---|---|
-| `/api/v1/auth`, `/api/v1/me`, `/api/v1/admin/users`, `/api/v1/admin/audit-logs`, `/.well-known/jwks.json` | identity |
+| `/api/v1/auth`, `/api/v1/me`, `/api/v1/admin/users`, `/api/v1/admin/audit-logs`, `/api/v1/admin/admins`, `/.well-known/jwks.json` | identity |
 | `/api/v1/discovery`, `/api/v1/restaurants`, `/api/v1/owner/restaurants`, `/api/v1/coupons`, `/api/v1/memberships`, `/api/v1/banners`, `/api/v1/cuisines`, `/api/v1/admin/marketplace` | marketplace |
 | `/api/v1/cart`, `/api/v1/checkouts`, `/api/v1/orders`, `/api/v1/owner/orders`, `/api/v1/support`, `/api/v1/admin/orders`, `/api/v1/admin/support` | orders |
 | `/api/v1/payments`, `/api/v1/webhooks/razorpay`, `/api/v1/finance`, `/api/v1/admin/finance`, `/api/v1/demo-pay` | payments |
 | `/api/v1/partner`, `/api/v1/deliveries`, `/api/v1/admin/delivery` | delivery |
-| `/api/v1/notifications`, `/api/v1/realtime`, `/api/v1/webhooks/twilio`, `/api/v1/webhooks/resend` | notifications |
+| `/api/v1/notifications`, `/api/v1/realtime`, `/api/v1/webhooks/twilio`, `/api/v1/webhooks/resend`, `/api/v1/admin/notifications` | notifications |
 | `/api/v1/meta`, `/api/v1/admin/health`, `/api/docs` | gateway itself |
 
 - **Internal**: service → service at `http://<svc>:<port>/internal/...` on the private Docker

@@ -8,7 +8,7 @@
  */
 import type { Express, RequestHandler } from 'express';
 import type { Logger } from 'pino';
-import { createApp, rateLimit, requireAuth, type AuthVerifier, type Redis } from '@thali/service-kit';
+import { createApp, rateLimit, redisHealthCheck, requireAuth, type AuthVerifier, type Redis } from '@thali/service-kit';
 import type { GatewayConfig } from './config.js';
 import { registerDocs } from './docs.js';
 import { healthHandler, upstreamUrls } from './health.js';
@@ -44,6 +44,8 @@ export function buildApp(deps: GatewayDeps): Express {
     openapi,
     redis,
     auth: deps.auth,
+    // `/health/ready`: the gateway has no database, but rate limits and the session revocation check need Redis.
+    healthChecks: redis ? { redis: redisHealthCheck(redis) } : {},
     bodyParser: false,
     trustProxy: config.TRUST_PROXY,
     routes(app) {

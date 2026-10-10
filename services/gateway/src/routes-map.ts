@@ -27,6 +27,7 @@ export const PREFIX_MAP: readonly RouteEntry[] = [
   ['/api/v1/me', 'identity'],
   ['/api/v1/admin/users', 'identity'],
   ['/api/v1/admin/audit-logs', 'identity'],
+  ['/api/v1/admin/admins', 'identity'],
   ['/.well-known/jwks.json', 'identity'],
   // marketplace
   ['/api/v1/discovery', 'marketplace'],
@@ -60,6 +61,7 @@ export const PREFIX_MAP: readonly RouteEntry[] = [
   ['/api/v1/realtime', 'notifications'],
   ['/api/v1/webhooks/twilio', 'notifications'],
   ['/api/v1/webhooks/resend', 'notifications'],
+  ['/api/v1/admin/notifications', 'notifications'],
   // gateway itself
   ['/api/v1/meta', 'gateway'],
   ['/api/v1/admin/health', 'gateway'],

@@ -171,3 +171,11 @@ describe('GET /api/v1/admin/health', () => {
     }
   });
 });
+
+describe('GET /health/ready', () => {
+  it('checks Redis (rate limits + revocation depend on it)', async () => {
+    const res = await request(app).get('/health/ready');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'ok', checks: { redis: 'up' } });
+  });
+});
