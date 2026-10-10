@@ -22,6 +22,7 @@ export function createTestConfig<T extends object = object>(overrides: Partial<B
     LOG_LEVEL: 'silent',
     CORS_ORIGINS: [],
     DOCS_ENABLED: false,
+    TRUST_PROXY: 'loopback',
     PUBLIC_WEB_URL: undefined,
     PUBLIC_API_URL: undefined,
     EVENT_STREAM_PREFIX: '',

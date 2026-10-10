@@ -2,7 +2,7 @@ import { Writable } from 'node:stream';
 import express from 'express';
 import mongoose from 'mongoose';
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { DomainError } from '@thali/contracts';
 import {
@@ -34,6 +34,9 @@ function build(overrides: Partial<CreateAppOptions> = {}, configOverrides: Recor
       });
       app.get('/boom/plain', () => {
         throw new Error('secret db detail at mongo://user:pw@host');
+      });
+      app.get('/boom/domain5xx', () => {
+        throw new DomainError('SERVICE_UNAVAILABLE', 'redis at 10.0.0.5:6379 refused', undefined, { host: '10.0.0.5' });
       });
       app.get('/boom/version', () => {
         throw new mongoose.Error.VersionError({ _doc: { _id: 'x' } } as never, 1, ['status']);
@@ -171,18 +174,36 @@ describe('createApp: error envelope', () => {
     expect(res.body.error.code).toBe('CONCURRENT_MODIFICATION');
   });
 
-  it('production: unknown errors → generic 500, never a stack or internal message', async () => {
-    const res = await request(build({}, { APP_MODE: 'production' })).get('/boom/plain');
+  it('NODE_ENV=production: unknown 5xx → generic message, no stack, no internals', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const res = await request(build()).get('/boom/plain');
     expect(res.status).toBe(500);
     expect(res.body.error).toEqual({
       code: 'INTERNAL_ERROR',
       message: 'Internal server error',
       requestId: res.headers['x-request-id'],
     });
-    expect(res.text).not.toMatch(/stack|secret db detail|at .*\.ts/);
+    expect(res.text).not.toMatch(/stack|secret db detail|mongo:\/\/|at .*\.ts/);
   });
 
-  it('non-production: 500 shows the message but still no stack', async () => {
+  it('APP_MODE=production hides internals even when NODE_ENV=test', async () => {
+    const res = await request(build({}, { APP_MODE: 'production' })).get('/boom/plain');
+    expect(res.body.error.message).toBe('Internal server error');
+    expect(res.text).not.toMatch(/secret db detail/);
+  });
+
+  it('NODE_ENV=production: DomainError 5xx uses the generic message for its code and drops details', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    const res = await request(build()).get('/boom/domain5xx');
+    expect(res.status).toBe(503);
+    expect(res.body.error).toEqual({
+      code: 'SERVICE_UNAVAILABLE',
+      message: 'Service temporarily unavailable',
+      requestId: res.headers['x-request-id'],
+    });
+  });
+
+  it('NODE_ENV=test (dev/test, non-production mode): 500 shows the message but still no stack', async () => {
     const res = await request(build()).get('/boom/plain');
     expect(res.status).toBe(500);
     expect(res.body.error.code).toBe('INTERNAL_ERROR');
@@ -191,7 +212,16 @@ describe('createApp: error envelope', () => {
   });
 });
 
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe('createApp: middleware', () => {
+  it('uses config.TRUST_PROXY (default loopback)', () => {
+    expect(build().get('trust proxy')).toBe('loopback');
+    expect(build({}, { TRUST_PROXY: 1 }).get('trust proxy')).toBe(1);
+  });
+
   it('captures the exact raw JSON body bytes on req.rawBody (webhook signatures)', async () => {
     const raw = '{ "a" :  1,\n  "b": [1, 2] }';
     const res = await request(build()).post('/raw').set('content-type', 'application/json').send(raw);

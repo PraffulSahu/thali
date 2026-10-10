@@ -54,6 +54,14 @@ describe('loadConfig', () => {
     expect(() => loadConfig({}, { ...base, JWKS_URL: 'not a url' })).toThrow(/JWKS_URL/);
   });
 
+  it('parses TRUST_PROXY like Express (default loopback)', () => {
+    expect(loadConfig({}, base).TRUST_PROXY).toBe('loopback');
+    expect(loadConfig({}, { ...base, TRUST_PROXY: '1' }).TRUST_PROXY).toBe(1);
+    expect(loadConfig({}, { ...base, TRUST_PROXY: 'true' }).TRUST_PROXY).toBe(true);
+    expect(loadConfig({}, { ...base, TRUST_PROXY: 'false' }).TRUST_PROXY).toBe(false);
+    expect(loadConfig({}, { ...base, TRUST_PROXY: 'loopback, 10.0.0.0/8' }).TRUST_PROXY).toBe('loopback, 10.0.0.0/8');
+  });
+
   it('demo mode allows mock providers and demo flags', () => {
     const cfg = loadConfig(paymentsShape, { ...base, PAYMENT_PROVIDER: 'mock', DEMO_OTP_ENABLED: 'true' });
     expect(cfg.DEMO_OTP_ENABLED).toBe(true);

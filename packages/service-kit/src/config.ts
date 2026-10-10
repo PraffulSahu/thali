@@ -37,6 +37,21 @@ export const envList = () =>
 /** Optional URL; a blank value (`JWKS_URL=` in a .env file) counts as unset. */
 export const envOptionalUrl = () => z.preprocess((v) => (v === '' ? undefined : v), z.url().optional());
 
+/**
+ * Express `trust proxy` from env: `true|false` → boolean, digits → hop count, anything else → the
+ * string as-is (e.g. `loopback`, `loopback, 10.0.0.0/8`).
+ */
+export const envTrustProxy = (def: string) =>
+  z
+    .string()
+    .default(def)
+    .transform((v): boolean | number | string => {
+      const t = v.trim();
+      if (/^(true|false)$/i.test(t)) return t.toLowerCase() === 'true';
+      if (/^\d+$/.test(t)) return Number(t);
+      return t;
+    });
+
 export const BaseConfigShape = {
   SERVICE_NAME: z.enum(enumValues(ServiceName)),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -49,6 +64,8 @@ export const BaseConfigShape = {
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
   CORS_ORIGINS: envList(),
   DOCS_ENABLED: envBool(false),
+  /** Express `trust proxy`; set the real hop count behind nginx/ALB (e.g. `1`). Default `loopback`. */
+  TRUST_PROXY: envTrustProxy('loopback'),
   PUBLIC_WEB_URL: envOptionalUrl(),
   PUBLIC_API_URL: envOptionalUrl(),
   /** Prefix for Redis Streams names (`<prefix>events.orders`); unique per test file. */

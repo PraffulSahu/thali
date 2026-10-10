@@ -1,14 +1,18 @@
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { DomainError } from '@thali/contracts';
-import { consumeRateLimit, createApp, rateLimit } from '@thali/service-kit';
+import { consumeRateLimit, createApp, createRedis, rateLimit, type Redis } from '@thali/service-kit';
 import { createTestConfig, createTestRedis, testLogger, type TestRedis } from '@thali/service-kit/testing';
 
 let tr: TestRedis;
 let app: ReturnType<typeof createApp>;
+let dead: Redis;
 
 beforeAll(async () => {
   tr = await createTestRedis();
+  dead = createRedis('redis://127.0.0.1:1', {
+    redisOptions: { lazyConnect: true, enableOfflineQueue: false, maxRetriesPerRequest: 0, retryStrategy: () => null },
+  });
   app = createApp({
     config: createTestConfig(),
     logger: testLogger(),
@@ -28,6 +32,14 @@ beforeAll(async () => {
         rateLimit({ redis: tr.redis, name: 'skip', keyFn: () => null, points: 1, durationSec: 10 }),
         (_req, res) => res.json({ ok: true }),
       );
+      a.get('/redis-down-default', rateLimit({ redis: dead, name: 'down', keyFn: () => 'k', points: 5, durationSec: 10 }), (_req, res) =>
+        res.json({ ok: true }),
+      );
+      a.get(
+        '/redis-down-open',
+        rateLimit({ redis: dead, name: 'down', keyFn: () => 'k', points: 5, durationSec: 10, failOpen: true }),
+        (_req, res) => res.json({ ok: true }),
+      );
       a.get('/manual', () => {
         throw new DomainError('RATE_LIMITED', 'slow down', undefined, { retryAfterSec: 7 });
       });
@@ -36,6 +48,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  dead.disconnect();
   await tr.cleanup();
 });
 
@@ -93,5 +106,16 @@ describe('rateLimit (fixed window)', () => {
     expect(third.allowed).toBe(false);
     expect(third.retryAfterSec).toBeGreaterThanOrEqual(29);
     expect(await tr.redis.exists(`${tr.prefix}rl:otp:phone:+919000000001`)).toBe(1);
+  });
+
+  it('Redis down: fails CLOSED by default (503 SERVICE_UNAVAILABLE)', async () => {
+    const res = await request(app).get('/redis-down-default');
+    expect(res.status).toBe(503);
+    expect(res.body.error.code).toBe('SERVICE_UNAVAILABLE');
+  });
+
+  it('Redis down with failOpen:true lets the request through', async () => {
+    const res = await request(app).get('/redis-down-open');
+    expect(res.status).toBe(200);
   });
 });

@@ -1,3 +1,6 @@
+import { request as httpRequest, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { Schema } from 'mongoose';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createApp, idempotency } from '@thali/service-kit';
@@ -5,7 +8,10 @@ import { createTestConfig, createTestDb, testLogger, type TestDb } from '@thali/
 
 let db: TestDb;
 let app: ReturnType<typeof createApp>;
-const calls: Record<string, number> = { create: 0, fail: 0, slow: 0, optional: 0 };
+const calls: Record<string, number> = { create: 0, fail: 0, slow: 0, optional: 0, abort: 0, takeover: 0, shapes: 0 };
+let server: Server;
+let baseUrl: string;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 beforeAll(async () => {
   db = await createTestDb('kit_idem');
@@ -34,6 +40,29 @@ beforeAll(async () => {
         await new Promise((r) => setTimeout(r, 300));
         res.status(201).json({ n: calls.slow });
       });
+      a.post('/abortable', idempotency({ scope: 'abort', conn: db.conn }), async (_req, res) => {
+        calls.abort! += 1;
+        await sleep(400);
+        res.status(201).json({ n: calls.abort });
+      });
+      a.post('/takeover', idempotency({ scope: 'takeover', conn: db.conn, lockTimeoutSec: 0.2 }), async (_req, res) => {
+        calls.takeover! += 1;
+        const n = calls.takeover;
+        if (n === 1) await sleep(700);
+        res.status(201).json({ n });
+      });
+      const Thing = db.conn.model('Thing', new Schema({ name: String, tags: [String], at: Date }), 'things');
+      a.post('/shapes', idempotency({ scope: 'shapes', conn: db.conn }), async (req, res) => {
+        calls.shapes! += 1;
+        if (req.body.kind === 'doc') {
+          const doc = await Thing.create({ name: 'paneer', tags: ['veg'], at: new Date('2026-10-10T00:00:00Z') });
+          res.status(201).json(doc);
+        } else if (req.body.kind === 'null') {
+          res.status(200).json(null);
+        } else {
+          res.status(201).json({ a: 1, u: undefined, nested: { v: undefined, d: new Date(0), arr: [undefined, 1] } });
+        }
+      });
       a.post('/optional', idempotency({ scope: 'opt', conn: db.conn, required: false }), (_req, res) => {
         calls.optional! += 1;
         res.json({ n: calls.optional });
@@ -42,7 +71,14 @@ beforeAll(async () => {
   });
 });
 
+beforeAll(async () => {
+  server = app.listen(0, '127.0.0.1');
+  await new Promise<void>((r) => server.once('listening', () => r()));
+  baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+});
+
 afterAll(async () => {
+  await new Promise<void>((r) => server.close(() => r()));
   await db.drop();
 });
 
@@ -57,7 +93,7 @@ describe('idempotency middleware (LLD 1.4)', () => {
     expect(calls.create).toBe(1);
 
     const doc = await db.conn.collection('idempotency_keys').findOne({ _id: 'checkout:u1:key-same-0001' as never });
-    expect(doc).toMatchObject({ status: 'COMPLETED', responseStatus: 201, responseBody: first.body });
+    expect(doc).toMatchObject({ status: 'COMPLETED', responseStatus: 201, responseBody: JSON.stringify(first.body) });
     expect(doc!.requestHash).toMatch(/^[0-9a-f]{64}$/);
     expect(doc!.createdAt).toBeInstanceOf(Date);
   });
@@ -118,5 +154,64 @@ describe('idempotency middleware (LLD 1.4)', () => {
     const replay = await request(app).post('/fail').set('Idempotency-Key', 'key-fail-0001').send({ a: 1 });
     expect(replay.body).toEqual({ n: 2 });
     expect(calls.fail).toBe(2);
+  });
+
+  it('client abort mid-handler does NOT release the key: retry gets IN_PROGRESS, then the replay; handler ran once', async () => {
+    const body = JSON.stringify({ a: 1 });
+    await new Promise<void>((resolve) => {
+      const r = httpRequest(`${baseUrl}/abortable`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body), 'idempotency-key': 'key-abort-0001' },
+      });
+      r.on('error', () => resolve());
+      r.end(body);
+      setTimeout(() => {
+        r.destroy();
+        resolve();
+      }, 100);
+    });
+    await sleep(50);
+    const during = await request(app).post('/abortable').set('Idempotency-Key', 'key-abort-0001').send({ a: 1 });
+    expect(during.status).toBe(409);
+    expect(during.body.error.code).toBe('IDEMPOTENCY_IN_PROGRESS');
+    await sleep(500);
+    const after = await request(app).post('/abortable').set('Idempotency-Key', 'key-abort-0001').send({ a: 1 });
+    expect(after.status).toBe(201);
+    expect(after.body).toEqual({ n: 1 });
+    expect(after.headers['idempotent-replayed']).toBe('true');
+    expect(calls.abort).toBe(1);
+  });
+
+  it('a slow original cannot clobber the record of a request that took over its stale lock', async () => {
+    const send = () => request(app).post('/takeover').set('Idempotency-Key', 'key-take-0001').send({ t: 1 });
+    const original = send().then((r) => r); // supertest is lazy: start it now
+    await sleep(350); // original still running; its lock (0.2 s) is stale
+    const takeover = await send();
+    expect(takeover.status).toBe(201);
+    expect(takeover.body).toEqual({ n: 2 });
+    const first = await original;
+    expect(first.body).toEqual({ n: 1 });
+    await sleep(50);
+    const replay = await send();
+    expect(replay.headers['idempotent-replayed']).toBe('true');
+    expect(replay.body).toEqual({ n: 2 });
+    expect(calls.takeover).toBe(2);
+  });
+
+  it('replays byte-identical JSON (undefined fields, Dates, mongoose documents, null)', async () => {
+    for (const [kind, key] of [['plain', 'key-shape-plain'], ['doc', 'key-shape-doc1'], ['null', 'key-shape-null']] as const) {
+      const before = calls.shapes!;
+      const first = await request(app).post('/shapes').set('Idempotency-Key', key).send({ kind });
+      const again = await request(app).post('/shapes').set('Idempotency-Key', key).send({ kind });
+      expect(calls.shapes! - before).toBe(1);
+      expect(again.headers['idempotent-replayed']).toBe('true');
+      expect(again.status).toBe(first.status);
+      expect(again.text).toBe(first.text);
+      expect(again.headers['content-type']).toMatch(/application\/json/);
+    }
+    const plain = await request(app).post('/shapes').set('Idempotency-Key', 'key-shape-plain').send({ kind: 'plain' });
+    expect(plain.text).toBe('{"a":1,"nested":{"d":"1970-01-01T00:00:00.000Z","arr":[null,1]}}');
+    const nul = await request(app).post('/shapes').set('Idempotency-Key', 'key-shape-null').send({ kind: 'null' });
+    expect(nul.text).toBe('null');
   });
 });

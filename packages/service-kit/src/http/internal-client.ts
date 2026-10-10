@@ -5,7 +5,11 @@
  * 502/503/504 — POST/PUT/PATCH are never retried.
  *
  * Errors:
- *  - upstream error envelope   → `UpstreamError` (a DomainError) preserving code/message/status/details
+ *  - upstream error envelope   → `UpstreamError` (a DomainError) preserving code/message/status/details,
+ *    EXCEPT upstream auth rejections of the service call itself (any 401, or 403 with FORBIDDEN /
+ *    MFA_REQUIRED / CSRF_CHECK_FAILED) → `UPSTREAM_ERROR` 502 (details `{ target, upstreamStatus,
+ *    upstreamCode }`), so a misconfigured secret/allow-list never surfaces to clients as their own 401/403.
+ *    Business 403s (e.g. PARTNER_NOT_APPROVED) are preserved.
  *  - non-envelope upstream 4xx/5xx, bad JSON, schema mismatch → `UPSTREAM_ERROR` 502
  *  - timeout                   → `UPSTREAM_TIMEOUT` 504
  *  - connection failure        → `UPSTREAM_UNAVAILABLE` 502
@@ -74,6 +78,7 @@ export interface InternalClient {
 }
 
 const RETRYABLE_STATUS = new Set([502, 503, 504]);
+const AUTH_403_CODES = new Set<ErrorCode>(['FORBIDDEN', 'MFA_REQUIRED', 'CSRF_CHECK_FAILED']);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function isErrorCode(c: unknown): c is ErrorCode {
@@ -122,6 +127,18 @@ export function internalClient(target: ServiceName, baseUrl: string, opts: Inter
     }
     if (!res.ok) {
       const env = (json as { error?: { code?: unknown; message?: unknown; details?: unknown; requestId?: unknown } })?.error;
+      const upstreamRequestId = typeof env?.requestId === 'string' ? env.requestId : undefined;
+      if (res.status === 401 || (res.status === 403 && (!env || !isErrorCode(env.code) || AUTH_403_CODES.has(env.code)))) {
+        throw new UpstreamError(
+          target,
+          res.status,
+          'UPSTREAM_ERROR',
+          `${target} rejected the service call (${res.status})`,
+          502,
+          { target, upstreamStatus: res.status, upstreamCode: isErrorCode(env?.code) ? env.code : undefined },
+          upstreamRequestId,
+        );
+      }
       if (env && isErrorCode(env.code)) {
         throw new UpstreamError(
           target,
@@ -130,7 +147,7 @@ export function internalClient(target: ServiceName, baseUrl: string, opts: Inter
           typeof env.message === 'string' ? env.message : env.code,
           res.status,
           env.details,
-          typeof env.requestId === 'string' ? env.requestId : undefined,
+          upstreamRequestId,
         );
       }
       throw new UpstreamError(target, res.status, 'UPSTREAM_ERROR', `${target} responded ${res.status}`, 502, {

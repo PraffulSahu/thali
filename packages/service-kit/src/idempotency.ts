@@ -2,22 +2,26 @@
  * `Idempotency-Key` middleware (LLD 1.4). Mount AFTER `requireAuth` (the key is scoped per user).
  *
  * Record `idempotency_keys`: `{ _id: '<scope>:<userId|anon>:<key>', requestHash, status:
- * IN_PROGRESS|COMPLETED, responseStatus, responseBody, createdAt, lockedAt }`, TTL 24 h on createdAt.
+ * IN_PROGRESS|COMPLETED, responseStatus, responseBody (exact JSON text), createdAt, lockedAt, lockId }`,
+ * TTL 24 h on createdAt.
  * `requestHash = sha256(METHOD \n path \n canonicalJSON(body))` (object keys sorted, so key order
  * does not matter).
  *
  *  - missing header: 400 IDEMPOTENCY_KEY_REQUIRED (or pass-through when `required: false`)
  *  - malformed header (not 8–128 `[A-Za-z0-9_-]`): 400 VALIDATION_FAILED
  *  - first request claims the key (atomic insert) and runs the handler
- *  - response < 400 → stored COMPLETED and replayed for identical retries (header `Idempotent-Replayed: true`)
- *  - response ≥ 400 (incl. thrown errors) or client abort → key released, a retry runs again
+ *  - response < 400 → stored COMPLETED (status + exact JSON text) and replayed byte-identically for
+ *    identical retries (header `Idempotent-Replayed: true`)
+ *  - response ≥ 400 (incl. thrown errors) → key released, a retry runs again
+ *  - client abort → NOT released: the handler finishes and its result is stored/replayed
  *  - same key, different hash → 409 IDEMPOTENCY_CONFLICT; still running → 409 IDEMPOTENCY_IN_PROGRESS
- *  - an IN_PROGRESS claim older than `lockTimeoutSec` (crashed instance) is taken over
+ *  - an IN_PROGRESS claim older than `lockTimeoutSec` (crashed instance / hung handler) is taken
+ *    over; completion/release is fenced by the claim's `lockId`, so the stale owner cannot clobber it
  *
  * Responses must be sent with `res.json(...)` (or an empty `res.status(204).end()`).
  */
-import { createHash } from 'node:crypto';
-import type { RequestHandler } from 'express';
+import { createHash, randomUUID } from 'node:crypto';
+import type { RequestHandler, Response } from 'express';
 import { Schema, type Connection, type Model } from 'mongoose';
 import { DomainError, IdempotencyKeySchema } from '@thali/contracts';
 
@@ -30,9 +34,12 @@ export interface IdempotencyRecord {
   requestHash: string;
   status: 'IN_PROGRESS' | 'COMPLETED';
   responseStatus?: number;
-  responseBody?: unknown;
+  /** Exact JSON text of the response body ('' for an empty body). */
+  responseBody?: string;
   createdAt: Date;
   lockedAt: Date;
+  /** Owner token of the current IN_PROGRESS claim. */
+  lockId?: string;
 }
 
 const schema = new Schema<IdempotencyRecord>(
@@ -41,9 +48,10 @@ const schema = new Schema<IdempotencyRecord>(
     requestHash: { type: String, required: true },
     status: { type: String, enum: ['IN_PROGRESS', 'COMPLETED'], required: true },
     responseStatus: Number,
-    responseBody: Schema.Types.Mixed,
+    responseBody: String,
     createdAt: { type: Date, required: true },
     lockedAt: { type: Date, required: true },
+    lockId: String,
   },
   { collection: IDEMPOTENCY_COLLECTION, versionKey: false, minimize: false },
 );
@@ -85,6 +93,17 @@ export interface IdempotencyOptions {
   lockTimeoutSec?: number;
 }
 
+/** Send a stored/serialized JSON body (empty text → empty body). */
+function sendStored(res: Response, status: number, text: string | undefined): void {
+  res.status(status);
+  if (!text) {
+    res.end();
+    return;
+  }
+  if (!res.get('Content-Type')) res.type('json');
+  res.send(text);
+}
+
 function isDuplicateKey(e: unknown): boolean {
   return (e as { code?: number })?.code === 11000;
 }
@@ -111,6 +130,7 @@ export function idempotency(opts: IdempotencyOptions): RequestHandler {
     const hash = requestHash(req.method, path, req.body);
     const now = new Date();
 
+    const lockId = randomUUID();
     let claimed = false;
     try {
       await Model.collection.insertOne({
@@ -119,6 +139,7 @@ export function idempotency(opts: IdempotencyOptions): RequestHandler {
         status: 'IN_PROGRESS',
         createdAt: now,
         lockedAt: now,
+        lockId,
       });
       claimed = true;
     } catch (e) {
@@ -136,55 +157,58 @@ export function idempotency(opts: IdempotencyOptions): RequestHandler {
       }
       if (existing.status === 'COMPLETED') {
         res.setHeader('Idempotent-Replayed', 'true');
-        res.status(existing.responseStatus ?? 200);
-        if (existing.responseBody === undefined || existing.responseBody === null) res.end();
-        else res.json(existing.responseBody);
+        sendStored(res, existing.responseStatus ?? 200, existing.responseBody);
         return;
       }
       const takenOver = await Model.collection.findOneAndUpdate(
         { _id: id as never, status: 'IN_PROGRESS', requestHash: hash, lockedAt: { $lt: new Date(Date.now() - lockTimeoutMs) } },
-        { $set: { lockedAt: new Date() } },
+        { $set: { lockedAt: new Date(), lockId } },
       );
       if (!takenOver) {
         throw new DomainError('IDEMPOTENCY_IN_PROGRESS', 'A request with this Idempotency-Key is in progress');
       }
     }
 
-    // We own the key: capture the response and persist (or release) before it is sent.
+    // We own the key (fenced by `lockId`, so a slow original whose stale lock was taken over can
+    // neither complete nor release the new owner's record). Persist (or release) before sending.
+    // A client abort does NOT release the key: the handler keeps running and completes normally;
+    // a handler that never responds is recovered by the lock timeout.
+    const mine = { _id: id as never, status: 'IN_PROGRESS', lockId };
     let settled = false;
-    const release = async () => {
+    const logFail = (err: unknown) => req.log?.error({ err, idempotencyKey: id }, 'idempotency record update failed');
+    const persist = async (status: number, bodyText: string) => {
       settled = true;
-      await Model.collection.deleteOne({ _id: id as never, status: 'IN_PROGRESS' });
-    };
-    const complete = async (status: number, body: unknown) => {
-      settled = true;
-      await Model.collection.updateOne(
-        { _id: id as never },
-        { $set: { status: 'COMPLETED', responseStatus: status, responseBody: body ?? null } },
-      );
+      if (status < 400) {
+        await Model.collection.updateOne(mine, {
+          $set: { status: 'COMPLETED', responseStatus: status, responseBody: bodyText },
+          $unset: { lockId: '' },
+        });
+      } else {
+        await Model.collection.deleteOne(mine);
+      }
     };
 
-    const originalJson = res.json.bind(res);
     res.json = (body: unknown) => {
+      // Serialize synchronously (same toJSON semantics as Express): a serialization error throws
+      // into the handler and reaches the error middleware.
+      const text = JSON.stringify(body) ?? '';
       const status = res.statusCode;
-      const persist = status < 400 ? complete(status, body) : release();
-      persist
-        .catch((err) => req.log?.error({ err, idempotencyKey: id }, 'idempotency record update failed'))
-        .finally(() => originalJson(body));
+      persist(status, text)
+        .catch(logFail)
+        .then(() => {
+          try {
+            if (!res.headersSent) sendStored(res, status, text);
+          } catch (err) {
+            logFail(err);
+          }
+        });
       return res;
     };
 
     res.on('finish', () => {
-      if (settled) return;
-      const op = res.statusCode < 400 ? complete(res.statusCode, null) : release();
-      op.catch((err) => req.log?.error({ err, idempotencyKey: id }, 'idempotency record update failed'));
-    });
-    res.on('close', () => {
-      if (!settled && !res.writableFinished) {
-        release().catch((err) => req.log?.error({ err, idempotencyKey: id }, 'idempotency release failed'));
-      }
+      if (!settled) persist(res.statusCode, '').catch(logFail);
     });
 
-    next();
+        next();
   };
 }

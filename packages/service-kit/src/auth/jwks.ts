@@ -67,10 +67,34 @@ const ClaimsSchema = z.object({
 
 const unauthenticated = (message: string) => new DomainError('UNAUTHENTICATED', message);
 
+/** Marks a failure to obtain the key set (network, timeout, non-200, invalid JWKS) → 503. */
+class KeySetUnavailable extends Error {
+  constructor(cause: unknown) {
+    super('JWKS unavailable', { cause });
+    this.name = 'KeySetUnavailable';
+  }
+}
+
+/**
+ * Wrap the remote resolver so that only "the token names a key we don't have" stays a token error
+ * (401); every other resolver failure means the key set itself could not be fetched/parsed (503).
+ */
+function remoteKeySet(url: string): JWTVerifyGetKey {
+  const remote = createRemoteJWKSet(new URL(url), { timeoutDuration: 3000 });
+  return async (header, token) => {
+    try {
+      return await remote(header, token);
+    } catch (e) {
+      if (e instanceof joseErrors.JWKSNoMatchingKey || e instanceof joseErrors.JWKSMultipleMatchingKeys) throw e;
+      throw new KeySetUnavailable(e);
+    }
+  };
+}
+
 export function createAuthVerifier(opts: AuthVerifierOptions): AuthVerifier {
   let keySet: JWTVerifyGetKey;
   if (opts.jwks) keySet = createLocalJWKSet(opts.jwks);
-  else if (opts.jwksUrl) keySet = createRemoteJWKSet(new URL(opts.jwksUrl), { timeoutDuration: 3000 });
+  else if (opts.jwksUrl) keySet = remoteKeySet(opts.jwksUrl);
   else throw new Error('createAuthVerifier: provide `jwks` or `jwksUrl`');
   const issuer = opts.issuer ?? ACCESS_TOKEN_ISSUER;
   const audience = opts.audience ?? ACCESS_TOKEN_AUDIENCE;
@@ -87,7 +111,7 @@ export function createAuthVerifier(opts: AuthVerifierOptions): AuthVerifier {
         }));
       } catch (e) {
         if (e instanceof joseErrors.JWTExpired) throw unauthenticated('Access token expired');
-        if (e instanceof joseErrors.JWKSTimeout || !(e instanceof joseErrors.JOSEError)) {
+        if (e instanceof KeySetUnavailable || !(e instanceof joseErrors.JOSEError)) {
           throw new DomainError('SERVICE_UNAVAILABLE', 'Unable to verify access token right now');
         }
         throw unauthenticated('Invalid access token');

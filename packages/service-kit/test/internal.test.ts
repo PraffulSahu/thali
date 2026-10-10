@@ -49,6 +49,10 @@ const payments = createApp({
     });
     app.post('/internal/created', requireInternal(), (req, res) => res.status(201).json({ got: req.body }));
     app.delete('/internal/nothing', requireInternal(), (_req, res) => res.status(204).end());
+    app.get('/internal/delivery-only', requireInternal(['delivery']), (_req, res) => res.json({}));
+    app.get('/internal/partner', requireInternal(), () => {
+      throw new DomainError('PARTNER_NOT_APPROVED', 'Partner not approved');
+    });
     app.get('/internal/html', requireInternal(), (_req, res) => res.status(500).send('<html>oops</html>'));
   },
 });
@@ -233,5 +237,24 @@ describe('internalClient', () => {
       code: 'UPSTREAM_UNAVAILABLE',
       httpStatus: 502,
     });
+  });
+
+  it('upstream 401/403 auth failures (bad service token, caller not allowed) → 502 UPSTREAM_ERROR', async () => {
+    const forbidden = await client()
+      .get('/internal/delivery-only')
+      .catch((e: unknown) => e);
+    expect(forbidden).toMatchObject({ code: 'UPSTREAM_ERROR', httpStatus: 502, upstreamStatus: 403 });
+    expect((forbidden as UpstreamError).details).toMatchObject({ target: 'payments', upstreamCode: 'FORBIDDEN' });
+
+    const wrongSecret = internalClient('payments', baseUrl, { from: 'orders', secret: 'w'.repeat(40) });
+    await expect(wrongSecret.get('/internal/echo')).rejects.toMatchObject({
+      code: 'UPSTREAM_ERROR',
+      httpStatus: 502,
+      upstreamStatus: 401,
+    });
+  });
+
+  it('business 403 codes from upstream are preserved', async () => {
+    await expect(client().get('/internal/partner')).rejects.toMatchObject({ code: 'PARTNER_NOT_APPROVED', httpStatus: 403 });
   });
 });

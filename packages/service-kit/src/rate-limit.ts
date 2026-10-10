@@ -5,7 +5,9 @@
  *
  * On 429 the response carries `Retry-After` (integer seconds) and a `RATE_LIMITED` envelope with
  * `details.retryAfterSec`. Successful responses carry `RateLimit-Limit` / `RateLimit-Remaining`.
- * If Redis is unavailable the limiter fails OPEN (logs a warning) unless `failOpen: false`.
+ * If Redis is unavailable the limiter fails CLOSED (503 SERVICE_UNAVAILABLE) by default — required for
+ * OTP / admin-login limits (LLD 5.4). Opt in to `failOpen: true` only for coarse limits (gateway global,
+ * search), where availability matters more than strictness.
  */
 import type { Request, RequestHandler } from 'express';
 import { DomainError } from '@thali/contracts';
@@ -78,7 +80,7 @@ export interface RateLimitOptions {
   /** Namespace for this limiter (strongly recommended, e.g. `checkout-create`). Default `default`. */
   name?: string;
   keyPrefix?: string;
-  /** Default true: allow traffic if Redis errors. */
+  /** Default false (503 when Redis errors). `true` lets traffic through and logs a warning. */
   failOpen?: boolean;
   message?: string;
 }
@@ -99,7 +101,10 @@ export function rateLimit(opts: RateLimitOptions): RequestHandler {
         keyPrefix: opts.keyPrefix,
       });
     } catch (err) {
-      if (opts.failOpen === false) throw new DomainError('SERVICE_UNAVAILABLE', 'Rate limiter unavailable');
+      if (opts.failOpen !== true) {
+        req.log?.error({ err, limiter: name }, 'rate limiter unavailable; failing closed');
+        throw new DomainError('SERVICE_UNAVAILABLE', 'Rate limiter unavailable');
+      }
       req.log?.warn({ err, limiter: name }, 'rate limiter unavailable; failing open');
       return next();
     }

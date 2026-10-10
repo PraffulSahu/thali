@@ -20,7 +20,7 @@ import { createAuthVerifier, type AuthVerifier } from './auth/jwks.js';
 import { requireInternal } from './auth/require-internal.js';
 import type { BaseConfig } from './config.js';
 import type { KitContext } from './context.js';
-import { errorHandler, notFoundHandler } from './errors.js';
+import { errorHandler, notFoundHandler, shouldExposeInternals } from './errors.js';
 import { listRoutes } from './introspect.js';
 import type { OpenApi, OpenApiDocument } from './openapi.js';
 import type { Redis } from './redis.js';
@@ -51,7 +51,7 @@ export interface CreateAppOptions {
    * untouched (gateway raw passthrough); mount `express.json()` on specific routes if needed.
    */
   bodyParser?: boolean;
-  /** Express `trust proxy`, default `'loopback, linklocal, uniquelocal'` (private networks). */
+  /** Express `trust proxy`; overrides `config.TRUST_PROXY` (default `'loopback'`). */
   trustProxy?: boolean | number | string;
 }
 
@@ -82,9 +82,14 @@ async function runCheck(check: HealthCheck, timeoutMs: number): Promise<boolean>
 
 export function createApp(opts: CreateAppOptions): Express {
   const { config, logger } = opts;
-  const production = config.APP_MODE === 'production';
+  const exposeInternals = shouldExposeInternals(config.APP_MODE);
   const app = express();
 
+  if (!opts.auth && config.JWKS_URL && !opts.redis) {
+    throw new Error(
+      'createApp: JWKS_URL is configured but no `redis` was given — the session revocation check needs Redis (pass `redis` or `auth`)',
+    );
+  }
   const auth =
     opts.auth ??
     (config.JWKS_URL && opts.redis ? createAuthVerifier({ jwksUrl: config.JWKS_URL, redis: opts.redis }) : undefined);
@@ -92,7 +97,7 @@ export function createApp(opts: CreateAppOptions): Express {
   app.locals.kit = kit;
 
   app.disable('x-powered-by');
-  app.set('trust proxy', opts.trustProxy ?? 'loopback, linklocal, uniquelocal');
+  app.set('trust proxy', opts.trustProxy ?? config.TRUST_PROXY ?? 'loopback');
 
   app.use(requestId());
   app.use(
@@ -158,7 +163,7 @@ export function createApp(opts: CreateAppOptions): Express {
   }
 
   app.use(notFoundHandler());
-  app.use(errorHandler({ logger, production }));
+  app.use(errorHandler({ logger, exposeInternals }));
   return app;
 }
 

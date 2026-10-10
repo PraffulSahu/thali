@@ -7,7 +7,12 @@
  *  - body-parser `entity.too.large`   → 413 `PAYLOAD_TOO_LARGE`
  *  - other body-parser 4xx (bad JSON) → 400 `VALIDATION_FAILED`
  *  - `mongoose.Error.VersionError`    → 409 `CONCURRENT_MODIFICATION`
- *  - anything else                    → 500 `INTERNAL_ERROR` (message hidden in production)
+ *  - anything else                    → 500 `INTERNAL_ERROR`
+ *
+ * 5xx hygiene: unless internals are exposed (`NODE_ENV` is `development`/`test` AND `APP_MODE` is
+ * not `production` — see `shouldExposeInternals`), every 5xx response carries only the code's
+ * generic message (`GENERIC_5XX_MESSAGES`) and no `details` — for unknown errors AND DomainErrors
+ * (whose messages may embed hosts, ids or upstream text).
  *
  * Mongo duplicate-key errors are deliberately NOT mapped: services must translate them into a
  * meaningful `DomainError` themselves. Stacks are never sent to clients; errors are logged with the
@@ -54,8 +59,39 @@ interface HttpLikeError {
   expose?: boolean;
 }
 
-/** Map any thrown value to an HTTP status + envelope body. */
-export function resolveError(err: unknown, production: boolean): ResolvedError {
+/** Client-safe messages for 5xx codes (anything else → `Internal server error`). */
+export const GENERIC_5XX_MESSAGES: Partial<Record<ErrorCode, string>> = {
+  INTERNAL_ERROR: 'Internal server error',
+  SERVICE_UNAVAILABLE: 'Service temporarily unavailable',
+  UPSTREAM_ERROR: 'An upstream service failed',
+  UPSTREAM_UNAVAILABLE: 'An upstream service is unavailable',
+  UPSTREAM_TIMEOUT: 'An upstream service timed out',
+  PAYMENT_PROVIDER_UNAVAILABLE: 'Payment provider unavailable, please try again',
+  OTP_DELIVERY_FAILED: 'Could not deliver the code, please try again',
+};
+
+/** Expose 5xx messages/details only in dev/test processes that are not in production mode. */
+export function shouldExposeInternals(appMode: string, nodeEnv = process.env.NODE_ENV): boolean {
+  return appMode !== 'production' && (nodeEnv === 'development' || nodeEnv === 'test');
+}
+
+export interface ResolveErrorOptions {
+  /** Show real messages/details for 5xx (dev/test only). */
+  exposeInternals: boolean;
+}
+
+function scrub(resolved: ResolvedError, expose: boolean): ResolvedError {
+  if (expose || resolved.status < 500) return resolved;
+  const code = resolved.body.code;
+  return { status: resolved.status, body: { code, message: GENERIC_5XX_MESSAGES[code] ?? 'Internal server error' } };
+}
+
+/** Map any thrown value to an HTTP status + envelope body (5xx scrubbed unless `exposeInternals`). */
+export function resolveError(err: unknown, opts: ResolveErrorOptions): ResolvedError {
+  return scrub(classify(err), opts.exposeInternals);
+}
+
+function classify(err: unknown): ResolvedError {
   if (err instanceof DomainError) {
     return { status: err.httpStatus, body: err.toJSON() };
   }
@@ -80,11 +116,7 @@ export function resolveError(err: unknown, production: boolean): ResolvedError {
     const message = httpErr.type === 'entity.parse.failed' ? 'Malformed JSON body' : 'Invalid request';
     return { status: 400, body: { code: 'VALIDATION_FAILED', message } };
   }
-  const message = production
-    ? 'Internal server error'
-    : err instanceof Error
-      ? err.message
-      : 'Internal server error';
+  const message = err instanceof Error && err.message ? err.message : 'Internal server error';
   return { status: 500, body: { code: 'INTERNAL_ERROR', message } };
 }
 
@@ -106,13 +138,13 @@ export function notFoundHandler(): RequestHandler {
 }
 
 /** Final error middleware. */
-export function errorHandler(opts: { logger: Logger; production: boolean }): ErrorRequestHandler {
+export function errorHandler(opts: { logger: Logger; exposeInternals: boolean }): ErrorRequestHandler {
   return (err, req, res, next) => {
     if (res.headersSent) {
       next(err);
       return;
     }
-    const { status, body } = resolveError(err, opts.production);
+    const { status, body } = resolveError(err, { exposeInternals: opts.exposeInternals });
     const log = (req as { log?: Logger }).log ?? opts.logger.child({ reqId: requestIdOf(req) });
     if (status >= 500) log.error({ err, code: body.code }, 'request failed');
     else log.info({ code: body.code, status, msg: body.message }, 'request rejected');

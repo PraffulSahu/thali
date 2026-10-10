@@ -4,7 +4,7 @@
  */
 export type { AuthContext, CallerContext, ValidatedRequest, RequestId } from './types/express.js';
 
-export { loadConfig, ConfigError, BaseConfigShape, envBool, envList, envOptionalUrl, type BaseConfig } from './config.js';
+export { loadConfig, ConfigError, BaseConfigShape, envBool, envList, envOptionalUrl, envTrustProxy, type BaseConfig } from './config.js';
 export { createLogger, REDACT_PATHS, type CreateLoggerOptions, type Logger } from './logger.js';
 export { createApp, redisHealthCheck, type CreateAppOptions, type HealthCheck } from './app.js';
 export { getKit, type KitContext } from './context.js';
@@ -13,6 +13,9 @@ export {
   notFoundHandler,
   resolveError,
   sendError,
+  shouldExposeInternals,
+  GENERIC_5XX_MESSAGES,
+  type ResolveErrorOptions,
   zodIssues,
   type ErrorBody,
   type ResolvedError,

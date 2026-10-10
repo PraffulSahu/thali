@@ -5,6 +5,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   createApp,
   createAuthVerifier,
+  createRedis,
   requireAuth,
   revokeSession,
   signServiceToken,
@@ -92,6 +93,33 @@ describe('requireAuth', () => {
     expect(res.status).toBe(401);
   });
 
+  it('token without sid → 401 UNAUTHENTICATED', async () => {
+    const token = await keys.sign({ sid: undefined });
+    const res = await request(app).get('/me').set(bearer(token));
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('UNAUTHENTICATED');
+  });
+
+  it('Redis down → 503 SERVICE_UNAVAILABLE (revocation check fails closed)', async () => {
+    const dead = createRedis('redis://127.0.0.1:1', {
+      redisOptions: { lazyConnect: true, enableOfflineQueue: false, maxRetriesPerRequest: 0, retryStrategy: () => null },
+    });
+    const a = createApp({
+      config: createTestConfig(),
+      logger: testLogger(),
+      auth: createAuthVerifier({ jwks: keys.jwks, redis: dead }),
+      routes(x) {
+        x.get('/me', requireAuth(), (req, res) => res.json(req.auth));
+      },
+    });
+    const res = await request(a)
+      .get('/me')
+      .set(bearer(await keys.sign({})));
+    dead.disconnect();
+    expect(res.status).toBe(503);
+    expect(res.body.error.code).toBe('SERVICE_UNAVAILABLE');
+  });
+
   it('role missing → 403 FORBIDDEN', async () => {
     const token = await keys.sign({ roles: ['CONSUMER'] });
     const res = await request(app).get('/owner').set(bearer(token));
@@ -157,7 +185,12 @@ describe('createAuthVerifier with a remote JWKS URL', () => {
   let server: Server;
   let url: string;
   beforeAll(async () => {
-    server = createServer((_req, res) => {
+    server = createServer((req, res) => {
+      if (req.url === '/broken') {
+        res.statusCode = 500;
+        res.end('boom');
+        return;
+      }
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify(keys.jwks));
     });
@@ -187,5 +220,23 @@ describe('createAuthVerifier with a remote JWKS URL', () => {
       .set(bearer(await keys.sign({ sub: 'cfg-user' })));
     expect(res.status).toBe(200);
     expect(res.body.userId).toBe('cfg-user');
+  });
+
+  it('JWKS endpoint unreachable or failing → 503 SERVICE_UNAVAILABLE (not 401)', async () => {
+    const token = await keys.sign({});
+    const unreachable = createAuthVerifier({ jwksUrl: 'http://127.0.0.1:1/.well-known/jwks.json', redis: tr.redis });
+    await expect(unreachable.verify(token)).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE', httpStatus: 503 });
+    const broken = createAuthVerifier({ jwksUrl: url.replace(/\/\.well-known\/jwks\.json$/, '/broken'), redis: tr.redis });
+    await expect(broken.verify(token)).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+  });
+
+  it('createApp throws at construction when JWKS_URL is set but no redis/auth is given', () => {
+    expect(() =>
+      createApp({
+        config: createTestConfig({ JWKS_URL: url }),
+        logger: testLogger(),
+        routes() {},
+      }),
+    ).toThrow(/redis/i);
   });
 });
