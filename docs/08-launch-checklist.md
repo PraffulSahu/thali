@@ -8,9 +8,9 @@ How to read the evidence column
 
 - A path such as `services/payments/test/webhook.int.test.ts` is an automated test (real MongoDB replica set and
   Redis, provider calls stubbed at the port boundary). Each was green when its task was completed and reviewed,
-  and the **consolidated final run** on a fresh `docker compose down -v` stack (build exit 0, 169 test files /
-  1 375 tests passed, seed 168 then 0, smoke 26/26, Playwright e2e 29/29) is recorded in
-  [10-testing.md](10-testing.md) section 6.
+  and the **consolidated final run** on a fresh `docker compose down -v` stack (UI-redesign final gate at
+  `f9863ed`: build exit 0, 222 test files / 1 881 tests passed, seed 138,702 then 0, seed-verify 17/17, smoke 26/26,
+  Playwright e2e 33/33) is recorded in [10-testing.md](10-testing.md) section 6.1 (platform baseline: 6.2).
 - A command (for example `docker compose ps`) is something that was run against the demo stack.
 - "Demo" means the mock/Mailpit/MinIO path with the real application code around it. It is not live proof.
 
@@ -33,7 +33,7 @@ ready**: every provider is unverified live, and the launch blockers in section 3
 
 ### 1.1a PRD completion criteria 1 to 12 (verified in demo mode)
 
-Verified on the fresh demo stack by the final run (Playwright 29/29 plus smoke 26/26, see
+Verified on the fresh demo stack by the final run (Playwright 33/33 plus smoke 26/26 at `f9863ed`, see
 [10-testing.md](10-testing.md) section 6). "Demo mode" means mock payment/SMS/geo providers: this is not live
 provider proof (section 2).
 
@@ -181,7 +181,7 @@ Summary: the pilot cannot go live until all of these are closed. Each is detaile
 | B7 | **Provider live verification** | Items 1 to 6 above: no adapter has ever called its live service | Blocked on credentials |
 | B8 | **Commercial rules** | Commission (default 18%), platform fee, discounts are platform-funded (ADR-015), payout hold days (default 0), refund policy text, cancellation policy, support SLAs and legal pages (terms, privacy, refund) | Needs business decision |
 | B9 | **Settlement process** | Payouts are manual by design: finance needs a bank-transfer process, a UTR owner and reconciliation against Razorpay settlements | Needs process |
-| B10 | **Consolidated final test run** | `npm run build`, full vitest, seed, smoke and Playwright e2e from a clean stack | **Done** (demo mode): build exit 0, 169 files / 1 375 tests, smoke 26/26, e2e 29/29; recorded in [10-testing.md](10-testing.md) section 6. Repeat against staging with sandbox providers (item 8) |
+| B10 | **Consolidated final test run** | `npm run build`, full vitest, seed, smoke and Playwright e2e from a clean stack | **Done** (demo mode, UI-redesign final gate at `f9863ed`): build exit 0, 222 files / 1 881 tests, seed 138,702 then 0, seed-verify 17/17, smoke 26/26, e2e 33/33; recorded in [10-testing.md](10-testing.md) section 6.1. Repeat against staging with sandbox providers (item 8) |
 
 ## 4. Known limitations / follow-ups
 

@@ -69,8 +69,8 @@ you still set `APP_MODE`, the real provider credentials, turn `DEMO_OTP_ENABLED`
 `npm run seed` runs each service's own seed inside its container (`docker compose exec <svc> node dist/seed.js`;
 order: identity, marketplace, delivery, payments, notifications, orders), so every service only writes its own
 database. A second run reports 0 inserts (idempotent). On a fresh stack with the photos already mirrored the first
-run inserts about 138,700 documents in about 105 s (identity 1,700 · marketplace 25,831 · delivery 5,525 ·
-payments 42,280 · notifications 2,680 · orders 60,684); a re-run takes about 35-40 s and inserts 0. The first
+run inserts 138,702 documents in about 90 s (identity 1,711 · marketplace 25,909 · delivery 5,528 ·
+payments 42,190 · notifications 2,703 · orders 60,661); a re-run takes about 40 s and inserts 0. The first
 `npm run seed:images` downloads 1,107 photos (about 11 min, Wikimedia pacing); later runs take about 2 s. Options: `npm run seed -- identity marketplace` (only some services)
 and `npm run seed -- --local` (host mode with tsx against the infra stack and the values in `.env`).
 
@@ -143,8 +143,8 @@ Sample logins for the generated data (demo OTP `123456`; generated numbers are c
 |---|---|---|
 | Consumer | +919101000001 | Santosh Naik (Kalyan Nagar) |
 | Consumer | +919101000002 | Narasimha Gupta (MG Road) |
-| Owner, two restaurants | +919202000001 | Amreen Syed: RT Nagar Street Kitchen (Bannerghatta Road, Ejipura) |
-| Owner, two restaurants | +919202000339 | Shweta Jain: Flat White & Co. Cafe (Indiranagar, Marathahalli); busy board after `npm run demo:traffic` |
+| Owner, two restaurants | +919202000001 | Amreen Syed: RT Nagar Street Kitchen (Bannerghatta Road, RT Nagar) |
+| Owner, two restaurants | +919202000339 | Shweta Jain: Flat White & Co. Cafe (Benson Town, Mahadevapura) |
 | Partner | +919303000002 | Varun Chary, bike KA41YX7378 |
 | Partner | +919303000169 | Vineet Trivedi (used by `npm run demo:traffic`) |
 
@@ -207,8 +207,9 @@ disable), so repeated runs do not lock the demo numbers.
 Integration tests use `mongodb://localhost:27018/?replicaSet=rs0&directConnection=true` and
 `redis://localhost:6379` with unique database names and Redis prefixes per test file. Running the infra stack
 and the full stack together needs the port overrides above. How to run each suite, and the recorded results,
-are in [docs/10-testing.md](docs/10-testing.md) (last verified run, UI redesign: typecheck exit 0, 220 test files /
-1 859 tests passed, seed idempotent, seed-verify 13/13, smoke 26/26, Playwright e2e 33/33).
+are in [docs/10-testing.md](docs/10-testing.md) (last verified run, UI-redesign final gate at `f9863ed` on fresh
+volumes: build exit 0, 222 test files / 1 881 tests passed, seed 138,702 then 0, seed-verify 17/17, smoke 26/26,
+Playwright e2e 33/33).
 
 ## Repository layout
 

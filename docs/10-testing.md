@@ -5,9 +5,9 @@ requirements behind the tests are the "minimum tests" of the brief; the mapping 
 in section 4.
 
 > **Status of this document.** Sections 1 to 5 describe how the suites work. Section 6 records verified results:
-> 6.1 the UI-redesign run on 2026-10-11 (typecheck exit 0, 220 test files / 1 859 tests, seed-verify 13/13, smoke
-> 26/26, Playwright e2e 33/33) and 6.2 the earlier platform run (169 files / 1 375 tests, e2e 29/29). Nothing else in
-> the documentation claims result numbers.
+> 6.1 the UI-redesign final gate on 2026-10-11 at `f9863ed` (fresh volumes: build exit 0, 222 test files / 1 881
+> tests, seed 138,702 then 0, seed-verify 17/17, smoke 26/26, Playwright e2e 33/33) and 6.2 the earlier platform run
+> (169 files / 1 375 tests, e2e 29/29). Nothing else in the documentation claims result numbers.
 
 ## 1. Layers
 
@@ -169,12 +169,12 @@ files, 9 test definitions), so 33 Playwright tests in 22 files:
 | `11-openapi-coverage` | flow 11: every registered route of every service is in its OpenAPI spec and in the gateway's public spec; Swagger UI loads |
 | `12-startup` | flow 12: all containers healthy, gateway ready, `/meta` demo, web served, README lists the start commands |
 | `13-landing-address-search` | redesign: landing address autocomplete (MKT-1) → Discover for that point with the Bengaluru dataset (counts, first page, mirrored photo loads, offer badges, cuisine pill narrows like the API) |
-| `14-per-restaurant-checkout` | redesign: "Checkout only Spice Route" (ORD-3) pays one restaurant; the other stays in the cart |
+| `14-per-restaurant-checkout` | redesign: "Checkout only Spice Route" (ORD-3) pays one restaurant; the other stays in the cart; a cart coupon scoped to Green Leaf is shown as "Applies to Green Leaf", not used, and stays on the cart (I-1) |
 | `15-admin-bulk-actions` | redesign: admin overview "N failed notifications · Retry" (SMS outage via demo fail mode, NTF-2) and "N dead letters · Replay" (health count injected for the page, real NTF-3 endpoint). **Note:** a healthy stack has no dead letters to make on demand, so the "N dead letters" path is never driven by a real DLQ count end to end: the spec asserts the live `/admin/health` carries a numeric `notifications.details.deadLetters`, injects `2` into exactly that field for the page only, and expects the real replay to report the real count. The real count itself is covered by `service-kit/test/health-details.int.test.ts` |
 | `16-theme-persists` | redesign: dark mode from the utility bar and the sign-in toggle persists across reloads and areas |
 | `system/duplicate-webhooks` | 5x replay and out-of-order webhooks; failed attempt then successful retry on the same provider order |
 | `system/payment-recovery` | `docker compose stop orders` during capture: PLACED within 60 s of restart, exactly once |
-| `system/stock-race` | 5 parallel checkouts for the last unit: exactly one succeeds |
+| `system/stock-race` | 5 parallel checkouts for the last unit: exactly one succeeds (losers: 409 at reserve or 422 at quote, both `OUT_OF_STOCK`; leftovers of earlier runs are superseded first) |
 | `system/coupon-race` | 3 parallel checkouts with a limit-1 coupon: exactly one gets it |
 | `system/assignment-race` | 3 partners accept the same job concurrently: exactly one wins |
 | `system/notification-retry` | SMS outage (demo fail mode): FAILED with retries, SENT after recovery |
@@ -196,24 +196,29 @@ start containers (`orders`) and toggle demo failure modes, so they must not run 
 
 ## 6. Recorded results
 
-### 6.1 UI redesign (branch `feat/ui-redesign`, 2026-10-11)
+### 6.1 UI redesign (branch `feat/ui-redesign`, 2026-10-11, final gate at `f9863ed`)
 
-Verified on the running demo stack rebuilt from the branch (`npm run stack:up`, then `docker compose up -d --build
-web` after the last web fix; all containers healthy), with the Bengaluru seed already loaded (volumes kept, `npm
-run seed` re-run: 0 inserted, 33 s) and `npm run demo:traffic -- --orders 6` run before the suites. Unit and
-integration tests ran against the infra stack.
+Final fix round gate, run in order on HEAD `f9863ed` (every service image rebuilt from it; `f9863ed` itself only
+touches e2e files, which run from the host). Unit and integration tests ran against the infra stack.
 
 | Command | Result | Duration | Notes |
 |---|---|---|---|
-| `npm run typecheck` | **exit 0** | n/a | packages, services, e2e and web |
-| `npm test` (`vitest run`) | **220 test files, 1 859 tests passed, 0 failed** | about 3.9 min | unit + integration + web component tests (web alone: 67 files / 523 tests) |
-| `npm run seed` (re-run) | **0 inserted** | 33 s | first run on a fresh stack: about 138,700 documents in about 105 s (see runbook 14.1) |
-| `npx tsx scripts/seed-verify.ts` | **13/13 checks passed** | n/a | after smoke, e2e and demo traffic |
-| `npx tsx scripts/smoke.ts` | **26/26 steps PASS** | n/a | Spice Route and Green Leaf are still the nearest demo restaurants at the smoke drop point |
-| `npm run test -w @thali/e2e` | **33 passed, 0 failed** | 4.4 min | 20 completion-flow tests, 4 redesign flows, 9 system scenarios |
+| `npm run build` | **exit 0** | 20 s | packages, services, web |
+| `npm run stack:down -- -v && npm run stack:up` | **exit 0**, all containers healthy | 5 min 26 s | fresh volumes (Mongo, Redis, MinIO), `--build` for every image |
+| `npm run seed` (fresh) | **138,702 inserted** | 88 s | identity 1,711 · marketplace 25,909 · delivery 5,528 · payments 42,190 · notifications 2,703 · orders 60,661; photo mirror: 1,107 cached, uploaded to the empty bucket |
+| `npm run seed` (re-run) | **0 inserted** | 41 s | idempotent |
+| `npx tsx scripts/seed-verify.ts` | **17/17 checks passed** | n/a | 13 consistency checks + 4 realism checks (cover / brand twice in a locality, live Discover first two pages at Indiranagar / Koramangala / HSR repeat no cover and no restaurant) |
+| `npm test` (`vitest run`) | **222 test files, 1 881 tests passed, 0 failed** | 2 min 47 s | unit + integration + web component tests (web alone: 67 files / 526 tests) |
+| `npm run smoke` | **26/26 steps PASS** | 18 s | |
+| `npm run test -w @thali/e2e` | **33 passed, 0 failed** | 4.6 min | 20 completion-flow tests, 4 redesign flows, 9 system scenarios |
 
-Not recorded in this run: a clean `docker compose down -v` rebuild (the Bengaluru seed and image mirror were kept),
-`npm audit`.
+The first e2e run of the gate was 31/33: `system/stock-race` saw a buyer's own unpaid hold from an earlier spec
+released synchronously by its new checkout (the I-2 fix), so a loser failed at the quote (422 `OUT_OF_STOCK`) and a
+rerun found two free units; `system/assignment-race` hit the gateway's shared-IP 300/min limit on a GET. Both were
+test-side (`f9863ed`: leftovers superseded first, 409 or 422 `OUT_OF_STOCK` accepted for losers, read-only fixture
+calls retry a 429); the second full run on the same stack (no reseed) is the 33/33 above.
+
+Not recorded in this run: `npm audit`, `npm run demo:traffic`.
 
 ### 6.2 Platform baseline (branch `build/platform`)
 

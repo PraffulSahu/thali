@@ -452,15 +452,17 @@ npm run seed               # idempotent; order: identity, marketplace, delivery,
   up to `DISCOVERY_CACHE_TTL_SEC` (60 s). Wait a minute, or bump the epoch by editing any restaurant through the API.
 - The seed-data directory (`scripts/seed-data`) must be reachable by the service that reads it. If a seed fails
   with a missing file, run `npm run seed -- --local`, or set `SEED_DATA_DIR`.
-- Verified numbers (2026-10-11, images already mirrored): the first run inserts about 138,700 documents in about
-  105 s (identity 1,700 in 7 s · marketplace 25,831 in 16 s · delivery 5,525 in 20 s · payments 42,280 in 10 s ·
-  notifications 2,680 in 4 s · orders 60,684 in 46 s); a re-run inserts 0 in about 35-40 s.
-- Resulting collection counts (`npx tsx scripts/seed-verify.ts` prints them and runs 13 consistency checks:
-  ratings vs delivered children, rating sums, coupon usage, ledger balances ≥ 0, delivered child → job + capture +
-  earning, refunds, checkout totals, membership usage, jobs → partners, projection per restaurant): users 1,710 ·
-  restaurants 605 · menu items 14,922 · ratings 4,224 · coupons 50 · checkout groups 5,029 · child orders 6,012 ·
-  payment intents 5,144 · ledger entries 25,869 · payouts 4,761 · partners 255 · delivery jobs 5,283 (small
-  differences after smoke, e2e or demo traffic runs are expected).
+- Verified numbers (final gate at `f9863ed`, 2026-10-11, fresh volumes, images already in the download cache): the
+  first run inserts 138,702 documents in 88 s (identity 1,711 in 5.9 s · marketplace 25,909 in 12.4 s · delivery
+  5,528 in 16.0 s · payments 42,190 in 14.2 s · notifications 2,703 in 3.8 s · orders 60,661 in 27.0 s); a re-run
+  inserts 0 in 41 s.
+- Resulting collection counts right after the seed (`npx tsx scripts/seed-verify.ts` prints them and runs 17
+  checks: ratings vs delivered children, rating sums, coupon usage, ledger balances ≥ 0, delivered child → job +
+  capture + earning, refunds, checkout totals, membership usage, jobs → partners, projection per restaurant, and
+  realism: no cover or brand twice in a locality, live Discover first two pages at Indiranagar / Koramangala / HSR
+  repeat no cover and no restaurant): users 1,710 · restaurants 604 · menu items 14,906 · ratings 4,213 · coupons 50 ·
+  checkout groups 5,003 · child orders 5,988 · payment intents 5,127 · ledger entries 25,757 · payouts 4,721 ·
+  partners 254 · delivery jobs 5,259 (small differences after smoke, e2e or demo traffic runs are expected).
 - Sign-in phones (demo OTP `123456`): story accounts `+919000000001..3` (consumers), `+919100000001..2` (owners
   of two restaurants each), `+919200000001..2` (partners); generated consumers `+919101000001…` (e.g. Santosh Naik
   `+919101000001`), owners `+919202000001…` (e.g. Amreen Syed `+919202000001`, two restaurants), partners
