@@ -42,8 +42,12 @@ export function useSelectedRestaurantId(): string | null {
   return useSyncExternalStore(subscribe, read, () => null);
 }
 
-/** Resolve the selection against the list: a stale id (deleted/other account) falls back to the first. */
-export function resolveSelected<T extends { id: string }>(list: T[] | undefined, selectedId: string | null): T | undefined {
+/**
+ * Resolve the selection against the list. No stored selection, or a stale id (deleted/other account), falls
+ * back to the first live (APPROVED) restaurant, else the first one: an owner whose first restaurant is still
+ * in review should land on the kitchen that is taking orders.
+ */
+export function resolveSelected<T extends { id: string; status?: string }>(list: T[] | undefined, selectedId: string | null): T | undefined {
   if (!list?.length) return undefined;
-  return list.find((r) => r.id === selectedId) ?? list[0];
+  return list.find((r) => r.id === selectedId) ?? list.find((r) => r.status === 'APPROVED') ?? list[0];
 }
