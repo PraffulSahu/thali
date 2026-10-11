@@ -18,6 +18,7 @@ import { errorMessage, fieldErrors } from '../../lib/errors';
 import { formatDateTime } from '../../lib/format';
 import { createManualRefund, listRefunds, qk, retryRefund, rupeesToPaise, searchPayments, type ManualRefundBody, type PaymentRow, type Refund } from './api';
 import { Mono, useAdminMutation, useAdminRoles } from './shared';
+import { FilterPills } from './ui';
 
 const REASONS = [
   { value: 'ADMIN', label: 'Goodwill / admin decision' },
@@ -25,7 +26,7 @@ const REASONS = [
   { value: 'CUSTOMER_CANCELLED', label: 'Customer cancelled' },
 ];
 
-function ManualRefundDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function ManualRefundDialog({ open, onClose, prefill }: { open: boolean; onClose: () => void; prefill?: PaymentRow | null }) {
   const idem = useIdempotencyKey();
   const [intentId, setIntentId] = useState('');
   const [payment, setPayment] = useState<PaymentRow | null>(null);
@@ -47,9 +48,9 @@ function ManualRefundDialog({ open, onClose }: { open: boolean; onClose: () => v
 
   useEffect(() => {
     if (!open) return;
-    setIntentId(''); setPayment(null); setCandidates([]); setLookupError(null); setAmount(''); setReason('ADMIN'); setNote('');
+    setIntentId(prefill?.paymentIntentId ?? ''); setPayment(prefill ?? null); setCandidates([]); setLookupError(null); setAmount(''); setReason('ADMIN'); setNote('');
     setChildOrderId(''); setRestaurantId(''); setCharge(''); setError(null);
-  }, [open]);
+  }, [open, prefill]);
   const { renew } = idem;
   useEffect(() => renew(), [intentId, amount, reason, note, childOrderId, restaurantId, charge, renew]);
 
@@ -128,7 +129,7 @@ function ManualRefundDialog({ open, onClose }: { open: boolean; onClose: () => v
       description="Refunds go to the customer's original payment method and can never exceed what was captured."
       footer={
         <FormActions>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button onClick={() => void submit()} disabled={!valid} loading={busy}>
@@ -143,7 +144,7 @@ function ManualRefundDialog({ open, onClose }: { open: boolean; onClose: () => v
             <Input value={intentId} onChange={(e) => { setIntentId(e.target.value); setPayment(null); setCandidates([]); }} className="font-mono" onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void lookup(); } }} />
           </Field>
           <div>
-            <Button type="button" size="sm" variant="secondary" onClick={() => void lookup()} loading={looking} disabled={!intentId.trim()}>
+            <Button type="button" size="sm" variant="outline" onClick={() => void lookup()} loading={looking} disabled={!intentId.trim()}>
               Look up payment
             </Button>
           </div>
@@ -162,7 +163,7 @@ function ManualRefundDialog({ open, onClose }: { open: boolean; onClose: () => v
             />
           ) : null}
           {payment ? (
-            <p role="status" className="rounded-control bg-surface-muted p-3 text-sm text-slate-800">
+            <p role="status" className="rounded-control bg-bg-2 p-3 text-[13px] text-fg">
               <span className="block">{`Selected payment ${payment.paymentIntentId} (reference ${payment.referenceId})`}</span>
               {`Captured ${formatPaise(payment.capturedPaise)}, refunded ${formatPaise(payment.refundedPaise)}${payment.refundReservedPaise ? `, in progress ${formatPaise(payment.refundReservedPaise)}` : ''}. Still refundable: ${formatPaise(remaining)}.`}
             </p>
@@ -177,8 +178,8 @@ function ManualRefundDialog({ open, onClose }: { open: boolean; onClose: () => v
         <Field label="Note" required hint="Recorded in the audit log" error={server.note}>
           <Textarea value={note} onChange={(e) => setNote(e.target.value)} maxLength={500} rows={2} />
         </Field>
-        <details className="rounded-control border border-slate-200 p-3">
-          <summary className="cursor-pointer text-sm font-medium text-slate-800">Link to an order or charge the restaurant (optional)</summary>
+        <details className="rounded-control border border-line p-3">
+          <summary className="cursor-pointer text-sm font-medium text-fg">Link to an order or charge the restaurant (optional)</summary>
           <div className="mt-3 flex flex-col gap-4">
             <Field label="Restaurant order id" optional>
               <Input value={childOrderId} onChange={(e) => setChildOrderId(e.target.value)} className="font-mono" />
@@ -197,9 +198,17 @@ function ManualRefundDialog({ open, onClose }: { open: boolean; onClose: () => v
   );
 }
 
-export default function RefundsPanel() {
+const STATUS_PILLS = [
+  { value: 'FAILED', label: 'Failed' },
+  { value: 'REQUESTED', label: 'Requested' },
+  { value: 'PROCESSING', label: 'Processing' },
+  { value: 'SUCCEEDED', label: 'Succeeded' },
+  { value: 'ALL', label: 'All' },
+];
+
+export default function RefundsPanel({ initialStatus }: { initialStatus?: string } = {}) {
   const { canFinance } = useAdminRoles();
-  const [status, setStatus] = useState('FAILED');
+  const [status, setStatus] = useState(STATUS_PILLS.some((s) => s.value === initialStatus) ? initialStatus! : 'FAILED');
   const [manual, setManual] = useState(false);
   const pages = useCursorPages();
   const query = useQuery({
@@ -211,7 +220,7 @@ export default function RefundsPanel() {
 
   const columns: Column<Refund>[] = [
     { key: 'amount', header: 'Amount', cell: (r) => <Price paise={r.amountPaise} />, primary: true },
-    { key: 'status', header: 'Status', cell: (r) => <StatusPill kind="refund" status={r.status} /> },
+    { key: 'status', header: 'Status', cell: (r) => <StatusPill kind="refund" status={r.status} density="dense" /> },
     { key: 'reason', header: 'Reason', cell: (r) => humanize(r.reason) },
     {
       key: 'attempts',
@@ -219,7 +228,7 @@ export default function RefundsPanel() {
       cell: (r) => (
         <span>
           {r.attempts}/{r.maxAttempts}
-          {r.lastError ? <span className="block max-w-xs break-words text-sm text-danger-700">{r.lastError}</span> : null}
+          {r.lastError ? <span className="block max-w-xs whitespace-normal break-words font-mono text-[12px] text-bad">{r.lastError}</span> : null}
         </span>
       ),
     },
@@ -229,21 +238,9 @@ export default function RefundsPanel() {
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-        <Field label="Status" className="w-full sm:w-56">
-          <Select
-            value={status}
-            onChange={(e) => { setStatus(e.target.value); pages.reset(); }}
-            options={[
-              { value: 'FAILED', label: 'Failed (needs attention)' },
-              { value: 'REQUESTED', label: 'Requested' },
-              { value: 'PROCESSING', label: 'Processing' },
-              { value: 'SUCCEEDED', label: 'Succeeded' },
-              { value: 'ALL', label: 'All' },
-            ]}
-          />
-        </Field>
-        {canFinance ? <Button icon="plus" onClick={() => setManual(true)}>Manual refund</Button> : null}
+      <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
+        <FilterPills label="Refund status" value={status} onChange={(v) => { setStatus(v); pages.reset(); }} options={STATUS_PILLS} />
+        {canFinance ? <Button icon="plus" size="sm" onClick={() => setManual(true)}>Manual refund</Button> : null}
       </div>
       <DataTable
         caption="Refunds"
@@ -256,7 +253,7 @@ export default function RefundsPanel() {
         empty={{ icon: 'receipt', title: status === 'FAILED' ? 'No failed refunds' : 'No refunds in this status', description: status === 'FAILED' ? 'Failed refunds that need a retry appear here.' : undefined }}
         rowActions={(r) =>
           r.status === 'FAILED' && canFinance ? (
-            <Button size="sm" variant="secondary" icon="refresh" loading={retry.isPending && retry.variables === r.id} onClick={() => retry.mutate(r.id)}>
+            <Button size="xs" variant="outline" icon="refresh" loading={retry.isPending && retry.variables === r.id} onClick={() => retry.mutate(r.id)}>
               Retry refund
             </Button>
           ) : null

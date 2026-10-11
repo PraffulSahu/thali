@@ -9,6 +9,7 @@ import { Price } from '../../components/ui/Price';
 import { Select } from '../../components/ui/Select';
 import { listBalances, qk, type Balance } from './api';
 import { Mono, useAdminRoles } from './shared';
+import { FilterPills } from './ui';
 import type { PayoutPrefill } from './PayoutsPanel';
 
 export default function BalancesPanel({ onRequestPayout }: { onRequestPayout: (p: PayoutPrefill) => void }) {
@@ -31,13 +32,13 @@ export default function BalancesPanel({ onRequestPayout }: { onRequestPayout: (p
 
   return (
     <div>
-      <Field label="Account type" className="mb-4 w-full sm:w-56">
-        <Select
-          value={accountType}
-          onChange={(e) => { setAccountType(e.target.value); pages.reset(); }}
-          options={[{ value: 'RESTAURANT', label: 'Restaurants' }, { value: 'PARTNER', label: 'Delivery partners' }, { value: 'PLATFORM', label: 'Platform' }]}
-        />
-      </Field>
+      <FilterPills
+        label="Account type"
+        className="mb-3.5"
+        value={accountType}
+        onChange={(v) => { setAccountType(v); pages.reset(); }}
+        options={[{ value: 'RESTAURANT', label: 'Restaurants' }, { value: 'PARTNER', label: 'Delivery partners' }, { value: 'PLATFORM', label: 'Platform' }]}
+      />
       <DataTable
         caption="Balances"
         columns={columns}
@@ -49,14 +50,14 @@ export default function BalancesPanel({ onRequestPayout }: { onRequestPayout: (p
         empty={{ icon: 'wallet', title: 'No ledger activity yet', description: 'Balances appear after delivered orders are settled into the ledger.' }}
         rowActions={(b) =>
           canFinance && accountType !== 'PLATFORM' && b.availablePaise > 0 ? (
-            <Button size="sm" variant="secondary" onClick={() => onRequestPayout({ accountType: accountType as 'RESTAURANT' | 'PARTNER', accountId: b.accountId, amountPaise: b.availablePaise })}>
+            <Button size="xs" variant="outline" onClick={() => onRequestPayout({ accountType: accountType as 'RESTAURANT' | 'PARTNER', accountId: b.accountId, amountPaise: b.availablePaise })}>
               Request payout
             </Button>
           ) : null
         }
         footer={<Pagination hasPrev={pages.hasPrev} hasNext={Boolean(query.data?.nextCursor)} onPrev={pages.prev} onNext={() => pages.next(query.data!.nextCursor!)} page={pages.page} loading={query.isFetching} />}
       />
-      <p className="mt-3 text-sm text-slate-600">Available excludes earnings still inside the hold period and payouts already requested.</p>
+      <p className="mt-3 text-[12.5px] text-fg-3">Available excludes earnings still inside the hold period and payouts already requested.</p>
     </div>
   );
 }

@@ -1,6 +1,7 @@
 /** `/admin/catalog`: coupons, banners, cuisines, membership plans and service areas (with fee rules). */
 import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
+import { useSearchParams } from 'react-router';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
@@ -37,9 +38,9 @@ function CatalogSection<T extends { id: string }>({ kind, noun, nounPlural, colu
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-slate-600">{note}</p>
-        <Button icon="plus" onClick={() => setAdding(true)}>
+      <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-[13px] text-fg-3">{note}</p>
+        <Button icon="plus" size="sm" onClick={() => setAdding(true)}>
           Add {noun.toLowerCase()}
         </Button>
       </div>
@@ -54,10 +55,10 @@ function CatalogSection<T extends { id: string }>({ kind, noun, nounPlural, colu
         empty={{ icon: 'list', title: `No ${nounPlural.toLowerCase()} yet`, description: emptyHint, action: <Button onClick={() => setAdding(true)}>Add {noun.toLowerCase()}</Button> }}
         rowActions={(r) => (
           <div className="flex gap-2">
-            <Button size="sm" variant="secondary" icon="edit" onClick={() => setEditing(r)}>
+            <Button size="xs" variant="outline" icon="edit" onClick={() => setEditing(r)}>
               Edit
             </Button>
-            <Button size="sm" variant="ghost" icon="trash" onClick={() => setDeleting(r)}>
+            <Button size="xs" variant="ghost" icon="trash" onClick={() => setDeleting(r)}>
               Delete
             </Button>
           </div>
@@ -77,7 +78,7 @@ function CatalogSection<T extends { id: string }>({ kind, noun, nounPlural, colu
   );
 }
 
-const activeBadge = (a: boolean) => (a ? <Badge tone="success">Active</Badge> : <Badge>Inactive</Badge>);
+const activeBadge = (a: boolean) => (a ? <Badge tone="ok" dot density="dense">Active</Badge> : <Badge dot density="dense">Inactive</Badge>);
 
 const couponCols: Column<Coupon>[] = [
   { key: 'code', header: 'Code', cell: (c) => <span className="font-mono font-semibold">{c.code}</span>, primary: true },
@@ -119,11 +120,18 @@ const areaCols: Column<ServiceArea>[] = [
   { key: 'active', header: 'Status', cell: (a) => activeBadge(a.active) },
 ];
 
+const TABS = ['coupons', 'banners', 'cuisines', 'plans', 'areas'];
+
 export default function CatalogPage() {
+  const [params, setParams] = useSearchParams();
+  const tab = TABS.includes(params.get('tab') ?? '') ? params.get('tab')! : 'coupons';
   return (
     <>
       <PageHeader title="Catalog" description="Promotions, home-screen content, cuisines, memberships and where Thali delivers." />
       <Tabs
+        variant="segmented"
+        value={tab}
+        onChange={(t) => setParams({ tab: t }, { replace: true })}
         label="Catalog sections"
         tabs={[
           { id: 'coupons', label: 'Coupons', content: <CatalogSection<Coupon> kind="coupons" noun="Coupon" nounPlural="Coupons" columns={couponCols} labelOf={(c) => c.code} Editor={CouponEditor} emptyHint="Create a coupon customers can apply at checkout." /> },

@@ -1,6 +1,7 @@
 /** `/admin/audit`: every privileged action (who, what, target, IP, correlation id) with filters. */
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
+import { Link } from 'react-router';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { DataTable, type Column } from '../../components/ui/DataTable';
@@ -12,6 +13,19 @@ import { Select } from '../../components/ui/Select';
 import { formatDateTime } from '../../lib/format';
 import { istDateToIso, listAuditLogs, qk, type AuditLog } from './api';
 import { FilterBar, Mono } from './shared';
+
+/** Target ids that have an admin page become links (design-spec §7.5 "target link"). */
+function TargetLink({ type, id }: { type: string; id: string }) {
+  const to =
+    type === 'restaurant' ? `/admin/restaurants/${id}` : type === 'partner' || type === 'delivery_partner' ? `/admin/partners/${id}` : type === 'checkout' || type === 'checkout_group' ? `/admin/orders/${id}` : type === 'ticket' || type === 'support_ticket' ? `/admin/support/${id}` : type === 'user' ? `/admin/users?q=${encodeURIComponent(id)}` : null;
+  return to ? (
+    <Link to={to} className="relative z-[1] underline underline-offset-2 hover:text-acc-fg">
+      <Mono className="text-[11.5px]">{id}</Mono>
+    </Link>
+  ) : (
+    <Mono className="text-[11.5px]">{id}</Mono>
+  );
+}
 
 type Filters = { action: string; service: string; actorId: string; targetType: string; targetId: string; from: string; to: string };
 const EMPTY: Filters = { action: '', service: '', actorId: '', targetType: '', targetId: '', from: '', to: '' };
@@ -41,12 +55,12 @@ export default function AuditLogPage() {
 
   const columns: Column<AuditLog>[] = [
     { key: 'summary', header: 'What happened', cell: (l) => l.summary, primary: true },
-    { key: 'action', header: 'Action', cell: (l) => <Badge>{l.action}</Badge>, secondary: true },
-    { key: 'actor', header: 'Actor', cell: (l) => <span><span className="block text-sm">{l.actorRole}</span><Mono>{l.actorId}</Mono></span> },
-    { key: 'target', header: 'Target', cell: (l) => <span><span className="block text-sm">{l.targetType}</span><Mono>{l.targetId}</Mono></span>, hideOnMobile: true },
-    { key: 'ip', header: 'IP', cell: (l) => l.ip ?? '-', hideOnMobile: true },
+    { key: 'action', header: 'Action', cell: (l) => <Badge density="dense" className="font-mono">{l.action}</Badge>, secondary: true },
+    { key: 'actor', header: 'Actor', cell: (l) => <span><span className="block text-[12.5px] text-fg-2">{l.actorRole}</span><Mono className="text-[11.5px]">{l.actorId}</Mono></span> },
+    { key: 'target', header: 'Target', cell: (l) => <span><span className="block text-[12.5px] text-fg-2">{l.targetType}</span><TargetLink type={l.targetType} id={l.targetId} /></span>, hideOnMobile: true },
+    { key: 'ip', header: 'IP', cell: (l) => <Mono className="text-[11.5px]">{l.ip ?? '—'}</Mono>, hideOnMobile: true },
     { key: 'service', header: 'Service', cell: (l) => l.service, hideOnMobile: true },
-    { key: 'when', header: 'When', cell: (l) => formatDateTime(l.occurredAt) },
+    { key: 'when', header: 'When (IST)', cell: (l) => <span className="font-mono text-[12px] text-fg-3">{formatDateTime(l.occurredAt)}</span> },
     { key: 'corr', header: 'Correlation id', cell: (l) => <Mono>{l.correlationId}</Mono>, hideOnMobile: true },
   ];
 
@@ -55,7 +69,7 @@ export default function AuditLogPage() {
       <PageHeader title="Audit log" description="A permanent record of privileged actions across every service." />
       <FilterBar onSubmit={() => { pages.reset(); setApplied(draft); }}>
         <Field label="Action" hint="Exact, like restaurant.approve">
-          <Input value={draft.action} onChange={set('action')} />
+          <Input value={draft.action} onChange={set('action')} className="font-mono" />
         </Field>
         <Field label="Service">
           <Select value={draft.service} onChange={set('service')} placeholder="Any service" options={SERVICES.map((s) => ({ value: s, label: s }))} />

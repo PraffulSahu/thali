@@ -74,8 +74,8 @@ export default function PlanEditor({ open, item, onClose }: { open: boolean; ite
               <Input inputMode="numeric" suffix="days" value={days} onChange={(e) => setDays(e.target.value)} />
             </Field>
           </div>
-          <fieldset className="grid grid-cols-1 gap-4 rounded-control border border-slate-200 p-3 sm:grid-cols-2">
-            <legend className="px-1 text-sm font-semibold text-slate-800">Benefits</legend>
+          <fieldset className="grid grid-cols-1 gap-4 rounded-control border border-line p-3 sm:grid-cols-2">
+            <legend className="px-1 text-sm font-semibold text-fg">Benefits</legend>
             <Field label="Free delivery above" hint="Minimum order value; 0 for any order" error={freeMinPaise === null ? 'Enter rupees.' : undefined}>
               <Input inputMode="decimal" prefix="₹" value={freeMin} onChange={(e) => setFreeMin(e.target.value)} />
             </Field>

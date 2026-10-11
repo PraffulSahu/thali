@@ -42,7 +42,7 @@ export default function ImageField({ label = 'Image', imageKey, previewUrl, onCh
   return (
     <Field label={label} required={required} hint="JPEG, PNG or WebP, up to 2 MB" error={error}>
       <div className="flex flex-wrap items-center gap-3">
-        {shown ? <img src={shown} alt="" className="size-16 rounded-control border border-slate-200 object-cover" /> : null}
+        {shown ? <img src={shown} alt="" className="size-16 rounded-control border border-line object-cover" /> : null}
         <input
           ref={input}
           type="file"
@@ -52,10 +52,10 @@ export default function ImageField({ label = 'Image', imageKey, previewUrl, onCh
           tabIndex={-1}
           onChange={(e) => void pick(e.target.files?.[0])}
         />
-        <Button type="button" variant="secondary" loading={busy} onClick={() => input.current?.click()}>
+        <Button type="button" variant="outline" loading={busy} onClick={() => input.current?.click()}>
           {imageKey ? 'Replace image' : 'Choose image'}
         </Button>
-        {imageKey ? <span className="text-sm text-slate-600">Uploaded</span> : null}
+        {imageKey ? <span className="text-sm text-fg-3">Uploaded</span> : null}
       </div>
       <InlineError error={problem} className="mt-1" />
     </Field>

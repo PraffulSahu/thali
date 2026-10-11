@@ -62,7 +62,7 @@ export function EditorDialog({ open, onClose, title, description, submitLabel, v
       dismissible={!busy}
       footer={
         <FormActions>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button type="submit" form={formId} loading={busy} disabled={!valid}>

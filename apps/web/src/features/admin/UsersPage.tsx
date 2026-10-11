@@ -1,6 +1,7 @@
 /** `/admin/users`: search users, view roles, block/unblock; super-admins can create another admin. */
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
+import { useSearchParams } from 'react-router';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
 import { Checkbox } from '../../components/ui/Checkbox';
@@ -59,7 +60,7 @@ function CreateAdminDialog({ open, onClose }: { open: boolean; onClose: () => vo
             <Button onClick={close}>Done</Button>
           ) : (
             <>
-              <Button variant="secondary" onClick={close}>Cancel</Button>
+              <Button variant="outline" onClick={close}>Cancel</Button>
               <Button type="submit" form="create-admin-form" loading={create.isPending} disabled={!email.trim() || !name.trim() || roles.length === 0}>
                 Create admin
               </Button>
@@ -71,7 +72,7 @@ function CreateAdminDialog({ open, onClose }: { open: boolean; onClose: () => vo
       {created ? (
         <div className="flex flex-col gap-3">
           <p className="text-[0.9375rem]">Share this one-time password with {created.email} through a secure channel. It is shown only once.</p>
-          <Mono className="select-all rounded-control bg-surface-muted p-3 text-base">{created.password}</Mono>
+          <Mono className="select-all rounded-control bg-bg-2 p-3 text-base text-fg">{created.password}</Mono>
         </div>
       ) : (
         <form id="create-admin-form" onSubmit={submit} className="flex flex-col gap-4">
@@ -82,7 +83,7 @@ function CreateAdminDialog({ open, onClose }: { open: boolean; onClose: () => vo
             <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
           </Field>
           <fieldset>
-            <legend className="mb-1 text-sm font-medium text-slate-800">Admin roles <span className="text-danger-700">*</span></legend>
+            <legend className="mb-1 text-sm font-medium text-fg">Admin roles <span className="text-bad">*</span></legend>
             {ADMIN_ROLES.map((r) => (
               <Checkbox
                 key={r}
@@ -91,7 +92,7 @@ function CreateAdminDialog({ open, onClose }: { open: boolean; onClose: () => vo
                 onChange={(e) => setRoles((cur) => (e.target.checked ? [...cur, r] : cur.filter((x) => x !== r)))}
               />
             ))}
-            {errors.adminRoles ? <p className="text-sm font-medium text-danger-700">{errors.adminRoles}</p> : null}
+            {errors.adminRoles ? <p className="text-sm font-medium text-bad">{errors.adminRoles}</p> : null}
           </fieldset>
           <InlineError error={create.error && Object.keys(errors).length === 0 ? create.error : null} />
         </form>
@@ -103,10 +104,17 @@ function CreateAdminDialog({ open, onClose }: { open: boolean; onClose: () => vo
 export default function UsersPage() {
   const auth = useAuth();
   const { isSuper, canOps, canSupport } = useAdminRoles();
-  const [q, setQ] = useState('');
+  const [params, setParams] = useSearchParams();
+  const urlQ = params.get('q') ?? '';
+  const [q, setQ] = useState(urlQ);
   const [role, setRole] = useState('');
   const [status, setStatus] = useState('');
-  const [applied, setApplied] = useState({ q: '', role: '', status: '' });
+  const [applied, setApplied] = useState({ q: urlQ, role: '', status: '' });
+  // ⌘K "Search users for …" and user results land here with ?q=
+  useEffect(() => {
+    setQ(urlQ);
+    setApplied((a) => (a.q === urlQ ? a : { ...a, q: urlQ }));
+  }, [urlQ]);
   const [target, setTarget] = useState<{ user: AdminUser; block: boolean } | null>(null);
   const [detail, setDetail] = useState<AdminUser | null>(null);
   const [adding, setAdding] = useState(false);
@@ -125,18 +133,18 @@ export default function UsersPage() {
 
   const columns: Column<AdminUser>[] = [
     { key: 'name', header: 'User', cell: (u) => u.name || u.email || formatPhone(u.phone) || u.id, primary: true },
-    { key: 'contact', header: 'Contact', cell: (u) => [formatPhone(u.phone), u.email].filter(Boolean).join(' · ') || '-', secondary: true },
+    { key: 'contact', header: 'Contact', cell: (u) => <span className="font-mono text-[12.5px]">{[formatPhone(u.phone), u.email].filter(Boolean).join(' · ') || '—'}</span>, secondary: true },
     {
       key: 'roles',
       header: 'Roles',
       cell: (u) => (
         <span className="flex flex-wrap gap-1">
-          {u.roles.map((r) => <Badge key={r} tone={r === 'ADMIN' ? 'brand' : 'neutral'}>{humanize(r)}</Badge>)}
+          {u.roles.map((r) => <Badge key={r} tone={r === 'ADMIN' ? 'acc' : 'neu'} density="dense">{humanize(r)}</Badge>)}
         </span>
       ),
     },
-    { key: 'status', header: 'Status', cell: (u) => <StatusPill kind="user" status={u.status} /> },
-    { key: 'joined', header: 'Joined', cell: (u) => formatDate(u.createdAt), hideOnMobile: true },
+    { key: 'status', header: 'Status', cell: (u) => <StatusPill kind="user" status={u.status} density="dense" /> },
+    { key: 'joined', header: 'Joined', cell: (u) => <span className="text-fg-3">{formatDate(u.createdAt)}</span>, hideOnMobile: true },
   ];
 
   return (
@@ -146,7 +154,16 @@ export default function UsersPage() {
         description="Find customers, owners, partners and admins. Blocking signs the user out everywhere."
         actions={isSuper ? <Button icon="plus" onClick={() => setAdding(true)}>Add admin</Button> : undefined}
       />
-      <FilterBar onSubmit={() => { pages.reset(); setApplied({ q: q.trim(), role, status }); }}>
+      <FilterBar
+        onSubmit={() => {
+          pages.reset();
+          setApplied({ q: q.trim(), role, status });
+          const p = new URLSearchParams(params);
+          if (q.trim()) p.set('q', q.trim());
+          else p.delete('q');
+          setParams(p, { replace: true });
+        }}
+      >
         <Field label="Search" className="lg:col-span-2">
           <Input type="search" icon="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Name, phone, email or user id" />
         </Field>
@@ -156,7 +173,7 @@ export default function UsersPage() {
         <Field label="Status">
           <Select value={status} onChange={(e) => setStatus(e.target.value)} placeholder="Any status" options={[{ value: 'ACTIVE', label: 'Active' }, { value: 'BLOCKED', label: 'Blocked' }]} />
         </Field>
-        <Button type="submit" variant="secondary">Apply filters</Button>
+        <Button type="submit" variant="outline" icon="filter">Apply filters</Button>
       </FilterBar>
       <DataTable
         caption="Users"
@@ -169,9 +186,9 @@ export default function UsersPage() {
         empty={{ icon: 'users', title: 'No users match these filters', description: 'Check the spelling or clear a filter.' }}
         rowActions={(u) => (
           <div className="flex gap-2">
-            <Button size="sm" variant="ghost" onClick={() => setDetail(u)}>Details</Button>
+            <Button size="xs" variant="ghost" onClick={() => setDetail(u)}>Details</Button>
             {canBlock && u.id !== auth.user?.id ? (
-              <Button size="sm" variant={u.status === 'BLOCKED' ? 'secondary' : 'danger'} onClick={() => setTarget({ user: u, block: u.status !== 'BLOCKED' })}>
+              <Button size="xs" variant={u.status === 'BLOCKED' ? 'outline' : 'danger-outline'} onClick={() => setTarget({ user: u, block: u.status !== 'BLOCKED' })}>
                 {u.status === 'BLOCKED' ? 'Unblock' : 'Block'}
               </Button>
             ) : null}

@@ -21,6 +21,7 @@ import { useIdempotencyKey } from '../../hooks/useIdempotencyKey';
 import { formatDateTime } from '../../lib/format';
 import { confirmPayout, createPayout, failPayout, listPayouts, paiseToRupees, qk, rupeesToPaise, UTR_PATTERN, type Payout } from './api';
 import { Mono, useAdminMutation, useAdminRoles } from './shared';
+import { FilterPills } from './ui';
 
 export interface PayoutPrefill {
   accountType: 'RESTAURANT' | 'PARTNER';
@@ -68,7 +69,7 @@ function ConfirmUtrDialog({ payout, onClose }: { payout: Payout | null; onClose:
       size="sm"
       footer={
         <FormActions>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button onClick={() => void submit()} disabled={!valid} loading={busy}>
@@ -151,7 +152,7 @@ function CreatePayoutDialog({ open, onClose, prefill }: { open: boolean; onClose
       description="The amount must not exceed the account's available balance (after the hold period and pending payouts)."
       footer={
         <FormActions>
-          <Button variant="secondary" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button onClick={() => void submit()} disabled={!valid} loading={busy}>
@@ -201,18 +202,21 @@ export default function PayoutsPanel({ prefill, onPrefillUsed }: { prefill?: Pay
   const columns: Column<Payout>[] = [
     { key: 'account', header: 'Account', cell: (p) => <span>{p.accountType === 'PARTNER' ? 'Partner' : 'Restaurant'} <Mono>{p.accountId}</Mono></span>, primary: true },
     { key: 'amount', header: 'Amount', cell: (p) => <Price paise={p.amountPaise} />, align: 'right' },
-    { key: 'status', header: 'Status', cell: (p) => <StatusPill kind="payout" status={p.status} /> },
-    { key: 'utr', header: 'UTR', cell: (p) => (p.utr ? <Mono>{p.utr}</Mono> : p.failureReason ? `Failed: ${p.failureReason}` : '-') },
+    { key: 'status', header: 'Status', cell: (p) => <StatusPill kind="payout" status={p.status} density="dense" /> },
+    { key: 'utr', header: 'UTR', cell: (p) => (p.utr ? <Mono>{p.utr}</Mono> : p.failureReason ? <span className="text-bad">Failed: {p.failureReason}</span> : <span className="text-fg-3">—</span>) },
     { key: 'created', header: 'Requested', cell: (p) => formatDateTime(p.createdAt), hideOnMobile: true },
   ];
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-        <Field label="Status" className="w-full sm:w-56">
-          <Select value={status} onChange={(e) => { setStatus(e.target.value); pages.reset(); }} placeholder="All statuses" options={['REQUESTED', 'PROCESSING', 'PAID', 'FAILED', 'CANCELLED'].map((s) => ({ value: s, label: s.charAt(0) + s.slice(1).toLowerCase() }))} />
-        </Field>
-        {canFinance ? <Button icon="plus" onClick={() => setCreating(true)}>Request payout</Button> : null}
+      <div className="mb-3.5 flex flex-wrap items-center justify-between gap-3">
+        <FilterPills
+          label="Payout status"
+          value={status}
+          onChange={(v) => { setStatus(v); pages.reset(); }}
+          options={[{ value: '', label: 'All' }, ...['REQUESTED', 'PROCESSING', 'PAID', 'FAILED', 'CANCELLED'].map((s) => ({ value: s, label: s.charAt(0) + s.slice(1).toLowerCase() }))]}
+        />
+        {canFinance ? <Button icon="plus" size="sm" onClick={() => setCreating(true)}>Request payout</Button> : null}
       </div>
       <DataTable
         caption="Payouts"
@@ -226,8 +230,8 @@ export default function PayoutsPanel({ prefill, onPrefillUsed }: { prefill?: Pay
         rowActions={(p) =>
           open(p) && canFinance ? (
             <div className="flex gap-2">
-              <Button size="sm" onClick={() => setConfirming(p)}>Confirm payout</Button>
-              <Button size="sm" variant="ghost" onClick={() => setFailing(p)}>Mark failed</Button>
+              <Button size="xs" onClick={() => setConfirming(p)}>Confirm payout</Button>
+              <Button size="xs" variant="ghost" onClick={() => setFailing(p)}>Mark failed</Button>
             </div>
           ) : null
         }
