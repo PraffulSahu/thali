@@ -24,7 +24,10 @@ export async function fillOtpForm(scope: Page | Locator, phone: string): Promise
     ]);
     if (outcome === 'sent') break;
     const [, m, sec] = (await wait.innerText()).match(/(\d+):(\d+)/)!;
-    await sleep((Number(m) * 60 + Number(sec) + 1) * 1000);
+    const waitSec = Number(m) * 60 + Number(sec) + 1;
+    // visible in the run log, so a regression that puts first sends under the cooldown does not go unnoticed
+    console.log(`[e2e otp] ${phone}: resend cooldown (${m}:${sec}), waiting ${waitSec} s before sending again`);
+    await sleep(waitSec * 1000);
   }
   await expect(notice).toBeVisible();
   const code = scope.getByLabel('6-digit code');
