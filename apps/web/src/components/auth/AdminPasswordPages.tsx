@@ -23,7 +23,8 @@ import { Input } from '../ui/Input';
 import { useDocumentTitle } from '../ui/PageHeader';
 import { ThemeToggle } from '../ui/ThemeToggle';
 
-export const MIN_ADMIN_PASSWORD = 8;
+/** Mirrors identity MIN_ADMIN_PASSWORD_LENGTH (the reset also refuses the current password). */
+export const MIN_ADMIN_PASSWORD = 12;
 
 function AuthFrame({ title, subtitle, children }: { title: string; subtitle: ReactNode; children: ReactNode }) {
   useDocumentTitle(title);
@@ -195,7 +196,7 @@ export function AdminResetPasswordPage() {
   return (
     <AuthFrame title="Choose a new password" subtitle="Then confirm it’s you with a code from your authenticator app.">
       <form onSubmit={submit} noValidate className="flex flex-col gap-4">
-        <Field label="New password" required hint={`At least ${MIN_ADMIN_PASSWORD} characters.`} error={errors.password}>
+        <Field label="New password" required hint={`At least ${MIN_ADMIN_PASSWORD} characters, different from your current password.`} error={errors.password}>
           <Input type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
         </Field>
         <Field label="Confirm new password" required error={errors.confirm}>

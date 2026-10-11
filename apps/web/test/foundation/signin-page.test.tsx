@@ -156,10 +156,11 @@ describe('admin password reset (IDN-1)', () => {
     const user = userEvent.setup();
     const m = respond('/api/v1/auth/admin/password/reset', () => new Response(null, { status: 204 }));
     renderAt('/admin/reset-password?token=t', makeAuth());
-    await user.type(screen.getByLabelText(/^new password/i), 'short');
+    // identity's admin policy is 12+ characters (MIN_ADMIN_PASSWORD_LENGTH); 10 must be refused here, not by a 400
+    await user.type(screen.getByLabelText(/^new password/i), 'n3w-passw0');
     await user.type(screen.getByLabelText(/confirm new password/i), 'other');
     await user.click(screen.getByRole('button', { name: 'Change password' }));
-    expect(screen.getByText(/at least 8 characters\./i, { selector: 'p span, span' })).toBeInTheDocument();
+    expect(screen.getByText(/use at least 12 characters\./i)).toBeInTheDocument();
     expect(screen.getByText(/passwords don’t match/i)).toBeInTheDocument();
     expect(m.calls()).toHaveLength(0);
   });
