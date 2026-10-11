@@ -1,15 +1,12 @@
 /**
  * Admin shell slots for RoleSidebarShell (board 40): ⌘K search context card, grouped nav badges
- * (MARKETPLACE / OPERATIONS / SYSTEM), the phone top-bar search icon (+ the palette host, mounted once), and the
- * footer user block ("Nisha K. · Ops admin · MFA on" with the session's admin sub-role).
+ * (MARKETPLACE / OPERATIONS / SYSTEM) and the phone top-bar search icon (+ the palette host, mounted once). The role
+ * tag (sub-role) and the footer user block ("Ops admin · MFA on") come from RoleSidebarShell's admin defaults.
  */
 import { useQuery } from '@tanstack/react-query';
 import { NavCount, NavDot, NavPlainCount } from '../../components/layout/RoleNav';
 import { SidebarSearchButton } from '../../components/layout/RoleSidebarShell';
-import { useDisplayName } from '../../components/layout/ShellParts';
-import { Avatar } from '../../components/ui/Avatar';
 import { IconButton } from '../../components/ui/Button';
-import { useAuth } from '../../lib/auth';
 import { getHealth, marketplaceOverview, ordersOverview, qk, tmsOverview, type HealthReport } from './api';
 import { CommandPaletteHost, openCommandPalette } from './CommandPalette';
 
@@ -83,21 +80,4 @@ export function adminSubtitle(adminRoles: readonly string[], mfa: boolean): stri
   const names = order.filter((r) => adminRoles.includes(r)).map((r) => SUB_ROLE[r]);
   const role = names.length ? `${names.join(' · ')} admin` : 'Admin';
   return mfa ? `${role} · MFA on` : role;
-}
-
-/** Footer user block (30px initials avatar, name 13px, sub-role line). */
-export function AdminFooter() {
-  const auth = useAuth();
-  const name = useDisplayName();
-  if (!auth.isAuthenticated) return null;
-  const src = typeof auth.user?.avatarUrl === 'string' ? (auth.user.avatarUrl as string) : null;
-  return (
-    <div className="flex min-w-0 items-center gap-2.5">
-      <Avatar name={name} src={src} size={30} />
-      <div className="min-w-0">
-        <p className="truncate text-[13px] font-medium text-fg">{name}</p>
-        <p className="truncate text-xs text-fg-3">{adminSubtitle(auth.adminRoles, auth.hasMfa)}</p>
-      </div>
-    </div>
-  );
 }

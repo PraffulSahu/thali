@@ -8,7 +8,7 @@ import { Navigate } from 'react-router';
 import { NotFoundPage } from '../../components/layout/ErrorBoundary';
 import type { NavItem } from '../../components/layout/RoleNav';
 import type { RoleShellConfig } from '../../components/layout/RoleSidebarShell';
-import { AdminFooter, AdminMobileContext, AdminSearchContext, DeliveriesBadge, HealthBadge, PartnersBadge, RestaurantsBadge, SupportBadge } from './shell';
+import { AdminMobileContext, AdminSearchContext, DeliveriesBadge, HealthBadge, PartnersBadge, RestaurantsBadge, SupportBadge } from './shell';
 
 const page = (load: () => Promise<{ default: React.ComponentType }>) => () => load().then((m) => ({ Component: m.default }));
 
@@ -50,7 +50,7 @@ export const nav: NavItem[] = [
 export const shell: RoleShellConfig = {
   Context: AdminSearchContext,
   MobileContext: AdminMobileContext,
-  Footer: AdminFooter,
+  railContext: true,
 };
 
 export const wide = false;
