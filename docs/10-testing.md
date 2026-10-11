@@ -4,9 +4,10 @@ How the automated tests are organised, how to run each layer, and where the reco
 requirements behind the tests are the "minimum tests" of the brief; the mapping from requirement to test file is
 in section 4.
 
-> **Status of this document.** Sections 1 to 5 describe how the suites work. Section 6 records the controller-verified
-> results of the final run on a fresh stack built from committed code (build, 169 test files / 1 375 tests, seed,
-> smoke 26/26, Playwright e2e 29/29). Nothing else in the documentation claims result numbers.
+> **Status of this document.** Sections 1 to 5 describe how the suites work. Section 6 records verified results:
+> 6.1 the UI-redesign run on 2026-10-11 (typecheck exit 0, 220 test files / 1 859 tests, seed-verify 13/13, smoke
+> 26/26, Playwright e2e 33/33) and 6.2 the earlier platform run (169 files / 1 375 tests, e2e 29/29). Nothing else in
+> the documentation claims result numbers.
 
 ## 1. Layers
 
@@ -56,9 +57,10 @@ Full stack suites (demo mode):
 ```bash
 cp .env.example .env                 # demo placeholders; use scripts/gen-env.sh for anything that is not a local demo
 npm run stack:up                     # docker compose up -d --build --wait
-npm run seed                         # idempotent demo data: 168 documents on a fresh stack, 0 on the second run
+npm run seed                         # idempotent: story data + the Bengaluru dataset (about 138,700 documents on a fresh stack), 0 on the second run
+npx tsx scripts/seed-verify.ts       # per-collection counts + 13 consistency checks over the seeded databases
 npm run smoke                        # scripted API walk (26 steps, PASS/FAIL per step, non-zero exit on the first failure)
-npm run e2e                          # stack:up + seed + Playwright (12 completion flows + 8 system failure scenarios)
+npm run e2e                          # stack:up + seed + Playwright (12 completion flows, 4 redesign flows, 8 system failure scenarios)
 npm run test -w @thali/e2e           # Playwright only, against an already running and seeded stack
 cd e2e && npx playwright test tests/08-partial-rejection.spec.ts    # one spec
 ```
@@ -151,21 +153,25 @@ Notes
 ### 4.3 End-to-end and system scenarios (`e2e/tests`, Playwright against the demo stack)
 
 Twelve completion flows (10 spec files, 20 test definitions: flow 11 has one test per service plus the Swagger
-check, flow 12 has three) and eight system failure scenarios (8 spec files, 9 test definitions), so 29 Playwright
-tests in 18 files:
+check, flow 12 has three), four UI-redesign flows (4 spec files, 4 tests) and eight system failure scenarios (8 spec
+files, 9 test definitions), so 33 Playwright tests in 22 files:
 
 | Spec | Covers |
 |---|---|
-| `01-guest-discovery` | flow 1: guest discovery by address; outside every service area gives the "we do not deliver here" state |
-| `02-cart-login-preserve` | flow 2: two-restaurant guest cart survives OTP sign-in |
-| `03-04-checkout-payment` | flows 3 and 4: server totals re-derived from first principles, demo payment, child orders placed exactly once |
-| `05-restaurant-isolation` | flow 5: each owner sees and acts on only their own child order; cross-restaurant actions refused |
-| `06-07-delivery-tracking` | flows 6 and 7: partner online, offer, accept, arrive, pickup code, start, delivery code; the customer follows every step |
-| `08-partial-rejection` | flow 8: A accepted, B rejected with reason, refund SUCCEEDED for exactly B, payment PARTIALLY_REFUNDED |
+| `01-guest-discovery` | flow 1: landing "Use my location" → Discover lists exactly the server's first page with the MKT-2 counts; veg filter agrees with the API; outside every service area gives the "we don't deliver here yet" state |
+| `02-cart-login-preserve` | flow 2: two-restaurant guest cart (dock chips, cart page) survives OTP sign-in from "Proceed to checkout" |
+| `03-04-checkout-payment` | flows 3 and 4: server totals re-derived from first principles and shown in "Bill, per restaurant", demo payment, child orders placed exactly once |
+| `05-restaurant-isolation` | flow 5: each owner sees only their own child order on the board 20 kanban (prep pill + "Accept · N min"); cross-restaurant actions refused |
+| `06-07-delivery-tracking` | flows 6 and 7: partner online, offer with drop area only (DLV-2), "Accept offer", Call shows the demo note (DLV-1), "I’ve arrived", inline pickup code, start, inline delivery code; the customer follows every step and sees the delivery code once a rider is assigned |
+| `08-partial-rejection` | flow 8: A accepted, B rejected inline with a reason ("Other…" needs text), refund SUCCEEDED for exactly B, payment PARTIALLY_REFUNDED |
 | `09-restaurant-activation` | flow 9: business email verification (real Mailpit mail) plus admin approval gate activation |
 | `10-unauthorized` | flow 10: 401/403/404/409 with the standard envelope and no state change; UI no-access states |
 | `11-openapi-coverage` | flow 11: every registered route of every service is in its OpenAPI spec and in the gateway's public spec; Swagger UI loads |
 | `12-startup` | flow 12: all containers healthy, gateway ready, `/meta` demo, web served, README lists the start commands |
+| `13-landing-address-search` | redesign: landing address autocomplete (MKT-1) → Discover for that point with the Bengaluru dataset (counts, first page, mirrored photo loads, offer badges, cuisine pill narrows like the API) |
+| `14-per-restaurant-checkout` | redesign: "Checkout only Spice Route" (ORD-3) pays one restaurant; the other stays in the cart |
+| `15-admin-bulk-actions` | redesign: admin overview "N failed notifications · Retry" (SMS outage via demo fail mode, NTF-2) and "N dead letters · Replay" (health count injected for the page, real NTF-3 endpoint) |
+| `16-theme-persists` | redesign: dark mode from the utility bar and the sign-in toggle persists across reloads and areas |
 | `system/duplicate-webhooks` | 5x replay and out-of-order webhooks; failed attempt then successful retry on the same provider order |
 | `system/payment-recovery` | `docker compose stop orders` during capture: PLACED within 60 s of restart, exactly once |
 | `system/stock-race` | 5 parallel checkouts for the last unit: exactly one succeeds |
@@ -189,6 +195,27 @@ start containers (`orders`) and toggle demo failure modes, so they must not run 
 | Tests pass but the stack behaves differently | tests use in-process apps and fakes for providers; run `smoke` against the real stack |
 
 ## 6. Recorded results
+
+### 6.1 UI redesign (branch `feat/ui-redesign`, 2026-10-11)
+
+Verified on the running demo stack rebuilt from the branch (`npm run stack:up`, then `docker compose up -d --build
+web` after the last web fix; all containers healthy), with the Bengaluru seed already loaded (volumes kept, `npm
+run seed` re-run: 0 inserted, 33 s) and `npm run demo:traffic -- --orders 6` run before the suites. Unit and
+integration tests ran against the infra stack.
+
+| Command | Result | Duration | Notes |
+|---|---|---|---|
+| `npm run typecheck` | **exit 0** | n/a | packages, services, e2e and web |
+| `npm test` (`vitest run`) | **220 test files, 1 859 tests passed, 0 failed** | about 3.9 min | unit + integration + web component tests (web alone: 67 files / 523 tests) |
+| `npm run seed` (re-run) | **0 inserted** | 33 s | first run on a fresh stack: about 138,700 documents in about 105 s (see runbook 14.1) |
+| `npx tsx scripts/seed-verify.ts` | **13/13 checks passed** | n/a | after smoke, e2e and demo traffic |
+| `npx tsx scripts/smoke.ts` | **26/26 steps PASS** | n/a | Spice Route and Green Leaf are still the nearest demo restaurants at the smoke drop point |
+| `npm run test -w @thali/e2e` | **33 passed, 0 failed** | 4.4 min | 20 completion-flow tests, 4 redesign flows, 9 system scenarios |
+
+Not recorded in this run: a clean `docker compose down -v` rebuild (the Bengaluru seed and image mirror were kept),
+`npm audit`.
+
+### 6.2 Platform baseline (branch `build/platform`)
 
 Controller-verified on 2026-10-10/11 on a fresh `docker compose down -v` stack built from committed code (branch
 `build/platform`, `.env` copied from `.env.example` plus the `MAILPIT_HOST_PORT=18025 MINIO_HOST_PORT=19000

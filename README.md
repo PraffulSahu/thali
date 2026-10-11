@@ -68,8 +68,10 @@ you still set `APP_MODE`, the real provider credentials, turn `DEMO_OTP_ENABLED`
 
 `npm run seed` runs each service's own seed inside its container (`docker compose exec <svc> node dist/seed.js`;
 order: identity, marketplace, delivery, payments, notifications, orders), so every service only writes its own
-database. A second run reports 0 inserts (idempotent). TODO (controller, after the Bengaluru seed is verified):
-state the per-service insert counts and the duration of the first run here. Options: `npm run seed -- identity marketplace` (only some services)
+database. A second run reports 0 inserts (idempotent). On a fresh stack with the photos already mirrored the first
+run inserts about 138,700 documents in about 105 s (identity 1,700 · marketplace 25,831 · delivery 5,525 ·
+payments 42,280 · notifications 2,680 · orders 60,684); a re-run takes about 35-40 s and inserts 0. The first
+`npm run seed:images` downloads 1,107 photos (about 11 min, Wikimedia pacing); later runs take about 2 s. Options: `npm run seed -- identity marketplace` (only some services)
 and `npm run seed -- --local` (host mode with tsx against the infra stack and the values in `.env`).
 
 Then open:
@@ -120,9 +122,9 @@ kept. Mode is shown in a persistent banner, and everything seeded is flagged `is
 
 | Dataset | Count |
 |---|---|
-| Restaurants, owners | TODO (controller: fill from the verified seed; target about 600 restaurants / 450 owners) |
-| Consumers, delivery partners | TODO (target about 1,000 / 250) |
-| Historical checkouts, menu items | TODO (target about 5,000 over 60 days / about 15,000 items) |
+| Restaurants, owners | 600 generated (582 approved, the rest pending / suspended / rejected) across 71 localities, plus the 4 story restaurants; 450 owners (90 with two branches, 30 with three) |
+| Consumers, delivery partners | 1,000 consumers with 1,720 addresses; 250 partners (228 approved) |
+| Historical checkouts, menu items | 5,000 checkouts / 5,984 child orders over 60 days (4,224 ratings, 712 refunds, 4,760 paid weekly payouts); 14,904 menu items in 5,406 categories |
 
 Try it:
 
@@ -134,8 +136,17 @@ Try it:
 4. Add items from two restaurants, then check out **one** restaurant from the cart bar; the other stays in the cart.
 5. For a busy dashboard run `npm run demo:traffic`, then open the owner board, the partner home and the admin overview.
 
-Sample logins for the generated data: TODO (controller: list a few consumer `+91910...`, owner `+91920...` and
-partner `+91930...` numbers that exist after the seed, all with the demo OTP `123456`).
+Sample logins for the generated data (demo OTP `123456`; generated numbers are consumers `+91910 1000001…`, owners
+`+91920 2000001…`, partners `+91930 3000001…`):
+
+| Role | Phone | Who |
+|---|---|---|
+| Consumer | +919101000001 | Santosh Naik (Kalyan Nagar) |
+| Consumer | +919101000002 | Narasimha Gupta (MG Road) |
+| Owner, two restaurants | +919202000001 | Amreen Syed: RT Nagar Street Kitchen (Bannerghatta Road, Ejipura) |
+| Owner, two restaurants | +919202000339 | Shweta Jain: Flat White & Co. Cafe (Indiranagar, Marathahalli); busy board after `npm run demo:traffic` |
+| Partner | +919303000002 | Varun Chary, bike KA41YX7378 |
+| Partner | +919303000169 | Vineet Trivedi (used by `npm run demo:traffic`) |
 
 Photos are real, CC-licensed pictures from Wikimedia Commons and Openverse plus randomuser.me portraits; the
 attribution for every image is in [scripts/seed-data/CREDITS.md](scripts/seed-data/CREDITS.md) (restaurant and
@@ -196,8 +207,8 @@ disable), so repeated runs do not lock the demo numbers.
 Integration tests use `mongodb://localhost:27018/?replicaSet=rs0&directConnection=true` and
 `redis://localhost:6379` with unique database names and Redis prefixes per test file. Running the infra stack
 and the full stack together needs the port overrides above. How to run each suite, and the recorded results,
-are in [docs/10-testing.md](docs/10-testing.md) (last verified run: build exit 0, 169 test files / 1 375 tests
-passed, seed idempotent, smoke 26/26).
+are in [docs/10-testing.md](docs/10-testing.md) (last verified run, UI redesign: typecheck exit 0, 220 test files /
+1 859 tests passed, seed idempotent, seed-verify 13/13, smoke 26/26, Playwright e2e 33/33).
 
 ## Repository layout
 

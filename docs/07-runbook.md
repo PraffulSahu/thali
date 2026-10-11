@@ -452,9 +452,24 @@ npm run seed               # idempotent; order: identity, marketplace, delivery,
   up to `DISCOVERY_CACHE_TTL_SEC` (60 s). Wait a minute, or bump the epoch by editing any restaurant through the API.
 - The seed-data directory (`scripts/seed-data`) must be reachable by the service that reads it. If a seed fails
   with a missing file, run `npm run seed -- --local`, or set `SEED_DATA_DIR`.
-- TODO (controller, after Task 8 verification): record the seed duration, per-collection document counts on a
-  fresh stack, the sample sign-in phones per role (consumers `+91910...`, owners `+91920...`, partners
-  `+91930...`, all with OTP `123456` in demo) and the admin credentials printed by the identity seed.
+- Verified numbers (2026-10-11, images already mirrored): the first run inserts about 138,700 documents in about
+  105 s (identity 1,700 in 7 s · marketplace 25,831 in 16 s · delivery 5,525 in 20 s · payments 42,280 in 10 s ·
+  notifications 2,680 in 4 s · orders 60,684 in 46 s); a re-run inserts 0 in about 35-40 s.
+- Resulting collection counts (`npx tsx scripts/seed-verify.ts` prints them and runs 13 consistency checks:
+  ratings vs delivered children, rating sums, coupon usage, ledger balances ≥ 0, delivered child → job + capture +
+  earning, refunds, checkout totals, membership usage, jobs → partners, projection per restaurant): users 1,710 ·
+  restaurants 605 · menu items 14,922 · ratings 4,224 · coupons 50 · checkout groups 5,029 · child orders 6,012 ·
+  payment intents 5,144 · ledger entries 25,869 · payouts 4,761 · partners 255 · delivery jobs 5,283 (small
+  differences after smoke, e2e or demo traffic runs are expected).
+- Sign-in phones (demo OTP `123456`): story accounts `+919000000001..3` (consumers), `+919100000001..2` (owners
+  of two restaurants each), `+919200000001..2` (partners); generated consumers `+919101000001…` (e.g. Santosh Naik
+  `+919101000001`), owners `+919202000001…` (e.g. Amreen Syed `+919202000001`, two restaurants), partners
+  `+919303000001…` (e.g. Varun Chary `+919303000002`).
+- Admin (printed by the identity seed): `admin@thali.demo` / `SEED_ADMIN_PASSWORD` (default `ThaliDemo#2026`),
+  TOTP secret `SEED_ADMIN_TOTP_SECRET` (default `THALIDEMOTOTPSECRETKEY234567ABCD`; add it to an authenticator app
+  or run `node -e "const {authenticator}=require('otplib');console.log(authenticator.generate('THALIDEMOTOTPSECRETKEY234567ABCD'))"`).
+  A forgotten password is reset from `/admin/forgot` (link in Mailpit, plus a fresh TOTP code; at least 12
+  characters, different from the current one).
 
 ### 14.2 Image mirror (`npm run seed:images`)
 
@@ -484,15 +499,24 @@ Makes the boards look alive: places live orders through the public APIs as seede
 some of them through accept, ready, pickup and delivery with the demo owners and partners.
 
 ```bash
-npm run demo:traffic
+npm run demo:traffic                                   # 6 orders around Indiranagar
+npm run demo:traffic -- --orders 6 --area "Koramangala 5th Block"
 ```
 
 - Demo mode only. It signs in with the demo OTP, so it is subject to the per-phone OTP limits (5 per hour,
   30 s cooldown): do not run it in a tight loop.
 - Run it instead of, not together with, `npm run smoke` or `npm run e2e`: they share the demo partners and the
   owner boards.
-- TODO (controller, after Task 8 verification): document the options (order count, pacing) and the expected
-  end state once the script is final.
+- Options: `--orders N` (default 6) and `--area "<locality>"` (default Indiranagar); `DEMO_BASE_URL` /
+  `DEMO_ORIGIN` (default http://localhost:5173). Orders are placed one after another (no pacing option); each run
+  takes 1-3 minutes.
+- End state: the orders cycle through New (left PLACED; the accept window later times it out with a refund) ·
+  Preparing · Ready for pickup · On the way (a partner picked it up with the restaurant code) · Delivered (customer
+  code), from generated consumers, owners and two generated partners (refresh sessions cached in the OS temp dir,
+  so re-runs need no OTP). The summary lists each order code and its state.
+- Partners keep their on-the-way jobs. Once both are full, later "On the way" / "Delivered" targets fail with
+  "timed out waiting for dispatch offer" (the run reports e.g. 5/6 placed) and those orders stay at Ready, which
+  is still useful board state. Clear them from the admin Deliveries page (assign / mark failed) if needed.
 
 ### 14.4 Order contact backfill and delivery code backfill (force run)
 
