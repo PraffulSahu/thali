@@ -106,4 +106,26 @@ describe('useLocationTracking', () => {
     expect(result.current.status).toBe('denied');
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('treats a 429 (one update every few seconds, e.g. right after a reload) as benign: no error, resend after Retry-After', async () => {
+    fetchMock.mockImplementationOnce(
+      async () =>
+        new Response(JSON.stringify({ error: { code: 'RATE_LIMITED', message: 'Location updates are limited to one every few seconds', details: { retryAfterSec: 2 }, requestId: 'r' } }), {
+          status: 429,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
+    const { result } = renderHook(() => useLocationTracking({ enabled: true }));
+    await act(async () => {
+      onPos(fix());
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.current.sendError).toBeNull();
+    await tick(1_000);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await tick(1_100); // 2.1 s: past Retry-After, well before the 5 s throttle
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.current.sendError).toBeNull();
+    expect(result.current.lastSentAt).not.toBeNull();
+  });
 });

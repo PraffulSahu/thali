@@ -13,7 +13,7 @@
  * - The watch is cleared when `enabled` turns false and on unmount.
  */
 import { useEffect, useState } from 'react';
-import { errorMessage } from '../../lib/errors';
+import { errorMessage, isApiError } from '../../lib/errors';
 import { postPartnerLocation } from './api';
 
 export const LOCATION_THROTTLE_MS = 5_000;
@@ -73,7 +73,14 @@ export function useLocationTracking({ enabled, throttleMs = LOCATION_THROTTLE_MS
         setLastSentAt(Date.now());
         setSendError(null);
       } catch (err) {
-        if (!stopped) setSendError(errorMessage(err));
+        if (stopped) return;
+        // 429 = the server's one-update-every-few-seconds limit (e.g. a reload right after a send): not a
+        // failure worth showing. Allow the next fix as soon as Retry-After has passed.
+        if (isApiError(err) && err.status === 429) {
+          lastAttempt = Date.now() - throttleMs + (err.retryAfterSec ?? 1) * 1000;
+          return;
+        }
+        setSendError(errorMessage(err));
       }
     };
 
