@@ -47,7 +47,7 @@ describe('MenuPage', () => {
     ]);
     const user = userEvent.setup();
     render();
-    expect(await screen.findByText(/7 available, 3 held in open orders/i)).toBeInTheDocument();
+    expect(await screen.findByText('7 left · 3 reserved')).toBeInTheDocument();
     const stock = screen.getByLabelText(/stock for chicken biryani/i);
     await user.clear(stock);
     await user.type(stock, '25');

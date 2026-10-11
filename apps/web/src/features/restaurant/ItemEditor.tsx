@@ -1,17 +1,18 @@
 /**
- * Create / edit a menu item (PRD R-3): name, category, price, veg flag, image, availability, tracked stock and
- * customization groups. Validation mirrors the API (min <= max <= options). Saves with POST/PATCH on
- * /owner/restaurants/:id/items.
+ * Create / edit a menu item (PRD R-3): name, category, price, veg flag, image, availability, tracked stock,
+ * recommended (MKT-9, max 6) and customization groups. Validation mirrors the API (min <= max <= options). In a
+ * pure-veg kitchen (MKT-4) the item and every option are vegetarian; a 422 PURE_VEG_VIOLATION is explained.
+ * Saves with POST/PATCH on /owner/restaurants/:id/items. Dialog on desktop, bottom sheet on phones.
  */
 import { useMutation } from '@tanstack/react-query';
 import { useEffect, useRef, useState } from 'react';
 import { Button, Checkbox, Dialog, Field, FormActions, InlineError, Input, RadioGroup, Select, Switch, Textarea } from '../../components/ui';
-import { fieldErrors } from '../../lib/errors';
+import { ApiError, fieldErrors } from '../../lib/errors';
 import { FilePicker } from './FilePicker';
 import {
   CustomizationEditor, fromDraftGroups, toDraftGroups, validateGroups, type DraftGroup,
 } from './CustomizationEditor';
-import { menuApi, paiseToRupees, rupeesToPaise, uploadFile, type ItemBody, type MenuCategory, type OwnerItem } from './api';
+import { MAX_FEATURED, menuApi, paiseToRupees, rupeesToPaise, uploadFile, type ItemBody, type MenuCategory, type OwnerItem } from './api';
 
 export interface ItemEditorProps {
   open: boolean;
@@ -21,7 +22,19 @@ export interface ItemEditorProps {
   /** Editing when set, creating otherwise. */
   item?: OwnerItem;
   defaultCategoryId?: string;
+  /** Restaurant is declared pure veg: items and options must be vegetarian. */
+  pureVeg?: boolean;
+  /** Featured items in the menu right now (cap MAX_FEATURED). */
+  featuredCount?: number;
   onSaved: (item: OwnerItem) => void;
+}
+
+/** Human message for a server refusal the form can't map to one field. */
+export function itemSaveError(e: unknown): string | null {
+  if (!(e instanceof ApiError)) return null;
+  if (e.code === 'PURE_VEG_VIOLATION') return 'This is a pure-veg kitchen, so the item and all of its options must be vegetarian. Change them, or turn off "Pure veg" in Store settings.';
+  if (e.code === 'VALIDATION_FAILED' && /featured/i.test(JSON.stringify(e.details ?? '') + e.message)) return `You can recommend up to ${MAX_FEATURED} items. Remove one from recommended first.`;
+  return null;
 }
 
 interface Values {
@@ -33,6 +46,7 @@ interface Values {
   available: boolean;
   trackStock: boolean;
   stock: string;
+  featured: boolean;
   imageKey: string | null | undefined;
 }
 
@@ -50,16 +64,17 @@ export function validateItem(v: Values, reservedQty = 0): Record<string, string>
   return e;
 }
 
-export function ItemEditor({ open, onClose, restaurantId, categories, item, defaultCategoryId, onSaved }: ItemEditorProps) {
+export function ItemEditor({ open, onClose, restaurantId, categories, item, defaultCategoryId, pureVeg = false, featuredCount = 0, onSaved }: ItemEditorProps) {
   const [v, setV] = useState<Values>(() => ({
     name: item?.name ?? '',
     description: item?.description ?? '',
     categoryId: item?.categoryId ?? defaultCategoryId ?? categories[0]?.id ?? '',
     price: item ? paiseToRupees(item.pricePaise) : '',
-    isVeg: item ? (item.isVeg ? 'veg' : 'nonveg') : 'veg',
+    isVeg: pureVeg ? 'veg' : item ? (item.isVeg ? 'veg' : 'nonveg') : 'veg',
     available: item?.available ?? true,
     trackStock: item?.trackStock ?? false,
     stock: String(item?.stockQty ?? 0),
+    featured: Boolean(item?.featured),
     imageKey: undefined,
   }));
   const [groups, setGroups] = useState<DraftGroup[]>(() => toDraftGroups(item?.customizationGroups ?? []));
@@ -91,7 +106,8 @@ export function ItemEditor({ open, onClose, restaurantId, categories, item, defa
         trackStock: v.trackStock,
         ...(v.trackStock ? { stockQty: Number(v.stock) } : {}),
         ...(v.imageKey !== undefined ? { imageKey: v.imageKey } : {}),
-        customizationGroups: fromDraftGroups(groups),
+        ...(v.featured !== Boolean(item?.featured) ? { featured: v.featured } : {}),
+        customizationGroups: fromDraftGroups(pureVeg ? groups.map((g) => ({ ...g, options: g.options.map((o) => ({ ...o, isVeg: true })) })) : groups),
       };
       return item
         ? menuApi.updateItem(restaurantId, item.id, body)
@@ -124,7 +140,7 @@ export function ItemEditor({ open, onClose, restaurantId, categories, item, defa
       description="Changes go live for customers as soon as you save."
       footer={
         <FormActions>
-          <Button variant="secondary" onClick={onClose} disabled={save.isPending}>Cancel</Button>
+          <Button variant="outline" onClick={onClose} disabled={save.isPending}>Cancel</Button>
           <Button type="submit" form="item-editor-form" loading={save.isPending}>{item ? 'Save changes' : 'Add item'}</Button>
         </FormActions>
       }
@@ -157,12 +173,13 @@ export function ItemEditor({ open, onClose, restaurantId, categories, item, defa
           name="item-veg"
           value={v.isVeg}
           onChange={(x) => set('isVeg', x as Values['isVeg'])}
-          options={[{ value: 'veg', label: 'Vegetarian' }, { value: 'nonveg', label: 'Non-vegetarian' }]}
+          options={[{ value: 'veg', label: 'Vegetarian' }, { value: 'nonveg', label: 'Non-vegetarian', disabled: pureVeg }]}
         />
+        {pureVeg ? <p className="-mt-2 text-[13px] text-fg-3">Pure-veg kitchen: every item and option is vegetarian. Change this in Store settings.</p> : null}
 
         <div className="flex flex-col gap-2">
-          <p className="text-sm font-medium text-slate-800">Photo</p>
-          {preview ? <img src={preview} alt="Item preview" className="h-32 w-32 rounded-control object-cover" /> : null}
+          <p className="text-sm font-medium text-fg">Photo</p>
+          {preview ? <img src={preview} alt="Item preview" className="h-32 w-32 rounded-control border border-line object-cover" /> : null}
           <FilePicker
             label="Item photo"
             purpose="IMAGE"
@@ -184,8 +201,8 @@ export function ItemEditor({ open, onClose, restaurantId, categories, item, defa
           ) : null}
         </div>
 
-        <fieldset className="flex flex-col gap-1 rounded-card border border-slate-200 p-3">
-          <legend className="px-1 text-sm font-semibold text-slate-900">Availability and stock</legend>
+        <fieldset className="flex flex-col gap-1 rounded-field border border-line bg-bg-2 p-3">
+          <legend className="px-1 text-sm font-semibold text-fg">Availability and stock</legend>
           <Switch label="Available to order" description="Turn off to hide this item from customers without deleting it" checked={v.available} onChange={(e) => set('available', e.target.checked)} />
           <Checkbox label="Track stock" description="Stops orders automatically when stock runs out" checked={v.trackStock} onChange={(e) => set('trackStock', e.target.checked)} />
           {v.trackStock ? (
@@ -193,15 +210,26 @@ export function ItemEditor({ open, onClose, restaurantId, categories, item, defa
               <Input type="number" inputMode="numeric" min={0} value={v.stock} onChange={(e) => set('stock', e.target.value)} />
             </Field>
           ) : null}
+          <Checkbox
+            label="Recommended"
+            description={!v.featured && featuredCount >= MAX_FEATURED && !item?.featured ? `Recommended is full (${MAX_FEATURED} of ${MAX_FEATURED}). Remove one first.` : `Shown in the "Recommended" row at the top of your menu (${featuredCount} of ${MAX_FEATURED} used)`}
+            checked={v.featured}
+            disabled={!v.featured && featuredCount >= MAX_FEATURED && !item?.featured}
+            onChange={(e) => set('featured', e.target.checked)}
+          />
         </fieldset>
 
         <section aria-labelledby="custom-heading" className="flex flex-col gap-2">
-          <h3 id="custom-heading" className="text-base font-semibold text-slate-900">Customizations and add-ons</h3>
-          <CustomizationEditor value={groups} onChange={setGroups} errors={show ? groupErrors : liveGroupErrors} defaultVeg={v.isVeg === 'veg'} />
+          <h3 id="custom-heading" className="font-sans text-base font-semibold tracking-normal text-fg">Customizations and add-ons</h3>
+          <CustomizationEditor value={groups} onChange={setGroups} errors={show ? groupErrors : liveGroupErrors} defaultVeg={v.isVeg === 'veg'} vegOnly={pureVeg} />
         </section>
 
-        {show && hasErrors ? <p role="alert" className="text-sm font-medium text-danger-700">Fix the highlighted fields to save this item.</p> : null}
-        {save.isError && Object.keys(server).length === 0 ? <InlineError error={save.error} /> : null}
+        {show && hasErrors ? <p role="alert" className="text-sm font-medium text-bad">Fix the highlighted fields to save this item.</p> : null}
+        {itemSaveError(save.error) ? (
+          <p role="alert" className="rounded-item bg-bad-bg px-3 py-2 text-[13px] text-bad">{itemSaveError(save.error)}</p>
+        ) : save.isError && Object.keys(server).length === 0 ? (
+          <InlineError error={save.error} />
+        ) : null}
       </form>
     </Dialog>
   );

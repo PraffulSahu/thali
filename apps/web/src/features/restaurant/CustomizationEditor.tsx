@@ -90,19 +90,21 @@ export interface CustomizationEditorProps {
   /** default veg flag for new options */
   defaultVeg?: boolean;
   disabled?: boolean;
+  /** Pure-veg kitchen: options are always vegetarian (checkbox locked on). */
+  vegOnly?: boolean;
 }
 
-export function CustomizationEditor({ value, onChange, errors, defaultVeg = true, disabled }: CustomizationEditorProps) {
+export function CustomizationEditor({ value, onChange, errors, defaultVeg = true, disabled, vegOnly }: CustomizationEditorProps) {
   const setGroup = (i: number, patch: Partial<DraftGroup>) => onChange(value.map((g, k) => (k === i ? { ...g, ...patch } : g)));
   const setOption = (i: number, j: number, patch: Partial<DraftOption>) =>
     setGroup(i, { options: value[i]!.options.map((o, k) => (k === j ? { ...o, ...patch } : o)) });
 
   return (
     <div className="flex flex-col gap-4">
-      {value.length === 0 ? <p className="text-sm text-slate-600">No customizations. Add a group if customers can choose a size, extras or a spice level.</p> : null}
+      {value.length === 0 ? <p className="text-sm text-fg-3">No customizations. Add a group if customers can choose a size, extras or a spice level.</p> : null}
       {value.map((g, i) => (
-        <fieldset key={i} className="flex flex-col gap-3 rounded-card border border-slate-200 bg-surface-muted p-3 sm:p-4" disabled={disabled}>
-          <legend className="px-1 text-sm font-semibold text-slate-900">Group {i + 1}{g.name.trim() ? `: ${g.name.trim()}` : ''}</legend>
+        <fieldset key={i} className="flex flex-col gap-3 rounded-field border border-line bg-bg-2 p-3 sm:p-4" disabled={disabled}>
+          <legend className="px-1 text-sm font-semibold text-fg">Group {i + 1}{g.name.trim() ? `: ${g.name.trim()}` : ''}</legend>
           <Field label={`Group ${i + 1} name`} required error={errors[`g${i}.name`]}>
             <Input value={g.name} onChange={(e) => setGroup(i, { name: e.target.value })} maxLength={80} placeholder="e.g. Size" />
           </Field>
@@ -116,10 +118,10 @@ export function CustomizationEditor({ value, onChange, errors, defaultVeg = true
           </div>
 
           <div className="flex flex-col gap-2">
-            <p className="text-sm font-medium text-slate-800">Options</p>
-            {errors[`g${i}.options`] ? <p role="alert" className="text-sm font-medium text-danger-700">{errors[`g${i}.options`]}</p> : null}
+            <p className="text-sm font-medium text-fg">Options</p>
+            {errors[`g${i}.options`] ? <p role="alert" className="text-sm font-medium text-bad">{errors[`g${i}.options`]}</p> : null}
             {g.options.map((o, j) => (
-              <div key={j} className="grid grid-cols-[1fr_7rem] items-start gap-2 rounded-control bg-surface p-2 sm:grid-cols-[1fr_8rem_auto_auto]">
+              <div key={j} className="grid grid-cols-[1fr_7rem] items-start gap-2 rounded-control border border-line bg-card p-2 sm:grid-cols-[1fr_8rem_auto_auto]">
                 <Field label={`Group ${i + 1} option ${j + 1} name`} error={errors[`g${i}.o${j}.name`]}>
                   <Input value={o.name} onChange={(e) => setOption(i, j, { name: e.target.value })} maxLength={80} />
                 </Field>
@@ -127,7 +129,7 @@ export function CustomizationEditor({ value, onChange, errors, defaultVeg = true
                   <Input inputMode="decimal" prefix="₹" value={o.price} onChange={(e) => setOption(i, j, { price: e.target.value })} />
                 </Field>
                 <div className="col-span-2 flex flex-wrap items-center gap-x-4 sm:col-span-1 sm:pt-7">
-                  <Checkbox label="Veg" checked={o.isVeg} onChange={(e) => setOption(i, j, { isVeg: e.target.checked })} aria-label={`Group ${i + 1} option ${j + 1} is vegetarian`} />
+                  <Checkbox label="Veg" checked={vegOnly || o.isVeg} disabled={vegOnly} onChange={(e) => setOption(i, j, { isVeg: e.target.checked })} aria-label={`Group ${i + 1} option ${j + 1} is vegetarian`} />
                   <Checkbox label="Available" checked={o.available} onChange={(e) => setOption(i, j, { available: e.target.checked })} aria-label={`Group ${i + 1} option ${j + 1} is available`} />
                 </div>
                 <div className="col-span-2 sm:col-span-1 sm:pt-7">
@@ -145,7 +147,7 @@ export function CustomizationEditor({ value, onChange, errors, defaultVeg = true
             ))}
             {g.options.length < MAX_OPTIONS ? (
               <div>
-                <Button variant="secondary" size="sm" icon="plus" onClick={() => setGroup(i, { options: [...g.options, newOption(defaultVeg)] })}>
+                <Button variant="outline" size="sm" icon="plus" onClick={() => setGroup(i, { options: [...g.options, newOption(defaultVeg)] })}>
                   Add option to group {i + 1}
                 </Button>
               </div>
@@ -161,7 +163,7 @@ export function CustomizationEditor({ value, onChange, errors, defaultVeg = true
       ))}
       {value.length < MAX_GROUPS ? (
         <div>
-          <Button variant="secondary" icon="plus" onClick={() => onChange([...value, newGroup(defaultVeg)])} disabled={disabled}>
+          <Button variant="outline" icon="plus" onClick={() => onChange([...value, newGroup(defaultVeg)])} disabled={disabled}>
             Add customization group
           </Button>
         </div>
