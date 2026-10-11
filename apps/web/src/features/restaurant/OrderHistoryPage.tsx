@@ -1,62 +1,24 @@
-/** Order history with a status filter (PRD R-5; the API filters by status only). Cursor-paginated; details open in a dialog. */
+/**
+ * Order history (design-spec §7.3): filter pills (All · Delivered · Rejected or cancelled · Delivery failed ·
+ * In progress, kept in the URL as `?status=`) over a dense table (code, placed IST, status, items, total, refund).
+ * The owner orders API filters by status only (no date range), so there is no date filter. Cursor-paginated;
+ * the code / Details opens the read-only order detail dialog.
+ */
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
-import {
-  Button, DataTable, Dialog, Field, FoodMarker, PageHeader, Pagination, Price, Select, StatusPill, useCursorPages,
-  type Column,
-} from '../../components/ui';
+import { useSearchParams } from 'react-router';
+import { Button, DataTable, FilterPill, PageHeader, Pagination, Price, StatusPill, useCursorPages, type Column } from '../../components/ui';
 import { formatDateTime, plural } from '../../lib/format';
 import { HISTORY_FILTERS, keys, ordersApi, type OwnerOrder } from './api';
+import { OrderDetailDialog } from './OrderDetailDialog';
 import { useCurrentRestaurant } from './RestaurantContext';
-
-function OrderDetails({ order, onClose }: { order: OwnerOrder | null; onClose: () => void }) {
-  if (!order) return null;
-  const b = order.breakdown;
-  return (
-    <Dialog
-      open
-      onClose={onClose}
-      title={`Order ${order.code}`}
-      description={order.placedAt ? `Placed ${formatDateTime(order.placedAt)}` : undefined}
-      footer={<Button variant="secondary" onClick={onClose}>Close</Button>}
-    >
-      <div className="flex flex-col gap-3">
-        <StatusPill kind="childOrder" status={order.status} />
-        <ul className="flex flex-col gap-1.5">
-          {order.lines.map((l, i) => (
-            <li key={i} className="flex items-start gap-2 text-[0.9375rem]">
-              <FoodMarker veg={l.isVeg ?? true} />
-              <span className="flex-1">
-                {l.quantity} × {l.name}
-                {l.addOns?.length ? <span className="block text-sm text-slate-600">{l.addOns.map((a) => a.name).join(', ')}</span> : null}
-                {l.note ? <span className="block text-sm text-slate-600">Note: {l.note}</span> : null}
-              </span>
-              {typeof l.lineTotalPaise === 'number' ? <Price paise={l.lineTotalPaise} size="sm" /> : null}
-            </li>
-          ))}
-        </ul>
-        {b?.itemsSubtotalPaise !== undefined ? (
-          <p className="flex justify-between border-t border-slate-100 pt-2 text-sm font-semibold">
-            <span>Items total</span>
-            <Price paise={b.itemsSubtotalPaise} />
-          </p>
-        ) : null}
-        {order.rejectionReason ? <p className="text-sm text-slate-700"><strong>Rejection reason:</strong> {order.rejectionReason}</p> : null}
-        {order.cancellationReason ? <p className="text-sm text-slate-700"><strong>Cancellation reason:</strong> {order.cancellationReason}</p> : null}
-        {order.refundStatus && order.refundStatus !== 'NONE' ? (
-          <p className="flex items-center gap-2 text-sm text-slate-700">
-            Refund <StatusPill kind="childRefund" status={order.refundStatus} />
-          </p>
-        ) : null}
-      </div>
-    </Dialog>
-  );
-}
 
 export default function OrderHistoryPage() {
   const restaurant = useCurrentRestaurant();
   const pages = useCursorPages();
-  const [status, setStatus] = useState('');
+  const [sp, setSp] = useSearchParams();
+  const raw = sp.get('status') ?? '';
+  const status = HISTORY_FILTERS.some((f) => f.value === raw) ? raw : '';
   const [open, setOpen] = useState<OwnerOrder | null>(null);
 
   const statuses = HISTORY_FILTERS.find((f) => f.value === status)?.statuses.join(',');
@@ -65,56 +27,64 @@ export default function OrderHistoryPage() {
     queryFn: () => ordersApi.page({ restaurantId: restaurant.id, status: statuses, cursor: pages.cursor }),
     placeholderData: keepPreviousData,
   });
-  const reset = () => pages.reset();
+
+  const choose = (v: string) => {
+    pages.reset();
+    setSp(
+      (prev) => {
+        const n = new URLSearchParams(prev);
+        if (v) n.set('status', v);
+        else n.delete('status');
+        return n;
+      },
+      { replace: true },
+    );
+  };
 
   const columns: Column<OwnerOrder>[] = [
-    { key: 'code', header: 'Order', cell: (o) => <span className="font-mono">{o.code}</span>, primary: true },
-    { key: 'placed', header: 'Placed', cell: (o) => (o.placedAt ? formatDateTime(o.placedAt) : ''), secondary: true },
-    { key: 'items', header: 'Items', cell: (o) => plural(o.lines.reduce((n, l) => n + l.quantity, 0), 'item') },
+    {
+      key: 'code',
+      header: 'Order',
+      primary: true,
+      cell: (o) => (
+        <button type="button" onClick={() => setOpen(o)} className="font-mono text-[13.5px] font-medium text-fg hover:underline">
+          {o.code}
+        </button>
+      ),
+    },
+    { key: 'placed', header: 'Placed', cell: (o) => <span className="font-mono text-[12.5px] text-fg-2">{o.placedAt ? formatDateTime(o.placedAt) : '—'}</span>, secondary: true },
+    { key: 'status', header: 'Status', cell: (o) => <StatusPill kind="childOrder" status={o.status} density="dense" /> },
+    { key: 'items', header: 'Items', cell: (o) => <span className="text-fg-2">{plural(o.lines.reduce((n, l) => n + l.quantity, 0), 'item')}</span>, hideOnMobile: true },
     {
       key: 'total',
       header: 'Items total',
       align: 'right',
       cell: (o) => {
         const p = o.breakdown?.itemsSubtotalPaise ?? o.breakdown?.totalPaise;
-        return p === undefined ? '' : <Price paise={p} />;
+        return p === undefined ? '' : <Price paise={p} size="sm" />;
       },
     },
-    { key: 'status', header: 'Status', cell: (o) => <StatusPill kind="childOrder" status={o.status} /> },
     {
       key: 'refund',
       header: 'Refund',
-      cell: (o) => (o.refundStatus && o.refundStatus !== 'NONE' ? <StatusPill kind="childRefund" status={o.refundStatus} /> : <span className="text-slate-500">None</span>),
+      cell: (o) => (o.refundStatus && o.refundStatus !== 'NONE' ? <StatusPill kind="childRefund" status={o.refundStatus} density="dense" /> : <span className="text-fg-3">—</span>),
       hideOnMobile: true,
     },
   ];
 
   return (
     <>
-      <PageHeader title="Order history" description={`All orders for ${restaurant.name}`} back={{ to: '/restaurant/orders', label: 'Live orders' }} />
-      <form className="mb-4 flex flex-wrap items-end gap-3" onSubmit={(e) => e.preventDefault()} aria-label="Filter orders">
-        <Field label="Status" className="min-w-56">
-          <Select
-            value={status}
-            onChange={(e) => {
-              setStatus(e.target.value);
-              reset();
-            }}
-            placeholder="All orders"
-            options={HISTORY_FILTERS.map((f) => ({ value: f.value, label: f.label }))}
-          />
-        </Field>
-        <Button
-          variant="ghost"
-          onClick={() => {
-            setStatus('');
-            reset();
-          }}
-          disabled={!status}
-        >
-          Clear filter
-        </Button>
-      </form>
+      <PageHeader title="Order history" className="mb-5" meta={<span>All orders for {restaurant.name} · times in IST</span>} />
+      <div role="group" aria-label="Filter by status" className="-mx-1 mb-4 flex gap-1.5 overflow-x-auto px-1 pb-1">
+        <FilterPill pressed={status === ''} onClick={() => choose('')}>
+          All
+        </FilterPill>
+        {HISTORY_FILTERS.map((f) => (
+          <FilterPill key={f.value} pressed={status === f.value} onClick={() => choose(f.value)}>
+            {f.label}
+          </FilterPill>
+        ))}
+      </div>
       <DataTable
         caption="Orders"
         columns={columns}
@@ -126,10 +96,11 @@ export default function OrderHistoryPage() {
         empty={{
           icon: 'receipt',
           title: status ? 'No orders match this filter' : 'No orders yet',
-          description: status ? 'Try a different status.' : 'Completed and past orders will be listed here.',
+          description: status ? 'Try another status.' : 'Completed and past orders are listed here.',
+          action: status ? <Button variant="outline" onClick={() => choose('')}>Show all orders</Button> : undefined,
         }}
         rowActions={(o) => (
-          <Button variant="ghost" size="sm" onClick={() => setOpen(o)} aria-label={`View order ${o.code}`}>
+          <Button variant="ghost" size="xs" onClick={() => setOpen(o)} aria-label={`View order ${o.code}`}>
             Details
           </Button>
         )}
@@ -144,7 +115,7 @@ export default function OrderHistoryPage() {
           />
         }
       />
-      <OrderDetails order={open} onClose={() => setOpen(null)} />
+      <OrderDetailDialog order={open} onClose={() => setOpen(null)} />
     </>
   );
 }
