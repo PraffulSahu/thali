@@ -1,4 +1,5 @@
 import '../setup';
+import './slow';
 import { screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import OrdersPage from '../../src/features/consumer/OrdersPage';
@@ -34,7 +35,8 @@ describe('OrdersPage', () => {
   it('renders the real order summary shape (total, per-restaurant parts, refund state)', async () => {
     mockApi({ 'GET /orders': { items: [summary], nextCursor: null } });
     renderWithProviders(<OrdersPage />, { route: '/orders', path: '/orders', auth: makeAuth({ roles: ['CONSUMER'] }) });
-    const row = (await screen.findByRole('link', { name: 'Order TH-GROUP001' })).closest('li')!;
+    const row = (await screen.findByText('TH-GROUP001')).closest('li')!;
+    expect(within(row).getAllByRole('link')[0]).toHaveAttribute('href', '/orders/ck1');
     expect(row).toHaveTextContent('₹812.40');
     expect(row).toHaveTextContent('₹536.96 refund pending');
     expect(within(row).getByText(/dosa corner/i)).toHaveTextContent('2 items · ₹275.44');

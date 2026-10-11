@@ -41,7 +41,7 @@ function OrderCard({ o }: { o: OrderSummary }) {
         {o.children.map((c) => (
           <li key={c.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
             <span className="min-w-0 truncate text-fg-2">
-              {c.restaurantName} <span className="text-fg-3">· {plural(c.itemCount, 'item')}</span>
+              {c.restaurantName} <span className="text-fg-3">· {plural(c.itemCount, 'item')} · {formatINR(c.totalPaise)}</span>
             </span>
             <span className="flex items-center gap-2">
               {c.refundStatus !== 'NONE' ? <StatusPill kind="childRefund" status={c.refundStatus} density="dense" /> : null}

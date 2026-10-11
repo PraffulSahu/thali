@@ -1,5 +1,6 @@
 import '../setup';
-import { screen, within } from '@testing-library/react';
+import './slow';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import OrderDetailPage from '../../src/features/consumer/OrderDetailPage';
@@ -52,21 +53,26 @@ describe('OrderDetailPage', () => {
   it('rejected child shows the explanation, "Refund initiated ₹…" and adjusted totals', async () => {
     mockApi({
       'GET /orders/ck1': orderDetail([accepted, rejected], [rejectedExplanation]),
-      'GET /deliveries/tracking/c1': { childOrderId: 'c1', status: 'OUT_FOR_DELIVERY', partner: { firstName: 'Arjun', vehicleType: 'BIKE' }, location: { lat: 12.97, lng: 77.6 }, lastLocationAt: new Date().toISOString(), stale: false, simulated: true, estimatedMinutes: 9, estimateSource: 'DEMO_HAVERSINE' },
+      'GET /deliveries/tracking/c1': { childOrderId: 'c1', status: 'OUT_FOR_DELIVERY', partner: { firstName: 'Arjun', vehicleType: 'BIKE' }, location: { lat: 12.97, lng: 77.6 }, lastLocationAt: new Date().toISOString(), stale: false, simulated: true, estimatedMinutes: 30, estimateSource: 'DEMO_HAVERSINE', remaining: { minutes: 9, distanceKm: 1.8, source: 'DEMO_HAVERSINE', computedAt: new Date().toISOString() } },
     });
     render();
-    const card = await screen.findByRole('region', { name: /spice route/i });
+    const card = await screen.findByRole('article', { name: /spice route/i });
     expect(within(card).getByText(/declined your order \(out of stock\)/i)).toBeInTheDocument();
-    expect(within(card).getByText(/^refund initiated/i)).toHaveTextContent('Refund initiated ₹536.96');
+    expect(within(card).getByText(/^refund ₹536\.96$/i)).toBeInTheDocument();
+    expect(within(card).getByRole('list', { name: /refund ₹536\.96/i })).toHaveTextContent(/processing \(current\)/i);
+    expect(within(card).getByText(/your dosa corner order isn.t affected/i)).toBeInTheDocument();
     expect(within(card).queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument();
-    const totals = screen.getByRole('region', { name: /payment summary/i });
+    const totals = screen.getByRole('region', { name: /^payment$/i });
     expect(within(totals).getByText(/refund pending/i).parentElement).toHaveTextContent('₹536.96');
     // server netPaise = paid − refunded (pending excluded); the UI also shows the net after the pending refund
     expect(within(totals).getByText(/^net paid$/i).parentElement).toHaveTextContent('₹812.40');
     expect(within(totals).getByText(/net after pending refund/i).parentElement).toHaveTextContent('₹275.44');
     // the other child continues independently, delivered separately, with simulated tracking
-    const dosa = screen.getByRole('region', { name: /dosa corner/i });
-    expect(within(dosa).getByText(/delivered separately/i)).toBeInTheDocument();
+    const dosa = screen.getByRole('article', { name: /dosa corner/i });
+    // DLV-3 remaining ETA wins over the static child estimate (32 min)
+    await waitFor(() => expect(within(dosa).getByText(/on the way/i, { selector: 'p' })).toHaveTextContent('On the way — about 9 min'));
+    expect(within(dosa).getByText('Arrival time is a demo estimate')).toBeInTheDocument();
+    expect(within(dosa).getByRole('group', { name: 'Delivery code 4 8 2 1' })).toBeInTheDocument();
     expect(await within(dosa).findByText(/simulated/i)).toBeInTheDocument();
     expect(await within(dosa).findByText('marker:partner')).toBeInTheDocument();
   });
@@ -77,11 +83,10 @@ describe('OrderDetailPage', () => {
       'GET /orders/ck1': orderDetail([refunded], [{ ...rejectedExplanation, refundStatus: 'SUCCEEDED', message: 'Spice Route declined your order (Out of stock). ₹536.96 refunded.' }], { status: 'CANCELLED' }),
     });
     render();
-    const card = await screen.findByRole('region', { name: /spice route/i });
+    const card = await screen.findByRole('article', { name: /spice route/i });
     expect(within(card).getByText(/spice route declined your order/i)).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: /payment summary/i })).toHaveTextContent('Refunded');
-    expect(within(card).getByText(/^refunded/i)).toHaveTextContent('Refunded ₹536.96');
-    expect(within(card).queryByText(/refund initiated/i)).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: /^payment$/i })).toHaveTextContent('Refunded');
+    expect(within(card).getByRole('list', { name: /refund ₹536\.96/i })).toHaveTextContent(/refunded \(done\)/i);
   });
 
   it('warns when the partner location is older than 60 s', async () => {

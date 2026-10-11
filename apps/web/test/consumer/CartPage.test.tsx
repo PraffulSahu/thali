@@ -1,4 +1,5 @@
 import '../setup';
+import './slow';
 import { screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -22,11 +23,12 @@ describe('CartPage', () => {
     renderWithProviders(<CartPage />, { auth: makeAuth({ roles: ['CONSUMER'] }) });
     const groups = await screen.findAllByRole('region', { name: /from /i });
     expect(groups).toHaveLength(2);
-    expect(within(groups[0]!).getByRole('heading', { name: 'Spice Route' })).toBeInTheDocument();
-    expect(within(groups[0]!).getByText(/subtotal/i).parentElement).toHaveTextContent('₹480');
-    expect(within(groups[1]!).getByRole('heading', { name: 'Dosa Corner' })).toBeInTheDocument();
-    expect(within(groups[1]!).getByText(/subtotal/i).parentElement).toHaveTextContent('₹200');
-    expect(screen.getAllByText(/delivered separately/i).length).toBeGreaterThanOrEqual(2);
+    expect(within(groups[0]!).getByRole('heading', { name: 'Spice Route' }).parentElement!.parentElement).toHaveTextContent('₹480.00');
+    expect(within(groups[1]!).getByRole('heading', { name: 'Dosa Corner' }).parentElement!.parentElement).toHaveTextContent('₹200.00');
+    expect(screen.getByText(/each restaurant prepares and delivers its part/i)).toBeInTheDocument();
+    // per-restaurant checkout (ORD-3) for multi-restaurant carts
+    expect(within(groups[0]!).getByRole('button', { name: /checkout only spice route/i })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: /cart summary/i })).toHaveTextContent('₹680.00');
   });
 
   it('removing a line calls DELETE /cart/items/:lineId and shows the updated cart', async () => {
@@ -52,7 +54,7 @@ describe('CartPage', () => {
     localStorage.setItem(GUEST_CART_STORAGE_KEY, 'guest-token-abc');
     const m = mockApi({ 'GET /cart': { ...twoRestaurantCart(), ownerType: 'GUEST' } });
     renderWithProviders(<CartPage />);
-    await userEvent.click(await screen.findByRole('button', { name: /sign in to checkout/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /proceed to checkout/i }));
     expect(m.callsTo('GET', '/cart')[0]!.headers['x-guest-cart']).toBe('guest-token-abc');
     expect(await screen.findByRole('dialog', { name: /sign in/i })).toBeInTheDocument();
   });

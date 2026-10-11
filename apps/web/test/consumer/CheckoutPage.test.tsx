@@ -1,4 +1,5 @@
 import '../setup';
+import './slow';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -40,14 +41,16 @@ describe('CheckoutPage', () => {
   it('renders the per-restaurant breakdown and total from the server preview', async () => {
     const m = mockApi(baseRoutes());
     render();
+    expect(await screen.findByRole('heading', { level: 1, name: /two kitchens, one payment/i }, { timeout: 5000 })).toBeInTheDocument();
     const spice = await screen.findByRole('region', { name: /spice route/i }, { timeout: 5000 });
-    expect(within(spice).getByText(/delivered separately/i)).toBeInTheDocument();
-    expect(within(spice).getByText(/^items$/i).parentElement).toHaveTextContent('₹480');
-    expect(within(spice).getByText(/delivery fee/i).parentElement).toHaveTextContent('₹30');
-    expect(within(spice).getByText(/restaurant total/i).parentElement).toHaveTextContent('₹565.30');
-    expect(within(spice).getByText(/demo estimate/i)).toBeInTheDocument();
-    const dosa = screen.getByRole('region', { name: /dosa corner/i });
-    expect(within(dosa).getByText(/restaurant total/i).parentElement).toHaveTextContent('₹247.10');
+    expect(spice).toHaveTextContent(/delivery 1 · ~32 min est\. \(demo\)/i);
+    expect(spice).toHaveTextContent('2 × Paneer Tikka');
+    const bill = screen.getByRole('complementary', { name: /bill, per restaurant/i });
+    expect(bill).toHaveTextContent('2 deliveries');
+    expect(within(bill).getByRole('button', { name: /spice route/i })).toHaveTextContent('₹565.30');
+    expect(within(bill).getByRole('button', { name: /dosa corner/i })).toHaveTextContent('₹247.10');
+    expect(within(bill).getByText(/^items$/i).parentElement).toHaveTextContent('₹480.00');
+    expect(within(bill).getByText(/delivery fee/i).parentElement).toHaveTextContent('₹30.00');
     expect(screen.getByRole('button', { name: /pay ₹812\.40/i })).toBeEnabled();
     // preview was asked for the selected (default) saved address
     expect(m.callsTo('POST', '/cart/preview')[0]!.body).toMatchObject({ address: { line1: '12 MG Road', location: { lat: 12.97, lng: 77.59 } }, useMembership: false });
@@ -99,7 +102,7 @@ describe('CheckoutPage', () => {
     expect(dialog).toHaveTextContent('₹812.40');
     expect(dialog).toHaveTextContent('₹832.40');
     expect(within(dialog).getByText(/dosa corner/i)).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole('button', { name: /pay ₹832\.40/i }));
+    await userEvent.click(within(dialog).getByRole('button', { name: /confirm · pay ₹832\.40/i }));
     await waitFor(() => expect(m.callsTo('POST', '/checkouts')).toHaveLength(2));
     const [first, second] = m.callsTo('POST', '/checkouts');
     expect(second!.body).toMatchObject({ expectedTotalPaise: 83240 });
@@ -111,7 +114,7 @@ describe('CheckoutPage', () => {
     mockApi(baseRoutes({ 'POST /cart/preview': p }));
     render();
     expect(await screen.findByText(/masala dosa is no longer available/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /fix in cart/i })).toHaveAttribute('href', '/cart');
+    expect(screen.getByRole('link', { name: /fix cart/i })).toHaveAttribute('href', '/restaurants/aaaaaaaaaaaaaaaaaaaaaaa2');
     expect(screen.getByRole('button', { name: /pay ₹812\.40/i })).toBeDisabled();
   });
 });

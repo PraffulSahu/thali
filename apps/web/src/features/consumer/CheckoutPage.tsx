@@ -31,6 +31,7 @@ import {
 } from '../../components/ui';
 import { RequireAuth } from '../../components/layout/RequireRole';
 import { newIdempotencyKey } from '../../hooks/useIdempotencyKey';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { useAuth } from '../../lib/auth';
 import { errorMessage, isApiError } from '../../lib/errors';
 import { formatINR, plural } from '../../lib/format';
@@ -139,6 +140,7 @@ function CheckoutContent() {
   const coupons = useQuery({ queryKey: couponsKey(isAuthenticated), queryFn: fetchCoupons, retry: false, staleTime: 60_000 });
   const membership = useQuery({ queryKey: MEMBERSHIP_KEY, queryFn: fetchMyMemberships, retry: false });
   const { launch, opening, error: launchError } = usePaymentLauncher();
+  const compact = useMediaQuery('(max-width: 1023px)', false);
 
   const [addressId, setAddressId] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -530,10 +532,12 @@ function CheckoutContent() {
               groups={p.children.map((c) => ({ id: c.restaurantId, name: c.restaurantName, totalPaise: c.breakdown.totalPaise, rows: billRows(c.breakdown) }))}
               totalPaise={p.pricing.totalPaise}
               action={
-                <div className="flex flex-col gap-2.5 max-lg:hidden">
-                  {payErrors}
-                  {payButton}
-                </div>
+                compact ? undefined : (
+                  <div className="flex flex-col gap-2.5">
+                    {payErrors}
+                    {payButton}
+                  </div>
+                )
               }
               footnote="Totals come from Thali’s server. If a price changes before you pay, we’ll show old vs new and ask you to confirm."
             />
@@ -545,18 +549,20 @@ function CheckoutContent() {
               {!address && addresses.data ? <p className="text-sm text-fg-3">Choose a delivery address to see the total.</p> : null}
             </div>
           )}
-          <div className="mt-3 flex flex-col gap-2.5 lg:hidden">{payErrors}</div>
+          {compact ? <div className="mt-3 flex flex-col gap-2.5">{payErrors}</div> : null}
         </div>
       </div>
 
       {/* ≤1023 sticky pay bar (design-spec §6.4) */}
-      <div className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-line bg-card px-4 pb-[max(12px,env(safe-area-inset-bottom))] pt-3 lg:hidden">
+      {compact ? (
+      <div className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-line bg-card px-4 pb-[max(12px,env(safe-area-inset-bottom))] pt-3">
         <span className="flex flex-col">
           <span className="text-xs text-fg-3">To pay{kitchens > 1 ? ` · ${plural(kitchens, 'delivery', 'deliveries')}` : ''}</span>
           <span className="text-xl font-semibold tabular-nums">{total !== undefined ? formatINR(total) : '—'}</span>
         </span>
         <div className="flex-1">{payButton}</div>
       </div>
+      ) : null}
 
       <Dialog open={adding} onClose={() => setAdding(false)} title="Add a delivery address" size="lg">
         {adding ? (

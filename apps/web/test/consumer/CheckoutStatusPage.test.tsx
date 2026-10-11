@@ -1,4 +1,5 @@
 import '../setup';
+import './slow';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -35,10 +36,10 @@ describe('CheckoutStatusPage', () => {
       },
     });
     render();
-    expect(await screen.findByText(/confirming payment/i)).toBeInTheDocument();
+    expect(await screen.findByText(/confirming your payment/i)).toBeInTheDocument();
     expect(screen.queryByText(/order placed/i)).not.toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: /order placed/i }, { timeout: 6000 })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /track your order/i })).toHaveAttribute('href', '/orders/ck1');
+    expect(screen.getByRole('link', { name: /track order/i })).toHaveAttribute('href', '/orders/ck1');
     expect(n).toBeGreaterThanOrEqual(2);
   }, 10_000);
 
@@ -46,7 +47,7 @@ describe('CheckoutStatusPage', () => {
     mockApi({ 'GET /checkouts/ck1': { checkout: awaiting({ paymentStatus: 'FAILED' }), payment } });
     const { router } = render();
     expect(await screen.findByText(/payment failed — try again/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /try again/i }));
+    await userEvent.click(screen.getByRole('button', { name: /try payment again/i }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/demo-pay/pi1'));
     expect(router.state.location.search).toContain(encodeURIComponent('/checkout/status/ck1'));
   });
@@ -54,7 +55,8 @@ describe('CheckoutStatusPage', () => {
   it('EXPIRED is terminal: cart is kept, no pay button', async () => {
     mockApi({ 'GET /checkouts/ck1': { checkout: awaiting({ status: 'EXPIRED' }), payment } });
     render();
-    expect(await screen.findByRole('heading', { name: /this checkout expired — your cart is still saved/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /this checkout expired/i })).toBeInTheDocument();
+    expect(screen.getByText(/your cart is still saved/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /back to cart/i })).toHaveAttribute('href', '/cart');
     expect(screen.queryByRole('button', { name: /pay|try again/i })).not.toBeInTheDocument();
   });
