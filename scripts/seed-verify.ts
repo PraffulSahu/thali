@@ -14,11 +14,7 @@
  *   npx tsx scripts/seed-verify.ts --uri <mongo-uri> [--db-prefix thali_]   # any reachable Mongo (e.g. infra / tests)
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+import { ROOT, mergedEnv } from './lib/dotenv.js';
 
 interface Db {
   collection(name: string): {
@@ -133,20 +129,6 @@ async function verify(db: (name: string) => Db, prefix: string): Promise<Report>
 }
 
 // ------------------------------------------------------------------------------------------- cli --
-function readDotEnv(file: string): Record<string, string> {
-  if (!existsSync(file)) return {};
-  const env: Record<string, string> = {};
-  for (const raw of readFileSync(file, 'utf8').split('\n')) {
-    const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(raw.trim());
-    if (!m) continue;
-    let v = m[2]!.trim();
-    if (/^(["']).*\1$/.test(v)) v = v.slice(1, -1);
-    else v = v.replace(/\s+#.*$/, '');
-    env[m[1]!] = v;
-  }
-  return env;
-}
-
 function print(r: Report): boolean {
   process.stdout.write('=== collection counts\n');
   for (const [svc, cols] of Object.entries(r.counts)) {
@@ -176,7 +158,7 @@ async function main() {
     }
   }
   // docker stack: run the same function inside the orders container (Mongo is not published to the host)
-  const env = { ...readDotEnv(resolve(ROOT, '.env')), ...process.env } as Record<string, string | undefined>;
+  const env = mergedEnv();
   const user = env.MONGO_ROOT_USERNAME || 'root';
   const pass = env.MONGO_ROOT_PASSWORD;
   if (!pass) throw new Error('MONGO_ROOT_PASSWORD is not set (.env)');
@@ -189,7 +171,13 @@ const client = await new mongoose.mongo.MongoClient(process.env.VERIFY_URI).conn
 try { process.stdout.write(JSON.stringify(await verify((n) => client.db(n), ${JSON.stringify(prefix)}))); } finally { await client.close(); }
 `;
   const out = await new Promise<string>((done, fail) => {
-    const child = spawn('docker', ['compose', 'exec', '-T', '-e', `VERIFY_URI=${uri}`, 'orders', 'node', '--input-type=module', '-'], { cwd: ROOT, stdio: ['pipe', 'pipe', 'inherit'] });
+    // `-e VERIFY_URI` without a value: docker takes it from this process's environment, so the root
+    // password never appears on a command line (process list)
+    const child = spawn('docker', ['compose', 'exec', '-T', '-e', 'VERIFY_URI', 'orders', 'node', '--input-type=module', '-'], {
+      cwd: ROOT,
+      env: { ...process.env, VERIFY_URI: uri },
+      stdio: ['pipe', 'pipe', 'inherit'],
+    });
     let buf = '';
     child.stdout.on('data', (b: Buffer) => (buf += b.toString()));
     child.on('error', fail);

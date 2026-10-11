@@ -19,12 +19,11 @@
  * passed as SEED_DATA_DIR / SEED_IMAGE_MANIFEST (the images do not ship the data).
  */
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { ROOT, assertDemoMode, mergedEnv, readDotEnv } from './lib/dotenv.js';
 import { MANIFEST_PATH, mirrorSeedImages } from './seed-images.js';
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // The gateway owns no database and has no seed: it is deliberately not in this list (its package.json `seed`
 // script points at a file that does not exist; never call it).
 const ORDER = ['identity', 'marketplace', 'delivery', 'payments', 'notifications', 'orders'] as const;
@@ -56,23 +55,6 @@ function run(cmd: string, args: string[], env?: NodeJS.ProcessEnv): Promise<{ co
     });
     child.on('close', (code) => done({ code: code ?? 1, out }));
   });
-}
-
-/** Minimal .env reader for --local (KEY=VALUE, optional quotes, `#` comments). */
-function readDotEnv(file: string): Record<string, string> {
-  if (!existsSync(file)) return {};
-  const env: Record<string, string> = {};
-  for (const raw of readFileSync(file, 'utf8').split('\n')) {
-    const line = raw.trim();
-    if (!line || line.startsWith('#')) continue;
-    const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
-    if (!m) continue;
-    let v = m[2]!.trim();
-    if (/^(["']).*\1$/.test(v)) v = v.slice(1, -1);
-    else v = v.replace(/\s+#.*$/, '');
-    env[m[1]!] = v;
-  }
-  return env;
 }
 
 function parseResult(out: string): { inserted: number; existing: number } | null {
@@ -123,8 +105,10 @@ async function main() {
   const wanted = args.filter((a) => !a.startsWith('--'));
   for (const w of wanted) if (!(ORDER as readonly string[]).includes(w)) throw new Error(`unknown service "${w}" (known: ${ORDER.join(', ')})`);
   const services = ORDER.filter((s) => !wanted.length || wanted.includes(s));
-  const dotenv = local ? readDotEnv(resolve(ROOT, '.env')) : {};
-  if (local && (dotenv.APP_MODE ?? process.env.APP_MODE) !== 'demo') throw new Error('Refusing to seed: APP_MODE must be demo');
+  const dotenv = local ? readDotEnv() : {};
+  // both modes, before anything is written (the photo mirror runs before any service guard):
+  // docker compose interpolates the same .env + environment into the containers' APP_MODE
+  assertDemoMode(mergedEnv());
   const tStart = Date.now();
   const blr = !args.includes('--no-blr') && process.env.SEED_BLR !== '0';
   // one anchor for every service so the generated timestamps line up (whole minutes)
@@ -135,7 +119,10 @@ async function main() {
   if (blr && !args.includes('--no-images')) {
     process.stdout.write('\n=== seed images (photo mirror into MinIO)\n');
     const t = Date.now();
-    await mirrorSeedImages().catch((e: unknown) => process.stdout.write(`  image mirror failed (${(e as Error).message}); photos stay absolute URLs\n`));
+    await mirrorSeedImages().catch((e: unknown) => {
+      if (/^Refusing/.test((e as Error).message)) throw e;
+      process.stdout.write(`  image mirror failed (${(e as Error).message}); photos stay absolute URLs\n`);
+    });
     process.stdout.write(`  (${((Date.now() - t) / 1000).toFixed(1)} s)\n`);
   }
 

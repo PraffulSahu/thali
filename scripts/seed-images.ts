@@ -18,6 +18,7 @@
  * identity seeds reference those keys and fall back to the absolute (EXTERNAL_IMAGE_HOSTS-allowlisted) URL for
  * the rest, so after one successful mirror the app shows every photo without internet access.
  * Never fails the seed: an unreachable MinIO just yields an empty manifest (every photo stays an absolute URL).
+ * Refuses unless APP_MODE=demo (`.env` merged under the environment), like every seed.
  *
  * Env (else `.env`): MINIO_ROOT_USER / MINIO_ROOT_PASSWORD, MINIO_HOST_PORT (9000), S3_PUBLIC_BUCKET (thali-public),
  * SEED_IMAGES_S3_ENDPOINT (default http://localhost:<MINIO_HOST_PORT>).
@@ -26,8 +27,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+import { ROOT, assertDemoMode, mergedEnv } from './lib/dotenv.js';
 const DATA = resolve(ROOT, 'scripts/seed-data');
 const CACHE = resolve(ROOT, '.cache/seed-images');
 export const MANIFEST_PATH = resolve(CACHE, 'manifest.json');
@@ -37,20 +37,6 @@ interface ImageRow { id: string; kind: string; url: string; thumbUrl?: string }
 interface AvatarRow { id: string; gender: 'male' | 'female'; url: string; thumbUrl?: string }
 interface Job { id: string; group: 'pool' | 'avatars'; file: string; key: string; urls: string[] }
 export interface ImageManifest { version: 1; bucket: string; generatedAt: string; pool: Record<string, string>; avatars: Record<string, string>; failed: string[] }
-
-function readDotEnv(file: string): Record<string, string> {
-  if (!existsSync(file)) return {};
-  const env: Record<string, string> = {};
-  for (const raw of readFileSync(file, 'utf8').split('\n')) {
-    const m = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(raw.trim());
-    if (!m) continue;
-    let v = m[2]!.trim();
-    if (/^(["']).*\1$/.test(v)) v = v.slice(1, -1);
-    else v = v.replace(/\s+#.*$/, '');
-    env[m[1]!] = v;
-  }
-  return env;
-}
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -132,7 +118,8 @@ async function pool<T>(items: readonly T[], concurrency: number, fn: (item: T, i
 export async function mirrorSeedImages(opts: { upload?: boolean; offline?: boolean; concurrency?: number; log?: (s: string) => void } = {}): Promise<ImageManifest> {
   const log = opts.log ?? ((s: string) => process.stdout.write(s));
   const concurrency = Math.max(1, Math.min(6, opts.concurrency ?? 6));
-  const env = { ...readDotEnv(resolve(ROOT, '.env')), ...process.env } as Record<string, string | undefined>;
+  const env = mergedEnv();
+  assertDemoMode(env, 'mirror demo photos'); // writes the public bucket with the MinIO root credentials
   const bucket = env.S3_PUBLIC_BUCKET || 'thali-public';
   const images = JSON.parse(readFileSync(resolve(DATA, 'images.json'), 'utf8')) as ImageRow[];
   const avatars = JSON.parse(readFileSync(resolve(DATA, 'avatars.json'), 'utf8')) as AvatarRow[];
@@ -212,7 +199,9 @@ export async function mirrorSeedImages(opts: { upload?: boolean; offline?: boole
     } else manifest.failed.push(...jobs.map((j) => j.id));
     log(`[seed:images] bucket ${bucket}: ${uploaded} uploaded, ${present} already present, ${manifest.failed.length} not mirrored\n`);
   } else {
-    manifest.failed.push(...jobs.map((j) => j.id));
+    // download-only: the bucket was not checked, so keep the last manifest as it is
+    log(`[seed:images] --no-upload: cache filled, manifest left unchanged (${Math.round((Date.now() - t0) / 1000)} s)\n`);
+    return existsSync(MANIFEST_PATH) ? (JSON.parse(readFileSync(MANIFEST_PATH, 'utf8')) as ImageManifest) : { ...manifest, failed: jobs.map((j) => j.id) };
   }
   manifest.failed.sort();
   mkdirSync(CACHE, { recursive: true });
@@ -230,6 +219,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     ...(ci >= 0 ? { concurrency: Number(args[ci + 1]) } : {}),
   }).catch((e: unknown) => {
     process.stderr.write(`[seed:images] ${(e as Error).message}\n`);
-    process.exit(0); // never block the seed on images
+    process.exit(/^Refusing/.test((e as Error).message) ? 1 : 0); // never block the seed on images, but do refuse non-demo stacks
   });
 }
