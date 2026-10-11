@@ -27,6 +27,11 @@ Contents: [1 Rules](#1-rules) · [2 Theme](#2-theme) · [3 Tokens & utilities](#
   get a label (`SimulatedTag`, `DemoPill`), "Paid" only with a UTR.
 - Import components from the barrel: `import { Button, StatusPill, KpiTile } from '../../components/ui';`
   (Leaflet `MapView` stays a separate import from `components/ui/Map`).
+- `cn()` (`lib/cn`) merges Tailwind classes with **tailwind-merge** configured for our tokens: the later class wins
+  (`cn('border-line', 'border-acc')` → `border-acc`, `shadow-pri` + `shadow-none` → `shadow-none`, `rounded-pill` +
+  `rounded-control` → `rounded-control`, `min-h-10` + `min-h-touch`), while size and colour never conflict
+  (`text-sm text-pri-fg`). So override component defaults through `className` — no `!` needed. Custom `@utility`
+  classes (`lbl`, `eyebrow`, `glass`…) are not merged; override their properties with `!` as before.
 
 ## 2. Theme
 
@@ -67,6 +72,7 @@ All defined in `src/styles.css`.
 | Motion | `animate-rise` `animate-pop` `animate-fade` `animate-open` `animate-swap` `animate-arrive` `animate-slidein` `animate-in` `animate-urgent` `animate-grow` `animate-blink` `animate-pulse-live` `animate-pulse-ok` `animate-dock` `animate-tray` `animate-bump` `animate-bob` `animate-split` `animate-dash` (reduced-motion disables all) |
 | Containers | `max-w-[1240px]` public · `[1360px]` discover · `[1200px]` page · `[1160px]` checkout |
 | Focus | global `:focus-visible` 2px `--acc` ring; on chili/ink surfaces wrap with `.on-color` (3px turmeric ring) |
+| Variant `rail:` | inside the RoleSidebarShell aside while it is the 72px tablet rail (640–1023) — for context-slot blocks |
 | Palette (art/charts only) | `chili-*`, `turmeric-*`, `leaf-*`, `clove-*`, `sky-*`, `red-*`, `ink-*`, `ember-*` |
 
 ## 4. Typography
@@ -113,11 +119,16 @@ export const routes: RouteObject[] = [
 | Prop / `shell` slot | Use |
 |---|---|
 | `role` | `'restaurant' \| 'partner' \| 'admin'` (tag, widths, labels) |
-| `nav: NavItem[]` | `{ to, label, icon, end?, Badge?, section?, primary? }` — `section` prints admin section labels; `primary` picks phone tab-bar items (default first 4 + "More") |
-| `Context` | sidebar context block: `<SidebarSwitcher name area onClick>` / `<SidebarProfileCard name detail avatarUrl>` / `<SidebarSearchButton onClick>` |
+| `nav: NavItem[]` | `{ to, label, shortLabel?, icon, end?, Badge?, section?, primary? }` — `section` prints admin section labels; `shortLabel` is used in the phone tab bar |
+| `tabs` | phone tab bar, ordered `RoleTab[]` `{ to, label?, icon?, end?, Badge? }` (icon/Badge/end come from the nav item with the same path). Defaults `ROLE_TABS` (spec §6.5): restaurant **Live orders · Dashboard · Menu · Finance**; partner **Home · History · Earnings · Profile**; admin **Overview · Orders · Deliveries · Approvals** (`/admin/restaurants?status=APPROVAL_PENDING`). "More" appears when nav items are left over. `tabs: false` = legacy `primary` / first-4 rule |
+| `roleTag` | text or component for the tag next to the logo (default KITCHEN / PARTNER; admin = the session sub-role SUPER · OPS · FINANCE · SUPPORT) |
+| `Context` | sidebar context block: `<SidebarSwitcher name area menu={(close) => …}>` / `<SidebarProfileCard name detail avatarUrl>` / `<SidebarSearchButton onClick>` |
+| `railContext` | `true` = also show `Context` in the 72px tablet rail; the three blocks above collapse there (switcher → initials tile whose menu opens to the right, search → icon, profile → avatar). Leave false for custom blocks that don't use `rail:` |
 | `MobileContext` | compact context in the ≤640 top bar (restaurant name, online pill…) |
-| `Footer` | replaces the user block (partner: status chip). Theme toggle + account menu are added for you |
-| `userSubtitle` | under the name ("Owner"; admin defaults to "Ops admin · MFA on") |
+| `Footer` | replaces the user block (partner: status chip); a "⋯" account-menu button + theme toggle are added. Without `Footer` the user block (avatar · name · subtitle) **is** the account-menu trigger |
+| `userSubtitle` | under the name ("Owner"; admin defaults to "<Sub-role> admin · MFA on" from the session) |
+| `signOutAll` | account menu gets "Sign out of all devices" (confirm → `/auth/logout-all` → area sign-in) |
+| `AccountExtras` | `({ close }) => <AccountMenuItem icon to|onClick>…</AccountMenuItem>` extra menu rows above Sign out |
 | `wide` | full-bleed main |
 
 Nav badges (`NavItem.Badge`, a component so it can use hooks):
@@ -125,7 +136,12 @@ Nav badges (`NavItem.Badge`, a component so it can use hooks):
 `<NavDot tone="bad"|"warn" label="services down" />` (health).
 
 Layout: ≥1024 sidebar 232px (admin 224, dense rows) · 641–1023 72px icon rail · ≤640 56px top bar + bottom tab
-bar + "More" sheet. On ≥641 the main column scrolls (it resets to top on navigation).
+bar + "More" sheet. On ≥641 the main column scrolls (it resets to top on navigation). The aside is not a scroll
+container (the nav scrolls inside it), so popovers and the account menu can overflow onto the page.
+
+`SidebarSwitcher` spreads extra props onto its `<button>` (`aria-label`, `onClick`, `data-*`), takes `dot` (accent
+dot on the tile) and, with `menu` + `menuLabel`, owns an anchored `Popover` (dialog) — the restaurant switcher is
+built this way.
 
 ### `ConsumerShell` — boards 10/11/13
 
@@ -141,9 +157,12 @@ export const shell: ConsumerShellConfig = {
 ```
 
 Props: `variant` (`discover` | `account`; default from `accountRoutes`), `breadcrumb` (restaurant page),
-`hideSearch`, `searchPlaceholder`, `container` (`discover` 1360 · `page` 1200 · `checkout` 1160 · `none`),
-`tabs` (≤640 tab bar; default Home · Search · Orders · Account). Search has the `/` shortcut and submits to
-`/search?q=`. If you only export the legacy `HeaderActions`, it is rendered in the right cluster (no default chip).
+`hideSearch`, `searchPlaceholder`, `container` (`discover` 1360 · `page` 1200 · `checkout` 1160 · `none` = no max width
+· `bleed` = no wrapper at all, pages own widths/padding), `tabs` (≤640 tab bar; default Home · Search · Orders ·
+Account), `accountLinks` (account-menu links after Profile · Your orders, e.g. Addresses · Thali Plus · Support ·
+Notifications). Pages set the breadcrumb from inside the shell:
+`useShellBreadcrumb(<Breadcrumb items={[{ label: 'Restaurants', to: '/' }, { label: name }]} />, [name])`.
+Search has the `/` shortcut and submits to `/search?q=`. If you only export the legacy `HeaderActions`, it is rendered in the right cluster (no default chip).
 The cart dock is page content: render `<CartDock>` at the end of the page.
 
 ### `CheckoutShell` — board 12
@@ -158,14 +177,17 @@ Used by the landing, static and marketing pages (mounted by `routes.tsx`). Expor
 
 ### Shell parts (`components/layout/ShellParts`)
 
-`AccountMenu` (`area`, `trigger: 'avatar' | 'more'`, `placement`), `HeaderSearch` (`density`, `onSearch`,
-`hotkey`), `NotificationBell` (`unread`, `to`), `SkipLink`, `MainRegion`, `signInHref(area, next)`,
-`useDisplayName()`. `ModeBanner` / `DemoBanner` (strip) and `DemoPill` live in `layout/ModeBanner`.
+`AccountMenu` (`area`, `trigger: 'avatar' | 'more' | 'user'`, `subtitle`, `placement`, `links`, `extra`,
+`signOutAll`, `themeOption`) — consumer order is Profile · Your orders · your `links` · other areas, plus a "Dark
+mode / Light mode" row on phones (`themeOption: 'phone'`, consumer default) · `AccountMenuItem` · `HeaderSearch`
+(`density`, `onSearch`, `hotkey`) · `NotificationBell` (`unread`: boolean or a count → "Notifications, 3 unread") ·
+`Breadcrumb` (`items`) + `useShellBreadcrumb` · `SkipLink`, `MainRegion`, `signInHref(area, next)`, `useDisplayName()`. `ModeBanner` / `DemoBanner` (strip) and `DemoPill` live in `layout/ModeBanner`.
 `Logo` (`size: public | app | sidebar | footer`, `markOnly`, `subtitle` = screen-reader name).
 
 ## 6. Components
 
 All from `components/ui` (barrel). Examples are minimal; each file header has more.
+Icons: `<Icon name=… label? size? />` (inline set, `iconNames` lists them; includes `bell-off` for "Chime off").
 
 ### Actions & inputs
 
@@ -179,7 +201,10 @@ All from `components/ui` (barrel). Examples are minimal; each file header has mo
 | `Checkbox`, `Switch` | labelled rows (44px); `Switch` = settings row with 44×26 track |
 | `Toggle` | bare switch: `<Toggle size="md|lg" checked onChange label pending />` |
 | `RadioGroup` | `variant="plain|cards"` |
-| `OptionCard` | `<OptionCard type="radio|checkbox" label aside="+₹30" checked onChange disabled />` |
+| `OptionCard` | `<OptionCard type="radio|checkbox" label aside="+₹30" checked onChange disabled disabledReason="Max 2" />` (default suffix " · Unavailable"; `null` = none) |
+| `Popover` | `<Popover label="Pause new orders" panelClassName="w-[320px] p-3" placement="down|up|right" align="end|start" trigger={(p) => <Button {...p}>Pause</Button>}>{(close) => …}</Popover>` — focus moves into the panel, Esc returns it to the trigger, outside click / Tab-out closes; `panelClassName` merges over `min-w-56 p-2` |
+| `PillSelect` | 30px outline pill over a native select: `<PillSelect label="Status" prefix="Status:" value options onChange />` |
+| `FilterPills` | single-select pill row with counts: `<FilterPills label="Status" value onChange options={[{ value, label, count }]} />` |
 | `SegmentedTabs` | `<SegmentedTabs label options value onChange semantics="pressed|tabs|radio" size="md|sm" fullWidth idPrefix />` |
 | `Tabs` | WAI-ARIA tabs with panels; `variant="underline|segmented"` |
 | `FilterPill`, `PriceChips`, `ChoicePills` | `<FilterPill pressed veg>Veg only</FilterPill>` · `<PriceChips value={[2]} onChange />` · `<ChoicePills label="Prep time" columns={4} options value onChange />` |
@@ -202,7 +227,8 @@ All from `components/ui` (barrel). Examples are minimal; each file header has mo
 | `CodeDigits` | `<CodeDigits code="4719" label="Delivery code" size="md|lg" />` |
 | `Stepper` | `<Stepper label steps={ORDER_STEPS|PARTNER_STEPS|REFUND_STEPS or {label,time}[]} current tone="order|refund" terminal={{label,tone}} />`; `StepNumber` |
 | `ProgressBar` | `<ProgressBar value max label left right overdue tone />` |
-| `KpiTile`, `KpiStrip` | `<KpiTile label value secondary sub subTone highlight loading unavailable onRetry />`; wrap in `<KpiStrip>` for the admin strip |
+| `KpiTile`, `KpiStrip` | `<KpiTile label value secondary sub subTone highlight loading unavailable onRetry />` (`highlight` = acc-soft fill, works standalone and in the strip); wrap in `<KpiStrip>` for the admin strip |
+| `HistoryTimeline` | vertical status history: `<HistoryTimeline items={[{ title, at, detail }]} label="Status history" />` (newest first) |
 | `StackedStatusBar` | `<StackedStatusBar title segments={[{key,label,count,tone,hideWhenZero}]} />` |
 | `Price` | `<Price paise size="sm|md|lg|xl|total" tone="default|muted|ok|info|acc|bad" was freeLabel />` |
 | `DataTable` | unchanged API; restyled (mono headers, row hover, cards ≤768) |
@@ -215,8 +241,9 @@ All from `components/ui` (barrel). Examples are minimal; each file header has mo
 | `Card`, `CardHeader`, `CardSection` | `interactive` hover lift; `tone`; `padding` |
 | `SectionCard`, `SectionRow` | `<SectionCard title="Needs attention" count={3} meta="checked 14s ago" actions>…<SectionRow>…</SectionRow></SectionCard>` |
 | `RestaurantCard` | `<RestaurantCard to id name imageUrl cuisines priceBand rating etaMin distanceKm deliveryFeePaise open stateLabel pureVeg offer variant="app|marketing" index />` |
-| `CuisineCircle`, `CuisineTrain` | `<CuisineTrain label header={<h2>…</h2>} controls>{circles}</CuisineTrain>` · `<CuisineCircle slug label imageUrl selected onClick|to variant="app|marketing|small" />` |
-| `CartDock`, `CartTray`, `CartSlot` | presentational multi-cart bar (see file header for the full wiring example) |
+| `CuisineCircle`, `CuisineTrain` | `<CuisineTrain label header={<h2>…</h2>} controls>{circles}</CuisineTrain>` (prev/next disabled at the ends, "Scroll <label> left/right") · `<CuisineCircle slug label imageUrl selected onClick|to variant="app|marketing|small" />` |
+| `CartDock`, `CartTray`, `CartSlot` | presentational multi-cart bar (see file header for the full wiring example); `onChipClick(id)` makes the per-cart chips buttons |
+| `DetailColumns` | detail-page layout: `<DetailColumns main={…} aside={…} />` (main 560+ · aside 320–380, wraps) |
 | `BillBreakdown`, `BillRow` | `<BillBreakdown groups={[{id,name,totalPaise,rows:[{label,paise,discount}]}]} totalPaise action footnote />` |
 | `AddressCard`, `AddAddressCard` | radio cards: `<AddressCard name label address isDefault checked onSelect disabledReason actions />` |
 | `KanbanColumn`, `KanbanEmpty` | `<KanbanColumn title count live="assertive" empty={{title, sub}}>{cards}</KanbanColumn>` |
@@ -274,4 +301,6 @@ Landing cuisine circles link to `/?cuisine=<slug>` (consumer discover reads it).
 - `ModeBanner` / `DemoPill` fetch `/meta`; route your fetch mock by URL and create a new `Response` per call.
 - The theme store is module-level: call `__resetThemeForTests()` between tests that change it.
 - Foundation tests live in `test/foundation/` (theme, components, countdown/code entry, landing flow, sign-in
-  routing + page, shells).
+  routing + page, shells, `cn` merge rules, polish: Popover / shell slots / tab bars).
+- Phone tab bar: `screen.getAllByRole('navigation', { name: 'Restaurant' }).at(-1)` is the bottom bar (sidebar and
+  rail navs come first in the DOM).
