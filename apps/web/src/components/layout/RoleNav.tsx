@@ -9,9 +9,10 @@
  *   ];
  *
  * Variants: 'sidebar' (design-spec §3.27: 38px rows, current = card + hairline ring, section labels from
- * `section`), 'rail' (72px icon rail, tablets), 'bottom' (phone tab bar: `primary` items, else the first 4,
- * + "More"), 'inline' (consumer account ghost nav), 'drawer' (inside a Sheet). Active item gets
- * aria-current="page".
+ * `section`), 'rail' (72px icon rail, tablets), 'bottom' (phone tab bar: the explicit ordered `tabs` — each role
+ * shell has a default — else `primary` items, else the first 4; + "More" when nav items are left over),
+ * 'inline' (consumer account ghost nav), 'drawer' (inside a Sheet). Active item gets aria-current="page".
+ * Tab labels: `tab.label` ?? `item.shortLabel` ?? `item.label` ("Earnings & payouts" → "Earnings").
  */
 import type { ComponentType } from 'react';
 import { NavLink } from 'react-router';
@@ -29,8 +30,23 @@ export interface NavItem {
   Badge?: ComponentType;
   /** Section label shown above this item when it changes (admin: "Marketplace", "Operations", "System"). */
   section?: string;
-  /** Show in the phone bottom tab bar (default: the first 4 items). */
+  /** Show in the phone bottom tab bar when the shell has no explicit `tabs` (default: the first 4 items). */
   primary?: boolean;
+  /** Short label for the phone tab bar ("History" for "Delivery history"). */
+  shortLabel?: string;
+}
+
+/**
+ * One phone tab-bar destination (ordered). Icon / Badge / end come from the nav item with the same path unless
+ * given; a tab whose path is not in the nav needs its own `icon` (else it is dropped).
+ *   { to: '/admin/restaurants?status=APPROVAL_PENDING', label: 'Approvals', icon: 'check-circle' }
+ */
+export interface RoleTab {
+  to: string;
+  label?: string;
+  icon?: IconName;
+  end?: boolean;
+  Badge?: ComponentType;
 }
 
 export type RoleNavVariant = 'sidebar' | 'rail' | 'bottom' | 'inline' | 'drawer';
@@ -44,19 +60,39 @@ export interface RoleNavProps {
   dense?: boolean;
   /** Bottom bar: extra "More" button (opens the drawer). */
   onMore?: () => void;
+  /** Bottom bar: explicit ordered destinations (see RoleTab). */
+  tabs?: RoleTab[];
 }
 
-export function bottomNavItems(items: NavItem[]): NavItem[] {
+const pathOf = (to: string) => to.split(/[?#]/)[0]!;
+
+/** Phone tab-bar items: explicit `tabs` (resolved against the nav), else `primary` items, else the first 4–5. */
+export function bottomNavItems(items: NavItem[], tabs?: RoleTab[]): NavItem[] {
+  if (tabs?.length) {
+    const resolved = tabs.flatMap((t): NavItem[] => {
+      const item = items.find((i) => i.to === t.to) ?? items.find((i) => pathOf(i.to) === pathOf(t.to));
+      const icon = t.icon ?? item?.icon;
+      if (!icon) return [];
+      return [{ to: t.to, label: t.label ?? item?.shortLabel ?? item?.label ?? t.to, icon, end: t.end ?? item?.end, Badge: t.Badge ?? item?.Badge }];
+    });
+    if (resolved.length) return resolved.slice(0, 5);
+  }
   const primary = items.filter((i) => i.primary);
-  return (primary.length ? primary : items).slice(0, items.length > 5 ? 4 : 5);
+  return (primary.length ? primary : items).slice(0, items.length > 5 ? 4 : 5).map((i) => (i.shortLabel ? { ...i, label: i.shortLabel } : i));
 }
 
-export function RoleNav({ items, variant, label, onNavigate, dense, onMore }: RoleNavProps) {
+/** Nav items the tab bar doesn't show (they go behind "More"). */
+export function overflowNavItems(items: NavItem[], shown: NavItem[]): NavItem[] {
+  const paths = new Set(shown.map((s) => pathOf(s.to)));
+  return items.filter((i) => !paths.has(pathOf(i.to)));
+}
+
+export function RoleNav({ items, variant, label, onNavigate, dense, onMore, tabs }: RoleNavProps) {
   if (items.length === 0) return null;
 
   if (variant === 'bottom') {
-    const shown = bottomNavItems(items);
-    const more = onMore && items.length > shown.length;
+    const shown = bottomNavItems(items, tabs);
+    const more = onMore && overflowNavItems(items, shown).length > 0;
     const cell =
       'relative flex min-h-14 flex-col items-center justify-center gap-1 px-1 text-[11px] font-medium transition-colors duration-150';
     return (

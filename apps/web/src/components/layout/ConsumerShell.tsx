@@ -17,7 +17,7 @@
  * or explicitly as a layout route: `{ element: <ConsumerShell variant="account" />, children: [...] }`.
  * The cart dock is page content (render <CartDock> at the end of your page; it sits above the tab bar).
  */
-import type { ComponentType, ReactNode } from 'react';
+import { useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { Link, Outlet, useLocation } from 'react-router';
 import { useAuth } from '../../lib/auth';
 import { cn } from '../../lib/cn';
@@ -28,7 +28,7 @@ import { ThemeToggle } from '../ui/ThemeToggle';
 import { Logo } from './Logo';
 import { ModeBanner } from './ModeBanner';
 import { RoleNav, type NavItem } from './RoleNav';
-import { AccountMenu, HeaderSearch, MainRegion, NotificationBell, SkipLink } from './ShellParts';
+import { AccountMenu, HeaderSearch, MainRegion, NotificationBell, ShellSlotContext, SkipLink, type AccountMenuLink } from './ShellParts';
 
 export const CONSUMER_ACCOUNT_NAV: NavItem[] = [
   { to: '/', label: 'Restaurants', icon: 'store', end: true },
@@ -55,16 +55,24 @@ export interface ConsumerShellConfig {
   accountRoutes?: string[];
   /** Tab bar items (≤640). Default CONSUMER_TAB_NAV. */
   tabs?: NavItem[];
+  /** Account-menu links after Profile · Your orders (e.g. Addresses, Thali Plus, Support, Notifications). */
+  accountLinks?: AccountMenuLink[];
 }
 
 export interface ConsumerShellProps extends ConsumerShellConfig {
   variant?: 'discover' | 'account';
-  /** Restaurant page: breadcrumb replaces the search on ≥1024. */
+  /**
+   * Restaurant page: breadcrumb replaces the search on ≥1024. Pages can also set it from inside the shell with
+   * `useShellBreadcrumb(<Breadcrumb items={[{ label: 'Restaurants', to: '/' }, { label: name }]} />, [name])`.
+   */
   breadcrumb?: ReactNode;
   hideSearch?: boolean;
   searchPlaceholder?: string;
-  /** Content max width: discover 1360 · page 1200 (default) · checkout 1160 · none (full bleed). */
-  container?: 'discover' | 'page' | 'checkout' | 'none';
+  /**
+   * Content max width: discover 1360 · page 1200 (default) · checkout 1160 · none (no max width, keeps the page
+   * padding) · bleed (no wrapper at all: pages own widths and padding — cuisine bands, restaurant hero).
+   */
+  container?: 'discover' | 'page' | 'checkout' | 'none' | 'bleed';
   children?: ReactNode;
 }
 
@@ -85,7 +93,7 @@ export function DefaultLocationChip() {
   );
 }
 
-const containers = {
+const containers: Record<'discover' | 'page' | 'checkout' | 'none', string> = {
   discover: 'max-w-[1360px]',
   page: 'max-w-[1200px]',
   checkout: 'max-w-[1160px]',
@@ -103,20 +111,26 @@ export function ConsumerShell({
   Bell,
   accountRoutes = ['/orders', '/account', '/membership', '/support', '/notifications'],
   tabs = CONSUMER_TAB_NAV,
+  accountLinks,
   children,
 }: ConsumerShellProps) {
   const auth = useAuth();
+  const [pageBreadcrumb, setBreadcrumb] = useState<ReactNode>(null);
+  const slots = useMemo(() => ({ setBreadcrumb }), []);
+  const crumb = breadcrumb ?? pageBreadcrumb;
+  const headerWidth = containers[container === 'none' || container === 'bleed' ? 'discover' : container];
   const { pathname } = useLocation();
   const account = variant ? variant === 'account' : accountRoutes.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   const search = hideSearch ? null : <HeaderSearch placeholder={searchPlaceholder} />;
   const searchMobile = hideSearch ? null : <HeaderSearch placeholder={searchPlaceholder} hotkey={false} />;
 
   return (
+    <ShellSlotContext.Provider value={slots}>
     <div className="flex min-h-dvh flex-col page-glow">
       <SkipLink />
       <ModeBanner />
       <header className="sticky top-0 z-30 border-b border-line glass">
-        <div className={cn('mx-auto flex flex-wrap items-center gap-x-4 gap-y-2.5 px-6 py-2.5 max-sm:gap-x-2 max-sm:px-4', containers[container === 'none' ? 'discover' : container])}>
+        <div className={cn('mx-auto flex flex-wrap items-center gap-x-4 gap-y-2.5 px-6 py-2.5 max-sm:gap-x-2 max-sm:px-4', headerWidth)}>
           <Logo />
           {account ? (
             <div className="max-lg:hidden">
@@ -127,8 +141,8 @@ export function ConsumerShell({
               <Location />
             </div>
           )}
-          {breadcrumb ? <div className="min-w-0 flex-1 text-sm text-fg-3 max-lg:hidden">{breadcrumb}</div> : null}
-          {!account && !breadcrumb && search ? <div className="min-w-[240px] flex-1 max-lg:hidden">{search}</div> : null}
+          {crumb ? <div className="min-w-0 flex-1 text-sm text-fg-3 max-lg:hidden">{crumb}</div> : null}
+          {!account && !crumb && search ? <div className="min-w-[240px] flex-1 max-lg:hidden">{search}</div> : null}
           <div className="ml-auto flex items-center gap-1.5">
             {Actions ? <Actions /> : null}
             {auth.isAuthenticated ? (
@@ -138,15 +152,20 @@ export function ConsumerShell({
             ) : null}
             {auth.isAuthenticated ? Bell ? <Bell /> : <NotificationBell /> : null}
             <ThemeToggle className="max-sm:hidden" />
-            <AccountMenu area="consumer" />
+            <AccountMenu area="consumer" links={accountLinks} />
           </div>
-          {!account && !breadcrumb && searchMobile ? <div className="w-full lg:hidden">{searchMobile}</div> : null}
+          {!account && !crumb && searchMobile ? <div className="w-full lg:hidden">{searchMobile}</div> : null}
         </div>
       </header>
       <MainRegion className="pb-10 max-sm:pb-28">
-        <div className={cn('mx-auto w-full px-6 pt-6 max-sm:px-4', containers[container])}>{children ?? <Outlet />}</div>
+        {container === 'bleed' ? (
+          (children ?? <Outlet />)
+        ) : (
+          <div className={cn('mx-auto w-full px-6 pt-6 max-sm:px-4', containers[container as 'discover'])}>{children ?? <Outlet />}</div>
+        )}
       </MainRegion>
       <RoleNav items={tabs} variant="bottom" label="Main" />
     </div>
+    </ShellSlotContext.Provider>
   );
 }

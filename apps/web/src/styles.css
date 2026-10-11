@@ -18,6 +18,15 @@
  */
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+/* `rail:` = inside the RoleSidebarShell aside while it is the 72px tablet icon rail (641–1023). Context-slot
+   building blocks (SidebarSwitcher, SidebarSearchButton, SidebarProfileCard) use it to collapse to a tile. */
+@custom-variant rail {
+  @media (width >= 40rem) and (width < 64rem) {
+    &:where([data-shell-rail] *) {
+      @slot;
+    }
+  }
+}
 
 /* ---------- 1. Runtime semantic tokens ---------- */
 :root,
