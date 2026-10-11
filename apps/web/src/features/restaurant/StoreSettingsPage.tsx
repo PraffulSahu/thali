@@ -132,13 +132,6 @@ function ProfileCard({ r }: { r: OwnerRestaurant }) {
   const [show, setShow] = useState(false);
   const items = useQuery({ queryKey: keys.items(r.id), queryFn: () => menuApi.items(r.id), enabled: pureVeg && !r.pureVeg, staleTime: 60_000 });
 
-  const errors: Record<string, string> = {};
-  if (!name.trim()) errors.name = 'Enter the restaurant name customers see.';
-  else if (name.trim().length > 80) errors.name = 'Use 80 characters or fewer.';
-  if (!description.trim()) errors.description = 'Add a short description of your food.';
-  else if (description.trim().length > 1000) errors.description = 'Use 1000 characters or fewer.';
-  if (!phone.trim() || !tryNormalizePhone(phone)) errors.phone = 'Enter a valid Indian mobile number, e.g. 98765 43210.';
-  if (locality.trim().length > 60) errors.locality = 'Use 60 characters or fewer.';
   const normPhone = tryNormalizePhone(phone) ?? phone.trim();
   const changed = {
     name: name.trim() !== r.name,
@@ -147,6 +140,18 @@ function ProfileCard({ r }: { r: OwnerRestaurant }) {
     locality: locality.trim() !== (r.address?.locality ?? ''),
     pureVeg: pureVeg !== Boolean(r.pureVeg),
   };
+  // validate only what the owner changed, so an old blank field never blocks an unrelated save
+  const errors: Record<string, string> = {};
+  if (changed.name) {
+    if (!name.trim()) errors.name = 'Enter the restaurant name customers see.';
+    else if (name.trim().length > 80) errors.name = 'Use 80 characters or fewer.';
+  }
+  if (changed.description) {
+    if (!description.trim()) errors.description = 'Add a short description of your food.';
+    else if (description.trim().length > 1000) errors.description = 'Use 1000 characters or fewer.';
+  }
+  if (changed.phone && (!phone.trim() || !tryNormalizePhone(phone))) errors.phone = 'Enter a valid Indian mobile number, e.g. 98765 43210.';
+  if (changed.locality && locality.trim().length > 60) errors.locality = 'Use 60 characters or fewer.';
   const dirty = Object.values(changed).some(Boolean);
 
   const save = useMutation({

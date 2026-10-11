@@ -10,8 +10,8 @@ import { NotFoundPage } from '../../components/layout/ErrorBoundary';
 import type { NavItem } from '../../components/layout/RoleNav';
 import { NavCount } from '../../components/layout/RoleNav';
 import type { RoleShellConfig } from '../../components/layout/RoleSidebarShell';
-import { useQuery } from '@tanstack/react-query';
-import { keys, ordersApi, useRestaurants } from './api';
+import { useRestaurants } from './api';
+import { useNewOrderCounts } from './orderStream';
 import RestaurantLayout from './RestaurantLayout';
 import { RestaurantSwitcher, RestaurantSwitcherMobile } from './RestaurantSwitcher';
 import { resolveSelected, useSelectedRestaurantId } from './selection';
@@ -19,21 +19,14 @@ import { resolveSelected, useSelectedRestaurantId } from './selection';
 const page = (load: () => Promise<{ default: ComponentType }>) => ({ lazy: () => load().then((m) => ({ Component: m.default })) });
 
 /**
- * Count of orders waiting for accept/reject (20-04, hidden at 0). Shares the board's query key, so the live
- * board's realtime refetches update it too; elsewhere it polls every 30 s (RestaurantLayout also streams).
+ * Count of orders waiting for accept/reject at the selected restaurant (20-04, hidden at 0). Reads the owner-wide
+ * PLACED watcher kept fresh by RestaurantLayout (realtime `owner.order` + polling).
  */
 export function NewOrdersBadge() {
   const list = useRestaurants();
   const selected = resolveSelected(list.data, useSelectedRestaurantId());
-  const id = selected?.status === 'APPROVED' ? selected.id : undefined;
-  const q = useQuery({
-    queryKey: keys.orders(id ?? ''),
-    queryFn: () => ordersApi.active(id!),
-    enabled: Boolean(id),
-    refetchInterval: 30_000,
-  });
-  const count = q.data?.items.filter((o) => o.status === 'PLACED').length;
-  return <NavCount count={count} label="new orders" />;
+  const counts = useNewOrderCounts(Boolean(list.data?.some((r) => r.status === 'APPROVED')));
+  return <NavCount count={selected ? counts.get(selected.id) : undefined} label="new orders" />;
 }
 
 export const nav: NavItem[] = [

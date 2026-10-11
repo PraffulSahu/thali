@@ -184,3 +184,53 @@ export function useOrderStream(restaurantId: string | undefined, opts: OrderStre
   }, [active, newIds]);
   return { query, active, newIds, placedCount, announcement, realtime: status };
 }
+
+/* ---------------------------------------------------------------- all restaurants */
+
+/**
+ * New (PLACED) orders across every restaurant the owner has, with one cheap query (`GET /owner/orders?status=PLACED`
+ * without restaurantId; the server scopes it to the owner). Refreshed by `owner.order` events (polling fallback 10 s,
+ * plus a 30 s interval). Chimes for arrivals after the first load: for every restaurant, or only for restaurants other
+ * than `skipRestaurantId` (the live board chimes for its own restaurant). Returns per-restaurant counts and an
+ * announcement for an assertive live region.
+ */
+export function useAllNewOrders(opts: { enabled?: boolean; skipRestaurantId?: string } = {}) {
+  const { enabled = true, skipRestaurantId } = opts;
+  const query = useQuery({ queryKey: keys.placedAll, queryFn: ordersApi.placedAll, enabled, refetchInterval: 30_000 });
+  useRealtime(['owner.order'], () => void query.refetch(), { fallbackRefetch: query.refetch, enabled });
+
+  const seen = useRef<Set<string> | null>(null);
+  const [announcement, setAnnouncement] = useState('');
+  useEffect(() => {
+    if (!query.data) return;
+    const items = query.data.items.filter((o) => o.status === 'PLACED');
+    if (seen.current === null) {
+      seen.current = new Set(items.map((o) => o.id));
+      return;
+    }
+    const known = seen.current;
+    const added = items.filter((o) => !known.has(o.id));
+    added.forEach((o) => known.add(o.id));
+    const relevant = added.filter((o) => o.restaurantId !== skipRestaurantId);
+    if (relevant.length === 0) return;
+    playOrderChime();
+    setAnnouncement(`New order${relevant.length > 1 ? 's' : ''}: ${relevant.map((o) => `${o.code}${o.restaurantName ? ` at ${o.restaurantName}` : ''}`).join(', ')}`);
+  }, [query.data, skipRestaurantId]);
+
+  const counts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const o of query.data?.items ?? []) if (o.status === 'PLACED' && o.restaurantId) m.set(o.restaurantId, (m.get(o.restaurantId) ?? 0) + 1);
+    return m;
+  }, [query.data]);
+  return { query, counts, announcement };
+}
+
+/** Read-only view of the per-restaurant new-order counts (shares the watcher's cache; no own polling). */
+export function useNewOrderCounts(enabled = true): Map<string, number> {
+  const q = useQuery({ queryKey: keys.placedAll, queryFn: ordersApi.placedAll, enabled, staleTime: 15_000 });
+  return useMemo(() => {
+    const m = new Map<string, number>();
+    for (const o of q.data?.items ?? []) if (o.status === 'PLACED' && o.restaurantId) m.set(o.restaurantId, (m.get(o.restaurantId) ?? 0) + 1);
+    return m;
+  }, [q.data]);
+}

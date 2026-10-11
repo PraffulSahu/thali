@@ -14,7 +14,7 @@ import {
 } from '../../components/ui';
 import { cn } from '../../lib/cn';
 import { ApiError, errorMessage, fieldErrors } from '../../lib/errors';
-import { ItemEditor } from './ItemEditor';
+import { ItemEditor, itemSaveError } from './ItemEditor';
 import { MAX_FEATURED, keys, menuApi, type MenuCategory, type OwnerItem } from './api';
 import { useCurrentRestaurant } from './RestaurantContext';
 
@@ -132,10 +132,7 @@ function ItemRow({ item, restaurantId, featuredCount, highlight, onEdit, onDelet
       toast({ title: featured ? `${item.name} is now recommended` : `${item.name} removed from recommended`, tone: 'success' });
       onChanged();
     },
-    onError: (e) => {
-      const cap = e instanceof ApiError && (e.code === 'VALIDATION_FAILED' || e.status === 422);
-      toast({ title: "Couldn't change recommended", description: cap ? `You can recommend up to ${MAX_FEATURED} items. Remove one first.` : errorMessage(e), tone: 'danger' });
-    },
+    onError: (e) => toast({ title: "Couldn't change recommended", description: itemSaveError(e) ?? errorMessage(e), tone: 'danger' }),
   });
   const featured = Boolean(item.featured);
   const atCap = !featured && featuredCount >= MAX_FEATURED;

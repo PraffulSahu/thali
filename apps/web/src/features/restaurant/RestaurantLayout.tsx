@@ -1,21 +1,22 @@
 /**
  * Wraps every post-onboarding page (inside the KITCHEN RoleSidebarShell): loads the owner's restaurants, applies
  * the switcher selection (sidebar context card, RestaurantSwitcher), keeps the status banner on top of main and
- * keeps new-order chimes running on pages other than the live board.
+ * keeps new-order chimes running for all of the owner's restaurants (the live board chimes for its own).
  */
 import { Outlet, useLocation } from 'react-router';
 import { ButtonLink, QueryState, Skeleton } from '../../components/ui';
 import { RestaurantContext } from './RestaurantContext';
 import { useRestaurants } from './api';
-import { useOrderStream } from './orderStream';
+import { useAllNewOrders } from './orderStream';
 import { resolveSelected, useSelectedRestaurantId } from './selection';
 import { StatusBanner } from './StatusBanner';
 
-function BackgroundAlerts({ restaurantId }: { restaurantId: string }) {
-  const stream = useOrderStream(restaurantId);
+/** New-order chime + announcement for every restaurant of the owner (the live board handles its own restaurant). */
+function BackgroundAlerts({ skipRestaurantId }: { skipRestaurantId?: string }) {
+  const { announcement } = useAllNewOrders({ skipRestaurantId });
   return (
     <div role="status" aria-live="assertive" className="sr-only">
-      {stream.announcement}
+      {announcement}
     </div>
   );
 }
@@ -58,7 +59,9 @@ export default function RestaurantLayout() {
         return (
           <RestaurantContext.Provider value={{ restaurant: current }}>
             <StatusBanner restaurant={current} className="mb-5" />
-            {current.status === 'APPROVED' && !onBoard ? <BackgroundAlerts key={current.id} restaurantId={current.id} /> : null}
+            {restaurants.some((r) => r.status === 'APPROVED') ? (
+              <BackgroundAlerts skipRestaurantId={onBoard && current.status === 'APPROVED' ? current.id : undefined} />
+            ) : null}
             {/* remount pages when the selection changes so no state leaks between restaurants */}
             <Outlet key={current.id} />
           </RestaurantContext.Provider>

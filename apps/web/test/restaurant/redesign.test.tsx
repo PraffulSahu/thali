@@ -238,3 +238,62 @@ describe('helpers', () => {
     expect(nextOpening([], Date.now())).toBeNull();
   });
 });
+
+describe('Fix round 1', () => {
+  it('chimes, announces and badges new orders across all of the owner’s restaurants (one owner-wide query)', async () => {
+    const { Route, Routes } = await import('react-router');
+    const RestaurantLayout = (await import('../../src/features/restaurant/RestaurantLayout')).default;
+    const { RestaurantSwitcher } = await import('../../src/features/restaurant/RestaurantSwitcher');
+    const { NewOrdersBadge } = await import('../../src/features/restaurant/routes');
+    const { makeOrder } = await import('./fixtures');
+    const starts = vi.fn();
+    vi.stubGlobal('AudioContext', class {
+      state = 'suspended'; currentTime = 0; destination = {};
+      resume() { this.state = 'running'; return Promise.resolve(); }
+      createOscillator() { return { type: '', frequency: { value: 0 }, connect: (n: unknown) => n, start: starts, stop: vi.fn() }; }
+      createGain() { return { gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() }, connect: (n: unknown) => n }; }
+    });
+    const { setSoundEnabled } = await import('../../src/features/restaurant/orderStream');
+    let placed = [makeOrder({ id: 'a1', restaurantId: 'r1' })];
+    const api = mockApi([
+      ['GET', /^\/owner\/restaurants$/, { items: [makeRestaurant({ id: 'r1', name: 'Spice Route' }), makeRestaurant({ id: 'r2', name: 'Dosa Corner' })] }],
+      ['GET', /^\/owner\/orders$/, () => json({ items: placed, nextCursor: null })],
+    ]);
+    const { queryClient } = renderWithProviders(
+      <>
+        <RestaurantSwitcher />
+        <span data-testid="badge"><NewOrdersBadge /></span>
+        <Routes>
+          <Route element={<RestaurantLayout />}>
+            <Route index element={<p>page</p>} />
+          </Route>
+        </Routes>
+      </>,
+      { route: '/restaurant', path: '/restaurant/*', auth: owner() },
+    );
+    await screen.findByText('page');
+    await waitFor(() => expect(screen.getByTestId('badge')).toHaveTextContent('1'));
+    // the owner-wide query has no restaurantId
+    expect(api.find('GET', /^\/owner\/orders$/).some((c) => !c.search.includes('restaurantId') && decodeURIComponent(c.search).includes('status=PLACED'))).toBe(true);
+    setSoundEnabled(true, { test: true });
+    await waitFor(() => expect(starts).toHaveBeenCalled());
+    starts.mockClear();
+
+    placed = [...placed, makeOrder({ id: 'b1', code: 'TH-DOSA0001', restaurantId: 'r2', restaurantName: 'Dosa Corner' })];
+    await queryClient.invalidateQueries({ queryKey: ['owner', 'orders-all', 'placed'] });
+    expect(await screen.findByText('New order: TH-DOSA0001 at Dosa Corner')).toBeInTheDocument();
+    expect(starts).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('button', { name: /1 new at your other restaurants/ })).toBeInTheDocument();
+    setSoundEnabled(false);
+  });
+
+  it('profile: saving the locality is not blocked by an old blank description', async () => {
+    const api = mockApi([['PATCH', /\/owner\/restaurants\/r1$/, () => json(makeRestaurant())]]);
+    const user = userEvent.setup();
+    renderWithProviders(withRestaurant(makeRestaurant({ description: null }), <StoreSettingsPage />), { auth: owner() });
+    await user.type(screen.getByLabelText('Locality'), 'Indiranagar');
+    await user.click(screen.getByRole('button', { name: 'Save profile' }));
+    await waitFor(() => expect(api.find('PATCH', /r1$/)).toHaveLength(1));
+    expect(api.find('PATCH', /r1$/)[0]!.body).toEqual({ address: { line1: '12 MG Road', locality: 'Indiranagar', city: 'Bengaluru', pincode: '560001' } });
+  });
+});
