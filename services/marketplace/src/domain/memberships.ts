@@ -245,6 +245,8 @@ export async function sweepPendingMemberships(ctx: AppContext, opts: { batch?: n
 export interface BenefitsInput {
   userId: string;
   children: { restaurantId: string; itemsSubtotalPaise: number; deliveryFeePaise: number }[];
+  /** I-2: free deliveries HELD by these (the caller's superseded, unpaid) checkouts count as remaining. */
+  excludeCheckoutIds?: string[];
 }
 
 /** `POST /internal/memberships/benefits` (LLD §6 free-delivery selection rule). */
@@ -252,7 +254,9 @@ export async function membershipBenefits(ctx: AppContext, input: BenefitsInput) 
   const m = await currentMembership(ctx, input.userId);
   if (!m) return { membershipId: null, freeDeliveryRestaurantIds: [] as string[], extraDiscountBps: 0, extraDiscountCapPaise: 0 };
   const b = m.planSnapshot.benefits;
-  const remaining = remainingFreeDeliveries(m);
+  const ex = new Set(input.excludeCheckoutIds ?? []);
+  const heldByExcluded = ex.size ? (m.usage ?? []).filter((u) => u.status === 'HELD' && ex.has(u.checkoutId)).reduce((t, u) => t + (u.freeDeliveries ?? 0), 0) : 0;
+  const remaining = Math.min(m.planSnapshot.benefits.freeDeliveriesPerPeriod, remainingFreeDeliveries(m) + heldByExcluded);
   const free = input.children
     .filter((c) => c.itemsSubtotalPaise >= b.freeDeliveryMinOrderPaise && c.deliveryFeePaise > 0)
     .sort((x, y) => y.deliveryFeePaise - x.deliveryFeePaise || (x.restaurantId < y.restaurantId ? -1 : x.restaurantId > y.restaurantId ? 1 : 0))

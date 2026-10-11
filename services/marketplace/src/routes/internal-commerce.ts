@@ -4,6 +4,7 @@
  *   POST /internal/coupons/validate     → { code, discountPaise, description, restaurantIds, badgeLabel } | 422 COUPON_INVALID | 422 COUPON_LIMIT_REACHED
  *   POST /internal/memberships/benefits → { membershipId|null, freeDeliveryRestaurantIds, extraDiscountBps, extraDiscountCapPaise }
  *   POST /internal/reservations         → { checkoutId, status, expiresAt } | 409 OUT_OF_STOCK | 422 COUPON_LIMIT_REACHED (idempotent per checkoutId)
+ *   POST /internal/reservations/:checkoutId/release → { checkoutId, released, status } (I-2 synchronous supersede release; idempotent)
  */
 import { z } from 'zod';
 import { ObjectIdSchema } from '@thali/contracts';
@@ -12,7 +13,7 @@ import type { RouteModule } from '../context.js';
 import { validateCoupon } from '../domain/coupons.js';
 import { membershipBenefits } from '../domain/memberships.js';
 import { buildQuote } from '../domain/quote.js';
-import { reserve } from '../domain/reservations.js';
+import { releaseHolds, reserve } from '../domain/reservations.js';
 import { json } from './common.js';
 
 const CALLERS = ['orders'] as const;
@@ -99,6 +100,11 @@ const CouponValidateBody = z
       .max(50)
       .optional()
       .describe('Per-restaurant item subtotals (MKT-8), unique restaurantIds (duplicates → 422 VALIDATION_FAILED). Required for restaurant-scoped coupons; none eligible → 422 COUPON_INVALID NOT_APPLICABLE (details.restaurantIds = the coupon scope). The eligible sum is capped at itemsSubtotalPaise.'),
+    excludeCheckoutIds: z
+      .array(z.string().min(1).max(64))
+      .max(20)
+      .optional()
+      .describe("I-2: the caller's own unpaid checkouts that a new checkout would supersede; their HELD holds do not count (read-only check)"),
   })
   .meta({ id: 'CouponValidateRequest' });
 const CouponValidateResponse = z
@@ -115,6 +121,11 @@ const BenefitsBody = z
   .object({
     userId: z.string().min(1).max(64),
     children: z.array(z.object({ restaurantId: z.string().min(1).max(64), itemsSubtotalPaise: Paise, deliveryFeePaise: Paise })).max(50),
+    excludeCheckoutIds: z
+      .array(z.string().min(1).max(64))
+      .max(20)
+      .optional()
+      .describe("I-2: the caller's own unpaid checkouts that a new checkout would supersede; their HELD holds do not count (read-only check)"),
   })
   .meta({ id: 'MembershipBenefitsRequest' });
 const BenefitsResponse = z
@@ -140,6 +151,17 @@ const ReservationBody = z
   })
   .meta({ id: 'ReservationRequest' });
 const ReservationResponse = z.object({ checkoutId: z.string(), status: z.enum(['HELD', 'COMMITTED', 'RELEASED']), expiresAt: z.string() }).meta({ id: 'ReservationResponse' });
+const ReleaseParams = z.object({ checkoutId: ObjectIdSchema });
+const ReleaseBody = z
+  .object({ userId: z.string().min(1).max(64), reason: z.string().trim().min(1).max(40).default('SUPERSEDED') })
+  .meta({ id: 'ReservationReleaseRequest' });
+const ReleaseResponse = z
+  .object({
+    checkoutId: z.string(),
+    released: z.boolean().describe('true when this call freed HELD holds; false = nothing held (already released, committed or unknown)'),
+    status: z.enum(['RELEASED', 'COMMITTED', 'HELD', 'MISSING']),
+  })
+  .meta({ id: 'ReservationReleaseResponse' });
 
 export const internalCommerceRoutes: RouteModule = {
   name: 'internal-commerce',
@@ -164,6 +186,12 @@ export const internalCommerceRoutes: RouteModule = {
     const vReserve = validate({ body: ReservationBody });
     r.post('/internal/reservations', guard, vReserve, async (req, res) => {
       res.json(await reserve(ctx, vReserve.get(req).body));
+    });
+
+    const vRelease = validate({ params: ReleaseParams, body: ReleaseBody });
+    r.post('/internal/reservations/:checkoutId/release', guard, vRelease, async (req, res) => {
+      const { params, body } = vRelease.get(req);
+      res.json(await releaseHolds(ctx, { checkoutId: params.checkoutId, userId: body.userId, reason: body.reason }));
     });
   },
   openapi(api) {
@@ -201,6 +229,15 @@ export const internalCommerceRoutes: RouteModule = {
       request: { body: { content: json(ReservationBody) } },
       responses: { 200: { description: 'Reservation (replayed for a known checkoutId)', content: json(ReservationResponse) } },
       errors: ['OUT_OF_STOCK', 'COUPON_LIMIT_REACHED', 'COUPON_INVALID', 'ITEM_UNAVAILABLE', 'CONFLICT'],
+    });
+    api.route({
+      ...base,
+      method: 'post',
+      path: '/internal/reservations/:checkoutId/release',
+      summary: "Release a superseded unpaid checkout's stock / coupon / membership holds now (I-2; idempotent, a committed reservation is never touched; the checkout.released event stays the backstop)",
+      request: { params: ReleaseParams, body: { content: json(ReleaseBody) } },
+      responses: { 200: { description: 'Release outcome', content: json(ReleaseResponse) } },
+      errors: ['CONFLICT', 'VALIDATION_FAILED'],
     });
   },
 };

@@ -391,8 +391,13 @@ preview reports it `valid:false, reason:'NOT_APPLICABLE', restaurantIds:<scope>`
 <restaurant>". A different coupon sent in the body that does not apply is 422 `COUPON_INVALID {reason:'NOT_APPLICABLE'}`.
 The web sends `couponCode` only when the preview applied it (else `null`), so Pay never hits a guaranteed 422.
 Consequence: while a rolling deploy runs, old instances do not supersede (those overlaps resolve at checkout TTL,
-15 min). Overlapping unpaid checkouts are released before the new reserve, so a stock-limited item is not blocked by
-the superseded hold; a concurrent overlap that appears mid-request is superseded again inside the transaction.
+15 min). Overlapping unpaid checkouts are released before the new quote: the superseded checkout is committed as
+EXPIRED, then orders calls `POST /internal/reservations/:checkoutId/release` synchronously (idempotent; a committed
+reservation is never touched), because `checkout.released` is consumed asynchronously and would arrive after the
+quote (final review I-2: a retry after an abandoned payment was refused "You have already used this coupon"). The
+event stays the backstop and then finds nothing HELD. The cart preview passes the same overlaps as
+`excludeCheckoutIds` to coupon validate and membership benefits (read-only), so it does not report the user's own
+unpaid hold as "already used". A concurrent overlap that appears mid-request is superseded again inside the transaction.
 
 ## ADR-038 Delivery partner privacy: area on offers, full drop address only after pickup
 Status: accepted (2026-10-11, UI redesign).

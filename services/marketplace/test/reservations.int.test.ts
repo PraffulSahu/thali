@@ -297,3 +297,103 @@ describe('membership usage holds', () => {
     expect((await item(h, it1))!.reservedQty).toBe(0);
   });
 });
+
+describe('synchronous release (I-2: orders supersedes an unpaid checkout before quoting the new one)', () => {
+  const release = (checkoutId: string, body: Record<string, unknown>) =>
+    request(srv.url).post(`/internal/reservations/${checkoutId}/release`).set(bearer(tok)).send(body);
+
+  it('frees stock, coupon (per-user limit) and membership holds at once; idempotent; the async checkout.released is then a no-op', async () => {
+    const userId = oid();
+    const { id: couponId, code } = await seedCoupon(h, { perUserLimit: 1 });
+    const membershipId = await seedActiveMembership(h, userId);
+    const it1 = await seedItem(h, rid, { trackStock: true, stockQty: 2 });
+    const lines = [{ restaurantId: rid, itemId: it1, qty: 2 }];
+    const first = await reserve({ userId, lines, couponCode: code, couponDiscountPaise: 5000, membership: { membershipId, freeDeliveries: 1, discountPaise: 0 } });
+    expect(first.status).toBe(200);
+    const checkoutId = first.body.checkoutId as string;
+
+    const r1 = await release(checkoutId, { userId, reason: 'SUPERSEDED' });
+    expect(r1.status).toBe(200);
+    expect(r1.body).toEqual({ checkoutId, released: true, status: 'RELEASED' });
+    expect((await item(h, it1))!.reservedQty).toBe(0);
+    expect((await h.models.Coupon.findById(couponId).lean())!.heldCount).toBe(0);
+    expect((await h.models.Membership.findById(membershipId).lean())!.freeDeliveriesHeld).toBe(0);
+    expect((await h.models.StockReservation.findOne({ checkoutId }).lean())!.releaseReason).toBe('SUPERSEDED');
+
+    const r2 = await release(checkoutId, { userId, reason: 'SUPERSEDED' });
+    expect(r2.body).toEqual({ checkoutId, released: false, status: 'RELEASED' });
+    // the outbox event arriving later changes nothing
+    await h.ctx.conn.transaction(async (session) => {
+      const { releaseReservation } = await import('../src/domain/reservations.js');
+      expect(await releaseReservation(h.ctx, session, checkoutId, 'EXPIRED')).toBe(false);
+    });
+    expect((await item(h, it1))!.reservedQty).toBe(0);
+    expect((await h.models.Coupon.findById(couponId).lean())!.heldCount).toBe(0);
+
+    // the same user can hold the per-user-limit-1 coupon again right away
+    expect((await reserve({ userId, lines, couponCode: code, couponDiscountPaise: 5000 })).status).toBe(200);
+  });
+
+  it('unknown checkout → released:false MISSING; committed → untouched; another user’s hold → 409; only orders may call', async () => {
+    expect((await release(oid(), { userId: oid(), reason: 'SUPERSEDED' })).body).toMatchObject({ released: false, status: 'MISSING' });
+    const userId = oid();
+    const it1 = await seedItem(h, rid, { trackStock: true, stockQty: 5 });
+    const held = await reserve({ userId, lines: [{ restaurantId: rid, itemId: it1, qty: 1 }] });
+    const theirs = await release(held.body.checkoutId, { userId: oid(), reason: 'SUPERSEDED' });
+    expect(theirs.status).toBe(409);
+    expect((await item(h, it1))!.reservedQty).toBe(1);
+    await h.ctx.conn.transaction(async (session) => {
+      const { commitReservation } = await import('../src/domain/reservations.js');
+      await commitReservation(h.ctx, session, held.body.checkoutId);
+    });
+    expect((await release(held.body.checkoutId, { userId, reason: 'SUPERSEDED' })).body).toMatchObject({ released: false, status: 'COMMITTED' });
+    expect((await item(h, it1))!.stockQty).toBe(4);
+    const other = await h.internalToken('delivery');
+    expect((await request(srv.url).post(`/internal/reservations/${oid()}/release`).set(bearer(other)).send({ userId, reason: 'X' })).status).toBe(403);
+    expect((await release('not-an-id', { userId, reason: 'X' })).status).toBe(400);
+  });
+});
+
+describe('excludeCheckoutIds (I-2: preview ignores the caller’s own unpaid overlapping checkouts)', () => {
+  it('validate: a HELD redemption of an excluded checkout does not count toward perUserLimit / totalLimit / first-order', async () => {
+    const userId = oid();
+    const it1 = await seedItem(h, rid);
+    const lines = [{ restaurantId: rid, itemId: it1, qty: 1 }];
+    const once = await seedCoupon(h, { perUserLimit: 1, totalLimit: 1 });
+    const held = await reserve({ userId, lines, couponCode: once.code, couponDiscountPaise: 5000 });
+    expect(held.status).toBe(200);
+    const validate = (code: string, extra: Record<string, unknown> = {}) =>
+      request(srv.url).post('/internal/coupons/validate').set(bearer(tok)).send({ code, userId, itemsSubtotalPaise: 30000, ...extra });
+    expect((await validate(once.code)).status).toBe(422);
+    const ok = await validate(once.code, { excludeCheckoutIds: [held.body.checkoutId] });
+    expect(ok.status).toBe(200);
+    // another user's checkout id in the list changes nothing for this user's count
+    expect((await validate(once.code, { excludeCheckoutIds: [oid()] })).status).toBe(422);
+
+    const first = await seedCoupon(h, { firstOrderOnly: true });
+    const fresh = oid();
+    const fh = await reserve({ userId: fresh, lines, couponCode: first.code, couponDiscountPaise: 100 });
+    const second = await seedCoupon(h, { firstOrderOnly: true });
+    const v1 = await request(srv.url).post('/internal/coupons/validate').set(bearer(tok)).send({ code: second.code, userId: fresh, itemsSubtotalPaise: 30000 });
+    expect(v1.body.error.details.reason).toBe('FIRST_ORDER_ONLY');
+    const v2 = await request(srv.url)
+      .post('/internal/coupons/validate')
+      .set(bearer(tok))
+      .send({ code: second.code, userId: fresh, itemsSubtotalPaise: 30000, excludeCheckoutIds: [fh.body.checkoutId] });
+    expect(v2.status).toBe(200);
+  });
+
+  it('benefits: free deliveries held by an excluded checkout count as remaining', async () => {
+    const userId = oid();
+    const membershipId = await seedActiveMembership(h, userId, { freeDeliveriesUsed: 1 }); // quota 2 → 1 left
+    const it1 = await seedItem(h, rid);
+    const held = await reserve({ userId, lines: [{ restaurantId: rid, itemId: it1, qty: 1 }], membership: { membershipId, freeDeliveries: 1, discountPaise: 0 } });
+    expect(held.status).toBe(200);
+    const children = [{ restaurantId: rid, itemsSubtotalPaise: 50000, deliveryFeePaise: 3000 }];
+    const benefits = (extra: Record<string, unknown> = {}) => request(srv.url).post('/internal/memberships/benefits').set(bearer(tok)).send({ userId, children, ...extra });
+    expect((await benefits()).body.freeDeliveryRestaurantIds).toEqual([]);
+    const ex = await benefits({ excludeCheckoutIds: [held.body.checkoutId] });
+    expect(ex.body.freeDeliveryRestaurantIds).toEqual([rid]);
+    expect(ex.body.freeDeliveriesRemaining).toBe(1);
+  });
+});

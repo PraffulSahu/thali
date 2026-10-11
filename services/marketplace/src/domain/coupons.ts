@@ -46,18 +46,32 @@ export async function hasPlacedOrder(ctx: AppContext, userId: string, session?: 
   return !!(await q);
 }
 
+/**
+ * I-2: HELD redemptions of these checkouts (the caller's own unpaid checkouts that a new checkout supersedes) are
+ * ignored by the read-only validate / benefits checks. Reservations never exclude: orders releases those holds
+ * synchronously (`POST /internal/reservations/:checkoutId/release`) before it reserves again.
+ */
+const heldOf = (exclude?: readonly string[]) =>
+  exclude?.length ? { $or: [{ status: 'REDEEMED' }, { status: 'HELD', checkoutId: { $nin: [...exclude] } }] } : { status: { $in: ['HELD', 'REDEEMED'] } };
+
 /** True when the user may no longer use a firstOrderOnly coupon. */
-export async function firstOrderUsed(ctx: AppContext, userId: string, session?: ClientSession): Promise<boolean> {
+export async function firstOrderUsed(ctx: AppContext, userId: string, session?: ClientSession, excludeCheckoutIds?: readonly string[]): Promise<boolean> {
   if (await hasPlacedOrder(ctx, userId, session)) return true;
-  const q = ctx.models.CouponRedemption.exists({ userId, firstOrderGuard: true });
+  const q = ctx.models.CouponRedemption.exists({ userId, firstOrderGuard: true, ...heldOf(excludeCheckoutIds) });
   if (session) q.session(session);
   return !!(await q);
 }
 
-export async function userRedemptionCount(ctx: AppContext, couponId: unknown, userId: string, session?: ClientSession): Promise<number> {
-  const q = ctx.models.CouponRedemption.countDocuments({ couponId, userId, status: { $in: ['HELD', 'REDEEMED'] } });
+export async function userRedemptionCount(ctx: AppContext, couponId: unknown, userId: string, session?: ClientSession, excludeCheckoutIds?: readonly string[]): Promise<number> {
+  const q = ctx.models.CouponRedemption.countDocuments({ couponId, userId, ...heldOf(excludeCheckoutIds) });
   if (session) q.session(session);
   return q;
+}
+
+/** The user's own HELD redemptions of `couponId` on excluded checkouts (subtracted from `heldCount` for the total limit). */
+async function excludedHeld(ctx: AppContext, couponId: unknown, userId: string, excludeCheckoutIds?: readonly string[]): Promise<number> {
+  if (!excludeCheckoutIds?.length) return 0;
+  return ctx.models.CouponRedemption.countDocuments({ couponId, userId, status: 'HELD', checkoutId: { $in: [...excludeCheckoutIds] } });
 }
 
 export const totalExhausted = (c: Pick<CouponLean, 'totalLimit' | 'usedCount' | 'heldCount'>) =>
@@ -89,6 +103,8 @@ export interface ValidateCouponInput {
   itemsSubtotalPaise: number;
   /** Per-restaurant item subtotals (MKT-8): a scoped coupon is computed on the eligible ones only. */
   restaurantSubtotals?: { restaurantId: string; subtotalPaise: number }[];
+  /** I-2: the caller's unpaid checkouts being superseded — their HELD redemptions do not count. */
+  excludeCheckoutIds?: string[];
 }
 
 /**
@@ -123,9 +139,12 @@ export async function validateCoupon(ctx: AppContext, input: ValidateCouponInput
   if (subtotal < (c.minOrderPaise ?? 0)) {
     throw couponInvalid('MIN_ORDER', `Add items worth ₹${((c.minOrderPaise ?? 0) / 100).toFixed(2)} or more to use this coupon`, { minOrderPaise: c.minOrderPaise ?? 0 });
   }
-  if (c.firstOrderOnly && (await firstOrderUsed(ctx, input.userId))) throw couponInvalid('FIRST_ORDER_ONLY', 'This coupon is valid on your first order only');
-  if (totalExhausted(c)) throw couponLimit('TOTAL_LIMIT', 'This coupon has been fully used');
-  if (c.perUserLimit != null && (await userRedemptionCount(ctx, c._id, input.userId)) >= c.perUserLimit) {
+  const ex = input.excludeCheckoutIds;
+  if (c.firstOrderOnly && (await firstOrderUsed(ctx, input.userId, undefined, ex))) throw couponInvalid('FIRST_ORDER_ONLY', 'This coupon is valid on your first order only');
+  if (totalExhausted({ ...c, heldCount: Math.max(0, (c.heldCount ?? 0) - (await excludedHeld(ctx, c._id, input.userId, ex))) })) {
+    throw couponLimit('TOTAL_LIMIT', 'This coupon has been fully used');
+  }
+  if (c.perUserLimit != null && (await userRedemptionCount(ctx, c._id, input.userId, undefined, ex)) >= c.perUserLimit) {
     throw couponLimit('PER_USER_LIMIT', 'You have already used this coupon');
   }
   const discountPaise = computeDiscount(c, subtotal);

@@ -18,6 +18,8 @@ import type {
   QuoteRequest,
   QuoteResponse,
   QuoteRestaurant,
+  ReservationReleaseRequest,
+  ReservationReleaseResponse,
   ReservationRequest,
   ReservationResponse,
 } from '../../src/clients/marketplace.js';
@@ -87,6 +89,11 @@ export class FakeMarketplace implements MarketplaceClient {
   /** Do not echo lineRef (legacy marketplace) — orders must fall back to position or fail closed. */
   omitLineRef = false;
   reserveDelayMs = 0;
+  /** Synchronous supersede releases (I-2); `seqAtCall` = how many reserve calls had happened before. */
+  releaseCalls: { checkoutId: string; userId: string; reason: string; seqAtCall: number }[] = [];
+  /** Checkouts whose holds the synchronous release freed (the fake never consumes `checkout.released`). */
+  releasedHolds = new Set<string>();
+  failReleaseWith: Error | null = null;
   /** Runs inside `reserve` before it answers (race scenarios). */
   beforeReserve: ((req: ReservationRequest) => Promise<void>) | null = null;
 
@@ -236,6 +243,15 @@ export class FakeMarketplace implements MarketplaceClient {
     this.couponCalls.push(req);
     const c = this.coupons.get(req.code.toUpperCase());
     if (!c) throw new DomainError('COUPON_INVALID', 'Coupon is not valid', 422);
+    if (c.perUserLimit !== undefined) {
+      // like marketplace: the user's live (HELD) holds count, except those of excluded (superseded) checkouts
+      const excluded = new Set(req.excludeCheckoutIds ?? []);
+      let held = 0;
+      for (const hld of this.couponHolds) {
+        if (hld.userId === req.userId && hld.code === req.code.toUpperCase() && !excluded.has(hld.checkoutId) && (await this.isHoldLive(hld.checkoutId))) held++;
+      }
+      if (held >= c.perUserLimit) throw new DomainError('COUPON_LIMIT_REACHED', 'You have already used this coupon', 422, { reason: 'PER_USER_LIMIT' });
+    }
     const scope = c.restaurantIds ?? [];
     let eligible = req.itemsSubtotalPaise;
     if (scope.length && req.restaurantSubtotals) {
@@ -270,6 +286,15 @@ export class FakeMarketplace implements MarketplaceClient {
     }
     if (this.failReserveWith) throw this.failReserveWith;
     return { checkoutId: req.checkoutId, status: 'HELD', expiresAt: new Date(Date.now() + req.ttlSec * 1000).toISOString() };
+  }
+
+  async releaseReservation(req: ReservationReleaseRequest): Promise<ReservationReleaseResponse> {
+    this.releaseCalls.push({ ...req, seqAtCall: this.reserveCalls.length });
+    if (this.failReleaseWith) throw this.failReleaseWith;
+    const known = this.reserveCalls.some((r) => r.checkoutId === req.checkoutId);
+    const released = known && !this.releasedHolds.has(req.checkoutId);
+    if (known) this.releasedHolds.add(req.checkoutId);
+    return { checkoutId: req.checkoutId, released, status: known ? 'RELEASED' : 'MISSING' };
   }
 
   async getRestaurant(id: string): Promise<InternalRestaurant | null> {

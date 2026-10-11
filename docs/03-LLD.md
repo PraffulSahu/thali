@@ -595,6 +595,8 @@ All paths are under `/api/v1` through the gateway unless marked internal. Every 
 | `POST/PATCH /admin/marketplace/{cuisines,banners}` (changed) | ADMIN+MFA | `imageKey` may be an `https://` URL on an `EXTERNAL_IMAGE_HOSTS` host | `imageUrl` resolved (nullable on the admin banner view); a public banner whose ref does not resolve is not returned | 400 when the host is not allowlisted |
 | `POST /internal/coupons/validate` (changed) | service | adds optional `restaurantSubtotals:[{restaurantId, subtotalPaise}]` (duplicate ids rejected) | adds `restaurantIds: string[]`, `badgeLabel`; discount and min-order use the eligible restaurants' subtotal only | 422 `COUPON_INVALID {reason:'NOT_APPLICABLE', restaurantIds:<scope>}` (also for a scoped coupon sent without subtotals), 422 `VALIDATION_FAILED` |
 | `POST /internal/reservations` (changed) | service | unchanged | unchanged | 422 `COUPON_INVALID NOT_APPLICABLE` for a scoped coupon when no line is in scope |
+| `POST /internal/reservations/:checkoutId/release` (new, I-2) | service (orders) | `{userId, reason}` | `{checkoutId, released, status: RELEASED\|COMMITTED\|HELD\|MISSING}`; frees stock / coupon / membership holds like `checkout.released`; idempotent, committed untouched | 409 `CONFLICT` (another user's reservation), 400 |
+| `POST /internal/coupons/validate`, `POST /internal/memberships/benefits` (changed, I-2) | service | add optional `excludeCheckoutIds[] (<=20)`: the caller's superseded unpaid checkouts; their HELD redemptions / free deliveries do not count (read-only) | unchanged | unchanged |
 | `GET /internal/restaurants/:id` (changed) | service | | adds `address.locality`, `pureVeg` (declared value), `images {coverUrl, logoUrl}` | |
 
 **orders**

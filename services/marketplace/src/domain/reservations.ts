@@ -291,6 +291,29 @@ export async function releaseReservation(ctx: AppContext, session: ClientSession
   return true;
 }
 
+export interface ReleaseHoldsResult {
+  checkoutId: string;
+  released: boolean;
+  status: 'RELEASED' | 'COMMITTED' | 'HELD' | 'MISSING';
+}
+
+/**
+ * `POST /internal/reservations/:checkoutId/release` (I-2): orders superseded this unpaid checkout and frees its
+ * holds before quoting / reserving the new one, so the user's own old hold never blocks it. Same effect as the
+ * `checkout.released` event (which stays the backstop and then finds nothing HELD → no-op). Idempotent; a committed
+ * reservation is never touched; another user's reservation → 409.
+ */
+export async function releaseHolds(ctx: AppContext, input: { checkoutId: string; userId: string; reason: string }): Promise<ReleaseHoldsResult> {
+  return withTransaction(ctx.conn, async (session) => {
+    const cur = await ctx.models.StockReservation.findOne({ checkoutId: input.checkoutId }).session(session).lean<ReservationLean>();
+    if (!cur) return { checkoutId: input.checkoutId, released: false, status: 'MISSING' as const };
+    if (cur.userId !== input.userId) throw new DomainError('CONFLICT', 'checkoutId belongs to another reservation');
+    const released = await releaseReservation(ctx, session, input.checkoutId, input.reason);
+    const status = released ? 'RELEASED' : (cur.status as ReleaseHoldsResult['status']);
+    return { checkoutId: input.checkoutId, released, status };
+  });
+}
+
 /**
  * A child order left the fulfilment path (rejected / cancelled). Restock its restaurant's tracked lines
  * (when `restock`), at most once per child. If the reservation is still HELD the confirmation was

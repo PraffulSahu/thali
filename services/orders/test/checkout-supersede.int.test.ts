@@ -180,7 +180,8 @@ describe('superseding overlapping checkouts', () => {
   it('{A} with a perUserLimit-1 coupon, then the whole cart with the same coupon → succeeds (old hold released first)', async () => {
     const { u, s } = await newUser();
     h.marketplace.coupons.set('ONCE50', { discountPaise: 5000, perUserLimit: 1 });
-    h.marketplace.isHoldLive = async (id) => (await groupOf(id))?.status === 'AWAITING_PAYMENT';
+    // real ordering: the checkout.released outbox event is never consumed here, only the synchronous release frees holds
+    h.marketplace.isHoldLive = async (id) => !h.marketplace.releasedHolds.has(id);
     try {
       const a = await checkout(u, { restaurantIds: [s.a.id], couponCode: 'ONCE50' });
       expect(a.status).toBe(201);
@@ -191,6 +192,54 @@ describe('superseding overlapping checkouts', () => {
       expect((await groupOf(a.body.checkout.id))!.status).toBe('EXPIRED');
     } finally {
       h.marketplace.isHoldLive = async () => true;
+    }
+  });
+
+  it('I-2: abandon payment → change the cart → checkout again with the same perUserLimit-1 coupon → preview and checkout both apply it', async () => {
+    const { u, s } = await newUser();
+    h.marketplace.coupons.set('WELCOME50X', { discountPaise: 5000, perUserLimit: 1 });
+    h.marketplace.isHoldLive = async (id) => !h.marketplace.releasedHolds.has(id);
+    try {
+      const first = await checkout(u, { couponCode: 'WELCOME50X' });
+      expect(first.status).toBe(201);
+      expect(first.body.checkout.pricing.couponDiscountPaise).toBe(5000);
+      // the user closes the payment popup and edits the cart (new cart version)
+      const cart = await u.get('/api/v1/cart');
+      const dosaLine = cart.body.groups.flatMap((g: { lines: { lineId: string; itemId: string }[] }) => g.lines).find((l: { itemId: string }) => l.itemId === s.dosa.id);
+      expect((await u.patch(`/api/v1/cart/items/${dosaLine.lineId}`, { quantity: 3 })).status).toBe(200);
+
+      const preview = await u.post('/api/v1/cart/preview', { address: DROP_ADDRESS, couponCode: 'WELCOME50X' });
+      expect(preview.status).toBe(200);
+      expect(preview.body.coupon).toMatchObject({ code: 'WELCOME50X', valid: true, discountPaise: 5000 });
+      expect(h.marketplace.couponCalls.at(-1)!.excludeCheckoutIds).toEqual([first.body.checkout.id]);
+      expect((await groupOf(first.body.checkout.id))!.status).toBe('AWAITING_PAYMENT'); // preview has no side effects
+
+      h.marketplace.releaseCalls.length = 0;
+      const reservesBefore = h.marketplace.reserveCalls.length;
+      const second = await checkout(u, { couponCode: 'WELCOME50X', expectedTotalPaise: preview.body.pricing.totalPaise });
+      expect(second.status).toBe(201);
+      expect(second.body.checkout.pricing.couponDiscountPaise).toBe(5000);
+      expect((await groupOf(first.body.checkout.id))!.status).toBe('EXPIRED');
+      // released synchronously, before the new quote / reserve
+      expect(h.marketplace.releaseCalls).toEqual([{ checkoutId: first.body.checkout.id, userId: u.userId, reason: 'SUPERSEDED', seqAtCall: reservesBefore }]);
+      expect(await released()).toContain(first.body.checkout.id); // the outbox event stays the backstop
+    } finally {
+      h.marketplace.isHoldLive = async () => true;
+    }
+  });
+
+  it('I-2: a failing synchronous release does not fail the checkout (the outbox event still releases the old holds)', async () => {
+    const { u, s } = await newUser();
+    const a = await checkout(u, { restaurantIds: [s.a.id] });
+    expect(a.status).toBe(201);
+    h.marketplace.failReleaseWith = new Error('marketplace down');
+    try {
+      const all = await checkout(u, {});
+      expect(all.status).toBe(201);
+      expect((await groupOf(a.body.checkout.id))!.status).toBe('EXPIRED');
+      expect(await released()).toContain(a.body.checkout.id);
+    } finally {
+      h.marketplace.failReleaseWith = null;
     }
   });
 

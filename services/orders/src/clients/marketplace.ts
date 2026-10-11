@@ -91,6 +91,8 @@ export interface CouponValidateRequest {
   itemsSubtotalPaise: number;
   /** Contract 1 (MKT-8): per-restaurant item subtotals so marketplace can apply a restaurant-scoped coupon. */
   restaurantSubtotals?: { restaurantId: string; subtotalPaise: number }[];
+  /** I-2: the user's own unpaid checkouts this one would supersede — their HELD holds do not count. */
+  excludeCheckoutIds?: string[];
 }
 const CouponValidateResponseSchema = z.object({
   code: z.string().optional(),
@@ -104,6 +106,8 @@ export type CouponValidateResponse = z.output<typeof CouponValidateResponseSchem
 export interface MembershipBenefitsRequest {
   userId: string;
   children: { restaurantId: string; itemsSubtotalPaise: number; deliveryFeePaise: number }[];
+  /** I-2: free deliveries HELD by these (superseded) checkouts count as remaining. */
+  excludeCheckoutIds?: string[];
 }
 const MembershipBenefitsResponseSchema = z.object({
   membershipId: z.string().nullable().default(null),
@@ -128,6 +132,18 @@ const ReservationResponseSchema = z.object({
   expiresAt: z.string().optional(),
 });
 export type ReservationResponse = z.output<typeof ReservationResponseSchema>;
+
+export interface ReservationReleaseRequest {
+  checkoutId: string;
+  userId: string;
+  reason: string;
+}
+const ReservationReleaseResponseSchema = z.object({
+  checkoutId: z.string(),
+  released: z.boolean(),
+  status: z.string(),
+});
+export type ReservationReleaseResponse = z.output<typeof ReservationReleaseResponseSchema>;
 
 const InternalRestaurantSchema = z.object({
   id: z.string(),
@@ -159,6 +175,11 @@ export interface MarketplaceClient {
   membershipBenefits(req: MembershipBenefitsRequest): Promise<MembershipBenefitsResponse>;
   /** `POST /internal/reservations` — 409 OUT_OF_STOCK / 422 COUPON_LIMIT_REACHED (thrown); idempotent per checkoutId. */
   reserve(req: ReservationRequest): Promise<ReservationResponse>;
+  /**
+   * `POST /internal/reservations/:checkoutId/release` (I-2) — free a superseded checkout's holds now; idempotent,
+   * never touches a committed reservation. The `checkout.released` event stays the backstop.
+   */
+  releaseReservation(req: ReservationReleaseRequest): Promise<ReservationReleaseResponse>;
   /** `GET /internal/restaurants/:id` — null on 404. */
   getRestaurant(id: string): Promise<InternalRestaurant | null>;
 }
@@ -174,6 +195,8 @@ export function createMarketplaceClient(config: OrdersConfig): MarketplaceClient
     validateCoupon: (req) => http.post('/internal/coupons/validate', req, { schema: CouponValidateResponseSchema }),
     membershipBenefits: (req) => http.post('/internal/memberships/benefits', req, { schema: MembershipBenefitsResponseSchema }),
     reserve: (req) => http.post('/internal/reservations', req, { schema: ReservationResponseSchema }),
+    releaseReservation: ({ checkoutId, ...body }) =>
+      http.post(`/internal/reservations/${encodeURIComponent(checkoutId)}/release`, body, { schema: ReservationReleaseResponseSchema }),
     async getRestaurant(id) {
       try {
         return await http.get(`/internal/restaurants/${encodeURIComponent(id)}`, { schema: InternalRestaurantSchema });

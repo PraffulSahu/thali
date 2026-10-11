@@ -16,9 +16,11 @@
  * Payment safety (ORD-3): a customer can never hold two payable checkouts for the same restaurant.
  *  - Every other AWAITING_PAYMENT checkout of the user that shares a selected restaurant (any cart
  *    version) is SUPERSEDED: released as EXPIRED (`checkout.released` → marketplace frees the
- *    stock / coupon / membership holds). This happens BEFORE the new reservation (each in its own
- *    transaction) so the old holds never block the new checkout, and again inside the step-7
- *    transaction for overlaps that appeared concurrently.
+ *    stock / coupon / membership holds). This happens BEFORE the new quote (each in its own
+ *    transaction), followed by a synchronous `POST /internal/reservations/:id/release` (I-2: the event
+ *    is consumed asynchronously, too late for the quote), so the old holds do not block the new
+ *    checkout; again inside the step-7 transaction for overlaps that appeared concurrently. The
+ *    preview passes the same overlaps as `excludeCheckoutIds` to coupon validate / membership benefits.
  *  - A capture that still arrives for a superseded checkout takes the late-payment path and is
  *    refunded automatically; a capture already recorded as an amount mismatch is routed there at
  *    supersede time (`applyCapturedPayment` → `recordLatePayment`), so no captured money is stranded.
@@ -202,6 +204,8 @@ export async function quoteAndPrice(
     strictCoupon: boolean;
     /** Subset checkout with the cart's coupon: a NOT_APPLICABLE coupon is dropped (as preview reports it) instead of failing. */
     dropInapplicableCoupon?: boolean;
+    /** I-2 (preview): the user's unpaid checkouts a checkout would supersede; their holds do not count. */
+    excludeCheckoutIds?: string[];
   },
 ): Promise<QuoteAndPrice> {
   const { quote, problems, restaurants } = await quoteCart(ctx, cartLines, drop);
@@ -218,6 +222,7 @@ export async function quoteAndPrice(
         userId,
         itemsSubtotalPaise,
         restaurantSubtotals: subtotals.map((r) => ({ restaurantId: r.restaurantId, subtotalPaise: r.itemsSubtotalPaise })),
+        ...(opts.excludeCheckoutIds?.length ? { excludeCheckoutIds: opts.excludeCheckoutIds } : {}),
       });
       // re-check the scope locally: the discount may only use the eligible restaurants' items (pricing throws otherwise)
       const scope = couponScope(subtotals, v.restaurantIds);
@@ -256,6 +261,7 @@ export async function quoteAndPrice(
         itemsSubtotalPaise: r.lines.reduce((t, l) => t + lineTotal(l), 0),
         deliveryFeePaise: r.deliveryFeePaise,
       })),
+      ...(opts.excludeCheckoutIds?.length ? { excludeCheckoutIds: opts.excludeCheckoutIds } : {}),
     });
     membership = m.membershipId ? m : null;
   }
@@ -371,10 +377,15 @@ export async function previewCart(
   if (!cart || !cart.items.length) throw new DomainError('CART_EMPTY', 'Your cart is empty');
   const selection = selectCartLines(cart, body.restaurantIds);
   const drop = resolveDropAddress(cart, body);
+  // I-2: the user's own unpaid checkouts sharing a selected restaurant are superseded (or, same version + set,
+  // returned) by the checkout, so their coupon / Thali Plus holds must not make the preview report "already used"
+  const restaurantIds = [...new Set(selection.lines.map((l) => l.restaurantId))];
+  const excludeCheckoutIds = await overlappingActiveCheckouts(ctx, userId, restaurantIds, null);
   const qp = await quoteAndPrice(ctx, userId, selection.lines, dropOf(drop), {
     couponCode: body.couponCode === undefined ? cart.couponCode : body.couponCode,
     useMembership: body.useMembership ?? false,
     strictCoupon: false,
+    excludeCheckoutIds,
   });
   return {
     cartVersion: cart.cartVersion,
@@ -536,12 +547,13 @@ interface SameKey {
  * Ids of the user's AWAITING_PAYMENT checkouts (any cart version) with a child at one of
  * `restaurantIds`, except those with the new checkout's own {cartVersion, setKey}: that is a
  * duplicate submit, which `findActive` / the unique index resolve by returning the winner.
+ * `sameKey: null` (preview) keeps every overlap.
  */
 async function overlappingActiveCheckouts(
   ctx: OrdersContext,
   userId: string,
   restaurantIds: string[],
-  sameKey: SameKey,
+  sameKey: SameKey | null,
   session?: ClientSession,
 ): Promise<string[]> {
   const groupIds = await ctx.models.ChildOrder.distinct('checkoutGroupId', {
@@ -554,8 +566,9 @@ async function overlappingActiveCheckouts(
     .session(session ?? null)
     .lean();
   return groups
-    .filter((g) => !(g.cartVersion === sameKey.cartVersion && (g.restaurantSetKey ?? '*') === sameKey.setKey))
-    .map((g) => String(g._id));
+    .filter((g) => !sameKey || !(g.cartVersion === sameKey.cartVersion && (g.restaurantSetKey ?? '*') === sameKey.setKey))
+    .map((g) => String(g._id))
+    .sort();
 }
 
 /**
@@ -621,6 +634,17 @@ async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult
   const checkoutId = new Types.ObjectId();
   // release them before quoting / reserving, so their holds (stock, per-user coupon limit, membership) do not block this one
   for (const id of toSupersede) await withTransaction(ctx.conn, (session) => supersedeCheckout(ctx, session, id, String(checkoutId)));
+  // I-2: `checkout.released` reaches marketplace asynchronously (outbox relay + consumer), too late for the quote
+  // below — free the holds synchronously now. Safe: each id is committed as closed (a capture now takes the
+  // late-payment refund path), the call is idempotent and the event that follows is a no-op. Best effort: on
+  // failure the event still releases them (the new checkout may then see the old hold, as before).
+  for (const id of toSupersede) {
+    try {
+      await ctx.clients.marketplace.releaseReservation({ checkoutId: id, userId, reason: 'SUPERSEDED' });
+    } catch (err) {
+      ctx.logger.warn({ err, checkoutId: id }, 'synchronous release of a superseded checkout failed; checkout.released will release it');
+    }
+  }
 
   // 2–5: quote, coupon, membership, pricing (+ customer contact in parallel)
   const [qpRes, userRes] = await Promise.allSettled([
