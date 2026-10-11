@@ -1,5 +1,4 @@
 import '../setup';
-import './slow';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -160,6 +159,8 @@ describe('Restaurant page (board 11)', () => {
     expect(screen.getByRole('navigation', { name: /menu categories/i })).toHaveTextContent('Recommended1');
     expect(screen.getAllByText('from ₹249').length).toBeGreaterThan(0);
     expect(screen.getByText('Sold out today')).toBeInTheDocument();
+    // recommended dishes render twice (Recommended + category) but the #item- anchor exists once
+    expect(document.querySelectorAll('#item-i2')).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Unavailable' })).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: 'Add Double ka Meetha' }));
     await waitFor(() => expect(added).toBe(true));
@@ -215,7 +216,7 @@ describe('Cart dock (10-33…10-41)', () => {
     after.subtotalPaise = 92000;
     const m = mockApi({ 'GET /cart': cart, [`PATCH /cart/items/${IDS.L1}`]: () => new Promise((r) => setTimeout(() => r(after), 50)) });
     const { router } = renderWithProviders(<CartDock />, { auth: makeAuth({ roles: ['CONSUMER'] }) });
-    expect(await screen.findByText('2 carts · 4 items')).toBeInTheDocument();
+    expect(await screen.findByText('2 carts · 4 items', undefined, { timeout: 4000 })).toBeInTheDocument();
     expect(screen.getByText('2 deliveries, one payment')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /checkout · ₹680/i })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /dosa corner · ₹200/i }));
@@ -223,7 +224,7 @@ describe('Cart dock (10-33…10-41)', () => {
     expect(within(tray).getByRole('button', { name: /^dosa corner/i, pressed: true })).toBeInTheDocument();
     await userEvent.click(within(tray).getByRole('button', { name: /^all/i }));
     await userEvent.click(within(tray).getByRole('button', { name: 'Add one Paneer Tikka' }));
-    expect(await screen.findByText('2 carts · 5 items')).toBeInTheDocument(); // optimistic, then confirmed by the server cart
+    expect(await screen.findByText('2 carts · 5 items', undefined, { timeout: 4000 })).toBeInTheDocument(); // optimistic, then confirmed by the server cart
     expect(m.callsTo('PATCH', `/cart/items/${IDS.L1}`)[0]!.body).toEqual({ quantity: 3 });
     await userEvent.click(within(tray).getByRole('button', { name: /checkout only spice route/i }));
     await waitFor(() => expect(router.state.location.pathname + router.state.location.search).toBe(`/checkout?restaurant=${IDS.R1}`));

@@ -7,12 +7,29 @@ import { EmptyCart } from './parts';
 import { useCart } from './api';
 import { CartGroupSlot } from './CartLines';
 import { useDeliveryLabel } from './cartState';
+import { useAuth } from '../../lib/auth';
 import { checkoutHref, useCheckoutGate } from './CheckoutGate';
 
-export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+/**
+ * `onCheckout(href)` lets the owner (header CartButton) run the guest sign-in gate OUTSIDE the drawer, so the
+ * sign-in dialog survives the drawer closing. Without it the drawer gates itself and stays open for guests
+ * (closing it would unmount the dialog with it).
+ */
+export function CartDrawer({ open, onClose, onCheckout }: { open: boolean; onClose: () => void; onCheckout?: (href: string) => void }) {
   const cart = useCart();
   const label = useDeliveryLabel();
-  const { go, dialog } = useCheckoutGate();
+  const { isAuthenticated } = useAuth();
+  const own = useCheckoutGate();
+  const dialog = onCheckout ? null : own.dialog;
+  const checkout = (href: string) => {
+    if (onCheckout) {
+      onClose();
+      onCheckout(href);
+    } else {
+      if (isAuthenticated) onClose();
+      own.go(href);
+    }
+  };
   const c = cart.data;
   const many = (c?.groups.length ?? 0) > 1;
   return (
@@ -33,10 +50,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
               <Button
                 size="lg"
                 fullWidth
-                onClick={() => {
-                  onClose();
-                  go(checkoutHref());
-                }}
+                onClick={() => checkout(checkoutHref())}
               >
                 Proceed to checkout
               </Button>
@@ -68,10 +82,7 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
                         variant="outline"
                         size="sm"
                         className="self-start"
-                        onClick={() => {
-                          onClose();
-                          go(checkoutHref(g.restaurantId));
-                        }}
+                        onClick={() => checkout(checkoutHref(g.restaurantId))}
                       >
                         Checkout only {g.restaurantName} →
                       </Button>

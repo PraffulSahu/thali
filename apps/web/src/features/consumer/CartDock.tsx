@@ -5,7 +5,7 @@
  *          pointer, click pins it, Esc closes) · per-cart chips (open the tray on that cart) · "Checkout · ₹558 →"
  *   tray   tabs All carts / per restaurant · slots with optimistic − / + · "Checkout only {restaurant} →" (ORD-3)
  *   toast  "Added Double ka Meetha to Spice Route · hover to see all carts" for 4.5 s after an add
- * ≤640: full-width bar, chips hidden, the tray opens as a bottom sheet. Hidden while the cart is empty.
+ * ≤640: full-width bar, chips hidden (sm breakpoint), the tray opens as a bottom sheet. Hidden while the cart is empty.
  * The foundation `CartDock` renders the chips as static labels (no click), so the bar is composed here.
  */
 import { useEffect, useId, useRef, useState } from 'react';
@@ -151,7 +151,7 @@ export function CartDock({ className }: { className?: string }) {
               </span>
               <Icon name="chevron-up" size={16} className={cn('shrink-0 opacity-70 transition-transform duration-200', open && 'rotate-180')} />
             </button>
-            <ul className="hidden items-center gap-1.5 min-[721px]:flex" aria-label="Carts">
+            <ul className="hidden items-center gap-1.5 sm:flex" aria-label="Carts">
               {groups.map((g) => (
                 <li key={g.restaurantId}>
                   <button

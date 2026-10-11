@@ -62,8 +62,8 @@ function Stat({ label, children }: { label: string; children: React.ReactNode })
 }
 
 function DishRow({
-  item, inCart, lines, blocked, onAdd, adding,
-}: { item: MenuItem; inCart: number; lines: CartLine[]; blocked: string | null; onAdd: (i: MenuItem) => void; adding: boolean }) {
+  item, inCart, lines, blocked, onAdd, adding, anchor,
+}: { item: MenuItem; inCart: number; lines: CartLine[]; blocked: string | null; onAdd: (i: MenuItem) => void; adding: boolean; anchor: boolean }) {
   const { setQuantity, pendingLineId } = useLineQuantity();
   const unavailable = !item.available;
   const customizable = item.customizationGroups.length > 0;
@@ -113,7 +113,7 @@ function DishRow({
     );
   }
   return (
-    <li id={`item-${item.id}`} className={cn('flex scroll-mt-28 gap-4 border-b border-line py-[18px]', unavailable && 'opacity-55')}>
+    <li id={anchor ? `item-${item.id}` : undefined} className={cn('flex scroll-mt-28 gap-4 border-b border-line py-[18px]', unavailable && 'opacity-55')}>
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <VegMark veg={item.isVeg} />
         <h3 className="font-sans text-base font-semibold tracking-normal">{item.name}</h3>
@@ -342,6 +342,7 @@ function RestaurantView({ data }: { data: RestaurantPageData }) {
                           blocked={blocked}
                           onAdd={onAdd}
                           adding={add.isPending && add.variables?.itemId === i.id && !customizing}
+                          anchor={c.id !== 'recommended'}
                         />
                       );
                     })}

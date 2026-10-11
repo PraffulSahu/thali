@@ -21,7 +21,10 @@ import { Button, ButtonLink, Icon, ThemeToggle } from '../../components/ui';
 import { useAuth } from '../../lib/auth';
 import { cn } from '../../lib/cn';
 import { plural } from '../../lib/format';
-import { useCart, useUnreadNotifications } from './api';
+import { useQueryClient } from '@tanstack/react-query';
+import { useRealtime } from '../../hooks/useRealtime';
+import { UNREAD_KEY, useCart, useUnreadNotifications } from './api';
+import { useCheckoutGate } from './CheckoutGate';
 import { useChosenLocation } from './location';
 
 const CartDrawer = lazy(() => import('./CartDrawer'));
@@ -77,8 +80,9 @@ export function CartButton({ always }: { always?: boolean }) {
   const cart = useCart();
   const [open, setOpen] = useState(false);
   const { pathname } = useLocation();
+  const gate = useCheckoutGate();
   const count = cart.data?.itemCount ?? 0;
-  if (!count && !always) return null;
+  if (!count && !always) return gate.dialog;
   const onCartPage = pathname === '/cart' || pathname.startsWith('/checkout');
   return (
     <>
@@ -95,9 +99,10 @@ export function CartButton({ always }: { always?: boolean }) {
       </Button>
       {open ? (
         <Suspense fallback={null}>
-          <CartDrawer open onClose={() => setOpen(false)} />
+          <CartDrawer open onClose={() => setOpen(false)} onCheckout={gate.go} />
         </Suspense>
       ) : null}
+      {gate.dialog}
     </>
   );
 }
@@ -105,6 +110,9 @@ export function CartButton({ always }: { always?: boolean }) {
 /** 10-06 bell with unread dot (`GET /notifications` unreadCount). */
 export function ConsumerBell() {
   const unread = useUnreadNotifications();
+  const qc = useQueryClient();
+  // Live dot: the notifications service pushes `notification` to the user's stream; polling covers the rest.
+  useRealtime(['notification'], () => void qc.invalidateQueries({ queryKey: UNREAD_KEY }));
   return (
     <Link
       to="/notifications"

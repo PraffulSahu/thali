@@ -148,11 +148,13 @@ export function ItemCustomizer({ item, restaurantName, open, onClose, onAdd, err
       }
     >
       <div className="flex flex-col gap-[22px]">
-        <p className="-mt-2 flex items-center gap-2 text-[13px] text-fg-3">
-          <VegMark veg={item.isVeg} size={13} />
-          {restaurantName ?? (item.isVeg ? 'Veg' : 'Non-veg')}
-          {item.description ? <span className="sr-only">. {item.description}</span> : null}
-        </p>
+        <div className="-mt-2 flex flex-col gap-1.5">
+          <p className="flex items-center gap-2 text-[13px] text-fg-3">
+            <VegMark veg={item.isVeg} size={13} />
+            {restaurantName ?? (item.isVeg ? 'Veg' : 'Non-veg')}
+          </p>
+          {item.description ? <p className="text-[13.5px] leading-normal text-fg-3">{item.description}</p> : null}
+        </div>
         {item.customizationGroups.map((g) => {
           const cur = chosen[g.id] ?? [];
           const single = g.maxSelect === 1;

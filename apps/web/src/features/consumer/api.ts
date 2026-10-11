@@ -780,8 +780,8 @@ export interface AvailableCoupon {
   badgeLabel?: string | null;
 }
 /** MKT-7: optional auth — guests get every live coupon (SIGN_IN_TO_CHECK), signed-in users their applicable ones. */
-export const fetchCoupons = () =>
-  api<{ items: AvailableCoupon[] }>('/coupons/available', { auth: !!getAccessToken() }).then((r) => r.items);
+export const fetchCoupons = (signedIn: boolean) =>
+  api<{ items: AvailableCoupon[] }>('/coupons/available', { auth: signedIn }).then((r) => r.items);
 export const couponsKey = (signedIn: boolean) => ['coupons', 'available', signedIn ? 'user' : 'guest'] as const;
 
 /* ------------------------------------------------------------------ ratings (marketplace MKT-14) */
@@ -860,6 +860,7 @@ export function useUnreadNotifications(): number {
     enabled: isAuthenticated,
     staleTime: 30_000,
     refetchInterval: 60_000,
+    refetchOnWindowFocus: true,
     retry: false,
   });
   return isAuthenticated ? (q.data ?? 0) : 0;

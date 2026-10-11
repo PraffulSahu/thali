@@ -1,5 +1,4 @@
 import '../setup';
-import './slow';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -38,8 +37,8 @@ describe('MembershipPage', () => {
   it('shows the current membership from {current, history} and disables Buy with the reason', async () => {
     mockApi({ 'GET /memberships/plans': { items: [plan] }, 'GET /memberships/me': { current: membership(), history: [membership()] } });
     renderWithProviders(<MembershipPage />, { route: '/membership', path: '/membership', auth: makeAuth({ roles: ['CONSUMER'] }) });
-    const mine = await screen.findByRole('region', { name: /your membership/i });
-    await waitFor(() => expect(mine).toHaveTextContent('Thali Plus'));
+    const mine = await screen.findByRole('region', { name: /your membership/i }, { timeout: 4000 });
+    await waitFor(() => expect(mine).toHaveTextContent('Thali Plus'), { timeout: 4000 });
     expect(mine).toHaveTextContent('7 of 10 free deliveries left this plan period');
     expect(await screen.findByRole('button', { name: /your active plan/i })).toBeDisabled();
     expect(screen.getByText(/you already have an active membership until/i)).toBeInTheDocument();

@@ -137,7 +137,7 @@ function CheckoutContent() {
   const cart = useCart();
   const addresses = useAddresses();
   const chosen = useChosenLocation();
-  const coupons = useQuery({ queryKey: couponsKey(isAuthenticated), queryFn: fetchCoupons, retry: false, staleTime: 60_000 });
+  const coupons = useQuery({ queryKey: couponsKey(isAuthenticated), queryFn: () => fetchCoupons(isAuthenticated), retry: false, staleTime: 60_000 });
   const membership = useQuery({ queryKey: MEMBERSHIP_KEY, queryFn: fetchMyMemberships, retry: false });
   const { launch, opening, error: launchError } = usePaymentLauncher();
   const compact = useMediaQuery('(max-width: 1023px)', false);
@@ -320,6 +320,11 @@ function CheckoutContent() {
                   Check out everything
                 </Link>
               </span>
+            </InfoNotice>
+          ) : null}
+          {onlyRestaurant && !subsetValid ? (
+            <InfoNotice tone="warn" icon="info" role="status">
+              That restaurant isn&rsquo;t in your cart — showing the whole cart.
             </InfoNotice>
           ) : null}
           {conflict?.reason === 'CHECKOUT_ALREADY_PAID' ? (

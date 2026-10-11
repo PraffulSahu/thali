@@ -1,5 +1,4 @@
 import '../setup';
-import './slow';
 import { screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import OrdersPage from '../../src/features/consumer/OrdersPage';

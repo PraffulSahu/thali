@@ -69,11 +69,15 @@ const RIDER_STATUSES = new Set(['ASSIGNED', 'AT_PICKUP', 'PICKED_UP', 'OUT_FOR_D
 const STEP_STATUS = ['PLACED', 'ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKED_UP', 'OUT_FOR_DELIVERY', 'DELIVERED'];
 const rupees = (p: number) => formatINR(p);
 
-/** Amount of this part's refund: the explanation's `refundPaise` (server), else the child's `refundRequestedPaise`. */
+/**
+ * Refund amount still to show for this part: refunded total once SUCCEEDED; while pending, what is still on its
+ * way (requested − already refunded, i.e. the remaining part of a partial refund), else the full request.
+ * `requested` = the explanation's `refundPaise` (server), else the child's `refundRequestedPaise`.
+ */
 export function childRefundAmount(c: ChildOrder, explanation?: OrderExplanation): number {
   const requested = explanation?.refundPaise ?? c.refundRequestedPaise ?? 0;
   if (c.refundStatus === 'SUCCEEDED') return c.refundedPaise || requested;
-  return requested || Math.max(0, c.refundedPaise ?? 0);
+  return Math.max(0, requested - (c.refundedPaise ?? 0)) || requested;
 }
 
 function riderAssigned(c: ChildOrder): boolean {
@@ -145,7 +149,10 @@ function RefundProgress({ child, amount }: { child: ChildOrder; amount: number }
   const current = child.refundStatus === 'SUCCEEDED' ? 3 : 1;
   return (
     <div className="flex min-w-0 flex-[1_1_300px] flex-col gap-2.5">
-      <span className="text-[13px] font-medium">Refund {rupees(amount)}</span>
+      <span className="text-[13px] font-medium">
+        Refund {rupees(amount)}
+        {child.refundStatus !== 'SUCCEEDED' && (child.refundedPaise ?? 0) > 0 ? <span className="font-normal text-fg-3"> still to come · {rupees(child.refundedPaise)} already refunded</span> : null}
+      </span>
       <Stepper
         label={`Refund ${rupees(amount)}`}
         tone="refund"

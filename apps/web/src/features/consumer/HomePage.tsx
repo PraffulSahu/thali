@@ -87,12 +87,13 @@ function CuisineBand({ cuisines, facets, selected, onSelect }: { cuisines: Cuisi
           </div>
         </div>
         <div ref={ref} onScroll={measure} role="list" aria-label="Cuisines" className="no-scrollbar flex snap-x gap-[18px] overflow-x-auto px-0.5 pb-1.5 pt-1 max-sm:gap-4">
-          <div role="listitem" className="contents">
+          <div role="listitem" className="flex shrink-0 snap-start">
             <CuisineCircle slug="all" label="All" selected={!selected} onClick={() => onSelect(null)} index={0} />
           </div>
           {cuisines.map((c, i) => (
-            <div role="listitem" key={c.id} className="contents" aria-label={label(c)}>
+            <div role="listitem" key={c.id} className="relative flex shrink-0 snap-start">
               <CuisineCircle slug={c.slug} label={c.name} imageUrl={c.imageUrl} selected={selected === c.slug} onClick={() => onSelect(selected === c.slug ? null : c.slug)} index={i + 1} />
+              {label(c) ? <span className="sr-only">{label(c)!.slice(c.name.length)}</span> : null}
             </div>
           ))}
         </div>

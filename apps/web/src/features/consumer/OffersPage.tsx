@@ -91,7 +91,7 @@ export default function OffersPage() {
   const { isAuthenticated } = useAuth();
   const cart = useCart();
   const [login, setLogin] = useState(false);
-  const q = useQuery({ queryKey: couponsKey(isAuthenticated), queryFn: fetchCoupons, staleTime: 60_000 });
+  const q = useQuery({ queryKey: couponsKey(isAuthenticated), queryFn: () => fetchCoupons(isAuthenticated), staleTime: 60_000 });
   const hasCart = (cart.data?.itemCount ?? 0) > 0;
   return (
     <div className="mx-auto flex w-full max-w-[1200px] flex-col gap-6 px-6 pb-12 pt-8 max-sm:px-4">
