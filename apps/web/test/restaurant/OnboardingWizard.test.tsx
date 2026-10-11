@@ -98,7 +98,7 @@ describe('OnboardingWizard: review and submit', () => {
     expect(screen.queryByText(/verify your business email/i)).not.toBeInTheDocument();
     await user.click(submit);
 
-    expect(await screen.findByRole('heading', { name: /verify your business email/i })).toBeInTheDocument();
+    expect(await screen.findByText('Verify your business email')).toBeInTheDocument();
     expect(screen.getByText('owner@spiceroute.test')).toBeInTheDocument();
     expect(api.find('POST', /submit/)).toHaveLength(1);
     // the server sent the email just now: resend is on cooldown

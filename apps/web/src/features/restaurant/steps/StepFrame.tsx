@@ -31,12 +31,12 @@ export function StepFrame({ title, description, children, onSubmit, submitLabel 
   return (
     <form onSubmit={submit} noValidate className="flex flex-col gap-5">
       <div>
-        <h2 className="text-lg font-semibold text-slate-900">{title}</h2>
-        {description ? <p className="mt-1 text-[0.9375rem] text-slate-600">{description}</p> : null}
+        <h2 className="text-[22px] leading-tight text-fg">{title}</h2>
+        {description ? <p className="mt-1 text-[14.5px] text-fg-3">{description}</p> : null}
       </div>
       {children}
       <InlineError error={error} />
-      <FormActions sticky start={onBack ? <Button variant="secondary" onClick={onBack}>{backLabel}</Button> : undefined}>
+      <FormActions sticky start={onBack ? <Button variant="outline" onClick={onBack}>{backLabel}</Button> : undefined}>
         <Button type="submit" loading={submitting}>
           {submitLabel}
         </Button>

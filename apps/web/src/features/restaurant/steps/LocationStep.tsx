@@ -5,6 +5,7 @@ import { Button, Field, Input, Skeleton } from '../../../components/ui';
 import { useGeolocation, GEO_MESSAGES } from '../../../hooks/useGeolocation';
 import { fieldErrors } from '../../../lib/errors';
 import { DEFAULT_CENTER, roundGeo, type GeoPoint } from '../../../lib/geo';
+import { reverseGeocode } from '../../../lib/places';
 import { restaurantApi } from '../api';
 import { StepFrame, type StepProps } from './StepFrame';
 
@@ -15,6 +16,8 @@ const PINCODE = /^[1-9][0-9]{5}$/;
 export interface LocationValues {
   line1: string;
   line2: string;
+  /** MKT-5 neighbourhood shown next to the name ("Indiranagar"). */
+  locality: string;
   city: string;
   pincode: string;
   pin: GeoPoint | null;
@@ -24,6 +27,7 @@ export interface LocationValues {
 export function validateLocation(v: LocationValues): Record<string, string> {
   const e: Record<string, string> = {};
   if (!v.line1.trim()) e.line1 = 'Enter the street address.';
+  if (v.locality.trim().length > 60) e.locality = 'Use 60 characters or fewer.';
   if (!v.city.trim()) e.city = 'Enter the city.';
   if (!PINCODE.test(v.pincode.trim())) e.pincode = 'Enter a valid 6-digit pincode.';
   if (!v.pin) e.pin = 'Drop a pin on the map so riders can find you.';
@@ -37,6 +41,7 @@ export function LocationStep({ restaurant, onSaved, next, back }: StepProps) {
   const [v, setV] = useState<LocationValues>(() => ({
     line1: restaurant?.address?.line1 ?? '',
     line2: restaurant?.address?.line2 ?? '',
+    locality: restaurant?.address?.locality ?? '',
     city: restaurant?.address?.city ?? '',
     pincode: restaurant?.address?.pincode ?? '',
     pin: restaurant?.location ?? null,
@@ -47,7 +52,13 @@ export function LocationStep({ restaurant, onSaved, next, back }: StepProps) {
   const save = useMutation({
     mutationFn: () =>
       restaurantApi.patch(restaurant!.id, {
-        address: { line1: v.line1.trim(), ...(v.line2.trim() ? { line2: v.line2.trim() } : {}), city: v.city.trim(), pincode: v.pincode.trim() },
+        address: {
+          line1: v.line1.trim(),
+          ...(v.line2.trim() ? { line2: v.line2.trim() } : {}),
+          ...(v.locality.trim() ? { locality: v.locality.trim() } : {}),
+          city: v.city.trim(),
+          pincode: v.pincode.trim(),
+        },
         location: v.pin!,
         deliveryRadiusKm: Number(v.radius),
       }),
@@ -60,9 +71,28 @@ export function LocationStep({ restaurant, onSaved, next, back }: StepProps) {
   const err = (k: string, serverKey = k) => (show ? errors[k] : undefined) ?? server[serverKey];
   const set = <K extends keyof LocationValues>(k: K, val: LocationValues[K]) => setV((p) => ({ ...p, [k]: val }));
 
+  // fill empty locality / city / pincode from the pin (MKT-1 reverse geocode); never overwrites typed values
+  const prefill = async (p: GeoPoint) => {
+    try {
+      const rev = await reverseGeocode(p);
+      setV((prev) => ({
+        ...prev,
+        locality: prev.locality || rev.locality || '',
+        city: prev.city || rev.city || '',
+        pincode: prev.pincode || rev.pincode || '',
+      }));
+    } catch {
+      /* best effort: the owner can type them */
+    }
+  };
+  const pick = (p: GeoPoint) => {
+    const pin = roundGeo(p);
+    set('pin', pin);
+    void prefill(pin);
+  };
   const useMyLocation = async () => {
     const fix = await geo.request();
-    if (fix) set('pin', roundGeo({ lat: fix.lat, lng: fix.lng }));
+    if (fix) pick({ lat: fix.lat, lng: fix.lng });
   };
 
   return (
@@ -86,7 +116,10 @@ export function LocationStep({ restaurant, onSaved, next, back }: StepProps) {
       <Field label="Address line 2" optional>
         <Input value={v.line2} onChange={(e) => set('line2', e.target.value)} autoComplete="address-line2" />
       </Field>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Field label="Locality" optional hint="e.g. Indiranagar" error={err('locality', 'address.locality')}>
+          <Input value={v.locality} onChange={(e) => set('locality', e.target.value)} maxLength={60} autoComplete="address-level3" />
+        </Field>
         <Field label="City" required error={err('city', 'address.city')}>
           <Input value={v.city} onChange={(e) => set('city', e.target.value)} autoComplete="address-level2" />
         </Field>
@@ -97,10 +130,10 @@ export function LocationStep({ restaurant, onSaved, next, back }: StepProps) {
 
       <div className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-medium text-slate-800">
-            Map pin<span aria-hidden="true" className="ml-0.5 text-danger-700">*</span>
+          <p className="text-sm font-medium text-fg">
+            Map pin<span aria-hidden="true" className="ml-0.5 text-bad">*</span>
           </p>
-          <Button variant="secondary" size="sm" icon="crosshair" onClick={() => void useMyLocation()} loading={geo.status === 'locating'}>
+          <Button variant="outline" size="sm" icon="crosshair" onClick={() => void useMyLocation()} loading={geo.status === 'locating'}>
             Use my current location
           </Button>
         </div>
@@ -108,19 +141,19 @@ export function LocationStep({ restaurant, onSaved, next, back }: StepProps) {
           <MapView
             center={v.pin ?? DEFAULT_CENTER}
             picked={v.pin}
-            onPick={(p) => set('pin', roundGeo(p))}
+            onPick={pick}
             ariaLabel="Choose your restaurant location"
             zoom={v.pin ? 16 : 12}
           />
         </Suspense>
         {geo.status === 'denied' || geo.status === 'unavailable' || geo.status === 'timeout' || geo.status === 'unsupported' ? (
-          <p role="status" className="text-sm text-slate-600">{GEO_MESSAGES[geo.status]}</p>
+          <p role="status" className="text-sm text-fg-3">{GEO_MESSAGES[geo.status]}</p>
         ) : null}
-        <p aria-live="polite" className="text-sm text-slate-600">
+        <p aria-live="polite" className="text-sm text-fg-3">
           {v.pin ? `Pin set at ${v.pin.lat}, ${v.pin.lng}. Tap the map to move it.` : 'Tap the map to drop your pin.'}
         </p>
         {err('pin', 'location') ? (
-          <p role="alert" className="text-sm font-medium text-danger-700">{err('pin', 'location')}</p>
+          <p role="alert" className="text-sm font-medium text-bad">{err('pin', 'location')}</p>
         ) : null}
       </div>
 

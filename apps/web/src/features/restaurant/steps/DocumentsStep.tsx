@@ -32,7 +32,7 @@ export function DocumentsStep({ restaurant, onSaved, next, back }: StepProps) {
       onSubmit={next}
     >
       {missing.length > 0 ? (
-        <p role="status" className="text-sm text-slate-600">
+        <p role="status" className="text-sm text-fg-3">
           Still needed before you can submit: {missing.map((m) => m.label).join(', ')}.
         </p>
       ) : null}
@@ -43,8 +43,8 @@ export function DocumentsStep({ restaurant, onSaved, next, back }: StepProps) {
             <li key={d.type}>
               <Card padding="sm" className="flex flex-col gap-2">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h3 className="text-base font-semibold text-slate-900">
-                    {d.label} {d.required ? <span className="text-sm font-normal text-slate-600">(required)</span> : <span className="text-sm font-normal text-slate-600">(optional)</span>}
+                  <h3 className="font-sans text-[15px] font-semibold tracking-normal text-fg">
+                    {d.label} {d.required ? <span className="text-sm font-normal text-fg-3">(required)</span> : <span className="text-sm font-normal text-fg-3">(optional)</span>}
                   </h3>
                   {doc ? (
                     <Badge tone={doc.verified ? 'success' : 'info'} icon={doc.verified ? 'check' : 'clock'}>
@@ -54,7 +54,7 @@ export function DocumentsStep({ restaurant, onSaved, next, back }: StepProps) {
                     <Badge tone={d.required ? 'warn' : 'neutral'}>Not uploaded</Badge>
                   )}
                 </div>
-                {doc?.uploadedAt ? <p className="text-sm text-slate-600">Uploaded {formatDate(doc.uploadedAt)}</p> : null}
+                {doc?.uploadedAt ? <p className="text-sm text-fg-3">Uploaded {formatDate(doc.uploadedAt)}</p> : null}
                 <FilePicker label={d.label} purpose="DOCUMENT" buttonLabel={doc ? `Replace ${d.label}` : `Upload ${d.label}`} onPick={upload(d.type, d.label)} />
               </Card>
             </li>

@@ -59,10 +59,10 @@ export function SettlementStep({ restaurant, onSaved, next, back }: StepProps) {
       {existing && !editing ? (
         <Card tone="muted" padding="sm" className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <p className="font-medium text-slate-900">{existing.accountHolder}</p>
-            <p className="text-sm text-slate-600">Account ending {existing.last4} · IFSC {existing.ifsc}</p>
+            <p className="font-medium text-fg">{existing.accountHolder}</p>
+            <p className="text-sm text-fg-3">Account ending {existing.last4} · IFSC {existing.ifsc}</p>
           </div>
-          <button type="button" className="text-sm font-semibold text-brand-700 underline-offset-4 hover:underline" onClick={() => setEditing(true)}>
+          <button type="button" className="text-sm font-semibold text-acc-fg underline-offset-4 hover:underline" onClick={() => setEditing(true)}>
             Replace details
           </button>
         </Card>

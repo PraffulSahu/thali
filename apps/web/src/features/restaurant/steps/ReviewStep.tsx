@@ -13,10 +13,10 @@ function Row({ label, children, step, base }: { label: string; children: ReactNo
   return (
     <div className="flex flex-wrap items-start justify-between gap-2 py-2">
       <div className="min-w-0">
-        <dt className="text-sm text-slate-600">{label}</dt>
-        <dd className="text-[0.9375rem] text-slate-900">{children}</dd>
+        <dt className="text-sm text-fg-3">{label}</dt>
+        <dd className="text-[14.5px] text-fg">{children}</dd>
       </div>
-      <Link to={`${base}?step=${step}`} className="text-sm font-semibold text-brand-700 underline-offset-4 hover:underline" aria-label={`Edit ${label}`}>
+      <Link to={`${base}?step=${step}`} className="text-sm font-semibold text-acc-fg underline-offset-4 hover:underline" aria-label={`Edit ${label}`}>
         Edit
       </Link>
     </div>
@@ -49,18 +49,18 @@ export function ReviewStep({ restaurant, onSaved, back }: StepProps) {
   return (
     <div className="flex flex-col gap-5">
       <div>
-        <h2 className="text-lg font-semibold text-slate-900">Review and submit</h2>
-        <p className="mt-1 text-[0.9375rem] text-slate-600">
+        <h2 className="text-[22px] leading-tight text-fg">Review and submit</h2>
+        <p className="mt-1 text-[14.5px] text-fg-3">
           We&rsquo;ll email a verification link to {r.businessEmail ?? 'your business email'}. After you verify it, our team reviews your restaurant.
         </p>
       </div>
 
       <Card>
         <CardHeader title="Your details" />
-        <dl className="divide-y divide-slate-100">
+        <dl className="divide-y divide-line">
           <Row label="Restaurant" step="business" base={base}>
             {r.name}
-            {r.businessName ? <span className="block text-sm text-slate-600">{r.businessName}</span> : null}
+            {r.businessName ? <span className="block text-sm text-fg-3">{r.businessName}</span> : null}
           </Row>
           <Row label="Contact" step="business" base={base}>
             {r.phone ? formatPhone(r.phone) : 'Not set'} · {r.businessEmail ?? 'No email'}
@@ -68,7 +68,7 @@ export function ReviewStep({ restaurant, onSaved, back }: StepProps) {
           <Row label="Cuisines" step="business" base={base}>{r.cuisines.length ? r.cuisines.join(', ') : 'Not set'}</Row>
           <Row label="Address" step="location" base={base}>
             {r.address ? `${r.address.line1}${r.address.line2 ? `, ${r.address.line2}` : ''}, ${r.address.city} ${r.address.pincode}` : 'Not set'}
-            {r.location ? <span className="block text-sm text-slate-600">Pin set · delivers within {r.deliveryRadiusKm} km</span> : null}
+            {r.location ? <span className="block text-sm text-fg-3">Pin set · delivers within {r.deliveryRadiusKm} km</span> : null}
           </Row>
           <Row label="Opening hours" step="hours" base={base}>
             {r.hours.length ? (
@@ -87,13 +87,13 @@ export function ReviewStep({ restaurant, onSaved, back }: StepProps) {
       {canSubmit && missing.length > 0 ? (
         <Card tone="warn">
           <div role="status">
-          <h3 className="text-base font-semibold text-warn-800">Complete these before submitting</h3>
+          <h3 className="font-sans text-[15px] font-semibold tracking-normal text-warn">Complete these before submitting</h3>
           <ul className="mt-2 flex flex-col gap-1">
             {missing.map((m) => (
-              <li key={m.key} className="flex flex-wrap items-center gap-2 text-[0.9375rem]">
+              <li key={m.key} className="flex flex-wrap items-center gap-2 text-[14.5px]">
                 <Badge tone="warn">{STEP_LABEL[m.step] ?? m.step}</Badge>
                 <span>{m.label}</span>
-                <Link to={`${base}?step=${m.step}`} className="text-sm font-semibold text-brand-700 underline-offset-4 hover:underline">Fix</Link>
+                <Link to={`${base}?step=${m.step}`} className="text-sm font-semibold text-acc-fg underline-offset-4 hover:underline">Fix</Link>
               </li>
             ))}
           </ul>
@@ -102,14 +102,14 @@ export function ReviewStep({ restaurant, onSaved, back }: StepProps) {
       ) : null}
 
       {serverMissing.length > 0 ? (
-        <p role="alert" className="text-sm font-medium text-danger-700">The server says these are still missing: {serverMissing.join(', ')}.</p>
+        <p role="alert" className="text-sm font-medium text-bad">The server says these are still missing: {serverMissing.join(', ')}.</p>
       ) : (
         <InlineError error={submit.error} />
       )}
 
       {canSubmit ? (
         <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-          <Button variant="secondary" onClick={back}>Back</Button>
+          <Button variant="outline" onClick={back}>Back</Button>
           <Button onClick={() => submit.mutate()} loading={submit.isPending} disabled={missing.length > 0} aria-describedby={missing.length ? 'submit-blocked' : undefined}>
             {r.status === 'REJECTED' ? 'Resubmit for review' : 'Submit for review'}
           </Button>
@@ -117,7 +117,7 @@ export function ReviewStep({ restaurant, onSaved, back }: StepProps) {
         </div>
       ) : (
         <div className="flex flex-col gap-2 sm:flex-row sm:justify-between">
-          <Button variant="secondary" onClick={back}>Back</Button>
+          <Button variant="outline" onClick={back}>Back</Button>
           <ButtonLink to="/restaurant">Go to dashboard</ButtonLink>
         </div>
       )}

@@ -3,10 +3,10 @@ import { useMutation, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
 import { tryNormalizePhone } from '@thali/contracts';
-import { Button, Checkbox, ErrorState, Field, Input, Textarea, useToast } from '../../../components/ui';
+import { Button, Checkbox, ErrorState, Field, Input, Switch, Textarea, useToast } from '../../../components/ui';
 import { api } from '../../../lib/api';
 import { useAuth } from '../../../lib/auth';
-import { errorMessage, fieldErrors } from '../../../lib/errors';
+import { ApiError, errorMessage, fieldErrors } from '../../../lib/errors';
 import { keys, restaurantApi, type OwnerRestaurant, type RestaurantPatch } from '../api';
 import { StepFrame, type StepProps } from './StepFrame';
 
@@ -17,6 +17,8 @@ export interface BusinessValues {
   cuisines: string[];
   phone: string;
   businessEmail: string;
+  /** MKT-4 owner-declared pure-veg kitchen. */
+  pureVeg: boolean;
 }
 
 export function businessFrom(r: OwnerRestaurant | undefined): BusinessValues {
@@ -27,6 +29,7 @@ export function businessFrom(r: OwnerRestaurant | undefined): BusinessValues {
     cuisines: r?.cuisines ?? [],
     phone: r?.phone ?? '',
     businessEmail: r?.businessEmail ?? '',
+    pureVeg: Boolean(r?.pureVeg),
   };
 }
 
@@ -48,8 +51,9 @@ export function validateBusiness(v: BusinessValues): Record<string, string> {
   return e;
 }
 
-function toPatch(v: BusinessValues): RestaurantPatch & { name: string } {
+function toPatch(v: BusinessValues, prev?: OwnerRestaurant): RestaurantPatch & { name: string } {
   return {
+    ...(v.pureVeg !== Boolean(prev?.pureVeg) ? { pureVeg: v.pureVeg } : {}),
     businessName: v.businessName.trim(),
     name: v.name.trim(),
     description: v.description.trim(),
@@ -82,7 +86,7 @@ export function BusinessStep({ restaurant, onSaved, next }: StepProps) {
 
   const save = useMutation({
     mutationFn: async () => {
-      const body = toPatch(v);
+      const body = toPatch(v, restaurant);
       if (restaurant) return restaurantApi.patch(restaurant.id, body);
       const res = await restaurantApi.create(body);
       setCreated(res.restaurant);
@@ -139,7 +143,13 @@ export function BusinessStep({ restaurant, onSaved, next }: StepProps) {
       description={restaurant ? undefined : 'Tell us about your restaurant or cloud kitchen. You can come back and finish later.'}
       submitting={save.isPending || refresh.isPending}
       submitLabel={restaurant ? 'Save and continue' : 'Create restaurant and continue'}
-      error={save.isError && Object.keys(serverErrors).length === 0 ? save.error : null}
+      error={
+        save.error instanceof ApiError && save.error.code === 'PURE_VEG_VIOLATION'
+          ? new Error('Your menu still has non-veg items or options. Make them vegetarian (or remove them) before declaring a pure-veg kitchen.')
+          : save.isError && Object.keys(serverErrors).length === 0
+            ? save.error
+            : null
+      }
       onSubmit={() => {
         if (Object.keys(clientErrors).length > 0) {
           setShowErrors(true);
@@ -159,14 +169,14 @@ export function BusinessStep({ restaurant, onSaved, next }: StepProps) {
       </Field>
 
       <fieldset aria-invalid={err('cuisines') ? true : undefined} aria-describedby={err('cuisines') ? 'cuisines-error' : undefined}>
-        <legend className="mb-1 text-sm font-medium text-slate-800">
-          Cuisines<span aria-hidden="true" className="ml-0.5 text-danger-700">*</span>
+        <legend className="mb-1 text-sm font-medium text-fg">
+          Cuisines<span aria-hidden="true" className="ml-0.5 text-bad">*</span>
         </legend>
-        {cuisines.isPending ? <p className="text-sm text-slate-600" role="status">Loading cuisines…</p> : null}
+        {cuisines.isPending ? <p className="text-sm text-fg-3" role="status">Loading cuisines…</p> : null}
         {cuisines.isError ? (
-          <div className="flex flex-wrap items-center gap-3 text-sm text-danger-700" role="alert">
+          <div className="flex flex-wrap items-center gap-3 text-sm text-bad" role="alert">
             {errorMessage(cuisines.error)}
-            <Button variant="secondary" size="sm" onClick={() => void cuisines.refetch()}>Retry</Button>
+            <Button variant="outline" size="sm" onClick={() => void cuisines.refetch()}>Retry</Button>
           </div>
         ) : null}
         <div className="grid gap-x-4 sm:grid-cols-2">
@@ -180,7 +190,7 @@ export function BusinessStep({ restaurant, onSaved, next }: StepProps) {
           ))}
         </div>
         {err('cuisines') ? (
-          <p id="cuisines-error" role="alert" className="mt-1 text-sm font-medium text-danger-700">
+          <p id="cuisines-error" role="alert" className="mt-1 text-sm font-medium text-bad">
             {err('cuisines')}
           </p>
         ) : null}
@@ -197,6 +207,12 @@ export function BusinessStep({ restaurant, onSaved, next }: StepProps) {
       >
         <Input type="email" inputMode="email" autoComplete="email" value={v.businessEmail} onChange={(e) => set('businessEmail', e.target.value)} />
       </Field>
+      <Switch
+        label="Pure veg kitchen"
+        description="Only vegetarian items and options. Customers see a Pure veg badge and every dish must be veg."
+        checked={v.pureVeg}
+        onChange={(e) => set('pureVeg', e.target.checked)}
+      />
     </StepFrame>
   );
 }

@@ -27,20 +27,20 @@ export function MediaStep({ restaurant, onSaved, next, back }: StepProps) {
       onSubmit={next}
     >
       <Card padding="sm" className="flex flex-col gap-3">
-        <h3 className="text-base font-semibold text-slate-900">Cover image</h3>
+        <h3 className="font-sans text-[15px] font-semibold tracking-normal text-fg">Cover image</h3>
         {restaurant?.images.coverUrl ? (
           <img src={restaurant.images.coverUrl} alt="Current cover" className="h-40 w-full rounded-control object-cover" />
         ) : (
-          <p className="text-sm text-slate-600">No cover image yet.</p>
+          <p className="text-sm text-fg-3">No cover image yet.</p>
         )}
         <FilePicker label="Cover image" purpose="IMAGE" buttonLabel={restaurant?.images.coverUrl ? 'Replace cover image' : 'Upload cover image'} onPick={upload('cover')} />
       </Card>
       <Card padding="sm" className="flex flex-col gap-3">
-        <h3 className="text-base font-semibold text-slate-900">Logo</h3>
+        <h3 className="font-sans text-[15px] font-semibold tracking-normal text-fg">Logo</h3>
         {restaurant?.images.logoUrl ? (
           <img src={restaurant.images.logoUrl} alt="Current logo" className="size-24 rounded-control object-cover" />
         ) : (
-          <p className="text-sm text-slate-600">No logo yet.</p>
+          <p className="text-sm text-fg-3">No logo yet.</p>
         )}
         <FilePicker label="Logo" purpose="IMAGE" buttonLabel={restaurant?.images.logoUrl ? 'Replace logo' : 'Upload logo'} onPick={upload('logo')} />
       </Card>
