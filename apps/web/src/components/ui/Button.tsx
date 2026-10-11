@@ -38,24 +38,24 @@ export type ButtonSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl';
 export type ButtonShape = 'pill' | 'block';
 
 const base =
-  'inline-flex items-center justify-center gap-2 font-bold leading-none whitespace-nowrap select-none border border-transparent ' +
+  'inline-flex items-center justify-center gap-2 font-bold leading-none whitespace-nowrap select-none border ' +
   'transition-[transform,background-color,color,border-color,box-shadow,opacity] duration-150 ' +
   'disabled:cursor-not-allowed disabled:opacity-45 aria-disabled:cursor-not-allowed aria-disabled:opacity-45 ' +
   '[@media(pointer:coarse)]:min-h-touch';
 
 const variants: Record<ButtonVariant, string> = {
-  primary: 'bg-pri text-pri-fg shadow-pri not-disabled:hover:bg-pri-h',
+  primary: 'border-transparent bg-pri text-pri-fg shadow-pri not-disabled:hover:bg-pri-h',
   secondary: 'bg-card text-fg border-line not-disabled:hover:border-line-2',
   outline: 'bg-card text-fg border-line not-disabled:hover:border-line-2',
   tonal:
-    'bg-acc-soft text-acc-fg not-disabled:hover:bg-[color-mix(in_srgb,var(--acc-soft),var(--acc)_8%)]',
-  ghost: 'bg-transparent text-fg-2 not-disabled:hover:bg-fill not-disabled:hover:text-fg aria-[current=page]:bg-fill aria-[current=page]:text-fg',
-  dark: 'bg-[#141414] text-white not-disabled:hover:-translate-y-px',
-  'on-chili': 'bg-white text-[#a8320b] not-disabled:hover:-translate-y-px',
+    'border-transparent bg-acc-soft text-acc-fg not-disabled:hover:bg-[color-mix(in_srgb,var(--acc-soft),var(--acc)_8%)]',
+  ghost: 'border-transparent bg-transparent text-fg-2 not-disabled:hover:bg-fill not-disabled:hover:text-fg aria-[current=page]:bg-fill aria-[current=page]:text-fg',
+  dark: 'border-transparent bg-[#141414] text-white not-disabled:hover:-translate-y-px',
+  'border-transparent on-chili': 'bg-white text-[#a8320b] not-disabled:hover:-translate-y-px',
   'on-chili-outline': 'bg-transparent text-white border-white/50 not-disabled:hover:border-white',
-  'on-ink': 'bg-[#ffc145] text-[#141414] not-disabled:hover:-translate-y-px',
+  'border-transparent on-ink': 'bg-[#ffc145] text-[#141414] not-disabled:hover:-translate-y-px',
   'on-ink-outline': 'bg-transparent text-white border-white/35 not-disabled:hover:border-white/70',
-  danger: 'bg-bad text-bg not-disabled:hover:opacity-90',
+  danger: 'border-transparent bg-bad text-bg not-disabled:hover:opacity-90',
   'danger-outline': 'bg-card text-bad border-line not-disabled:hover:border-bad',
   link: 'border-0 bg-transparent px-0! h-auto! min-h-0! font-medium text-fg underline underline-offset-2 hover:text-acc-fg',
   'link-accent': 'border-0 bg-transparent px-0! h-auto! min-h-0! font-extrabold text-acc-fg hover:underline underline-offset-4',
