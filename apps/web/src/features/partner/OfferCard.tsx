@@ -129,8 +129,8 @@ export function OfferCard({ offer, activeCount, closed = null, busy = null, acce
               {batch.eligible ? 'Fits with your current delivery' : 'Doesn’t fit your current delivery'}
             </span>
             <ul className="flex flex-col gap-1.5">
-              {reasons.map((r) => (
-                <li key={r.text} className={cn('font-mono text-[12.5px]', r.ok ? 'text-ok' : 'text-bad')}>
+              {reasons.map((r, i) => (
+                <li key={`${i}-${r.text}`} className={cn('font-mono text-[12.5px]', r.ok ? 'text-ok' : 'text-bad')}>
                   <span aria-hidden="true">{r.ok ? '✓' : '✗'} </span>
                   <span className="sr-only">{r.ok ? 'Passes: ' : 'Fails: '}</span>
                   {r.text}
@@ -145,12 +145,13 @@ export function OfferCard({ offer, activeCount, closed = null, busy = null, acce
         {isNew ? (
           <>
             <div className="grid grid-cols-[1fr_2fr] gap-2">
-              <Button variant="outline" shape="block" className="h-[50px] border-line! not-disabled:hover:border-line-2!" onClick={() => onDecline(offer)} disabled={busy !== null} loading={busy === 'decline'}>
+              <Button variant="outline" shape="block" className="h-[50px]" onClick={() => onDecline(offer)} disabled={busy !== null} loading={busy === 'decline'}>
                 Decline
               </Button>
               <Button
                 shape="block"
-                className="h-[50px] bg-acc text-[15px] text-white shadow-none! not-disabled:hover:bg-acc dark:text-[#121212]"
+                variant="primary"
+                className="h-[50px] text-[15px]"
                 onClick={() => onAccept(offer)}
                 disabled={busy !== null || Boolean(acceptDisabledReason)}
                 loading={busy === 'accept'}

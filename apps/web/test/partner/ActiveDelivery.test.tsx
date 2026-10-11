@@ -1,6 +1,7 @@
 import '../setup';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActiveDelivery } from '../../src/features/partner/ActiveDelivery';
 import { renderWithProviders } from '../utils';
@@ -16,6 +17,17 @@ function stub(routes: Parameters<typeof routeFetch>[0]) {
 }
 beforeEach(() => dial.mockReset());
 afterEach(() => vi.unstubAllGlobals());
+
+function Harness() {
+  const [left, setLeft] = useState(5);
+  return (
+    <>
+      <button type="button" onClick={() => setLeft(1)}>refetch</button>
+      <button type="button" onClick={() => setLeft(5)}>stale</button>
+      <ActiveDelivery job={job({ status: 'AT_PICKUP', codeAttemptsRemaining: left })} />
+    </>
+  );
+}
 
 const typeCode = async (code: string) => {
   const boxes = screen.getAllByRole('textbox', { name: /digit/i });
@@ -66,6 +78,19 @@ describe('ActiveDelivery (board 30)', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Wrong code · 2 attempts left');
     expect(spy).toHaveBeenCalledWith({ queryKey: ['partner', 'active'] });
     expect(screen.getAllByRole('textbox', { name: /digit/i }).every((b) => (b as HTMLInputElement).value === '')).toBe(true);
+  });
+
+  it('the wrong-code message survives the refetch that lowers codeAttemptsRemaining', async () => {
+    stub({ 'POST /deliveries/job1/pickup': () => apiError(400, 'DELIVERY_CODE_INVALID', 'Wrong pickup code', { attemptsRemaining: 1 }) });
+    renderWithProviders(<Harness />);
+    await typeCode('1234');
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm pickup' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Wrong code · 1 attempt left');
+    await userEvent.click(screen.getByRole('button', { name: 'refetch' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Wrong code · 1 attempt left');
+    // a stale refetch (still 5) never raises the count shown
+    await userEvent.click(screen.getByRole('button', { name: 'stale' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('1 attempt left');
   });
 
   it('423 locks code entry with a support message', async () => {

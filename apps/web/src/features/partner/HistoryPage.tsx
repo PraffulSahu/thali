@@ -15,7 +15,9 @@ import { listHistory, type PartnerJob } from './api';
 import { dropTitle } from './format';
 
 function HistoryRow({ job }: { job: PartnerJob }) {
-  const when = job.deliveredAt ?? job.pickedUpAt ?? job.assignedAt ?? job.createdAt;
+  // Only DELIVERED has a finish time; the API has no failed/cancelled-at, so those rows show when the job was assigned.
+  const delivered = Boolean(job.deliveredAt);
+  const when = job.deliveredAt ?? job.assignedAt ?? job.createdAt;
   const ref = job.childOrderCode ?? job.checkoutCode;
   return (
     <li className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line px-4 py-3 last:border-0 sm:px-5" data-testid="history-row">
@@ -25,7 +27,10 @@ function HistoryRow({ job }: { job: PartnerJob }) {
           {job.pickup.name} <span className="text-fg-3">→</span> {dropTitle(job.drop.area ?? 'Area not shared', job.drop.label)}
         </p>
         <p className="text-[13px] text-fg-3">
-          <span className="tabular-nums">{formatDateTime(when)}</span>
+          <span className="tabular-nums">
+            {delivered ? 'Delivered ' : 'Assigned '}
+            {formatDateTime(when)}
+          </span>
           {ref ? <span className="font-mono"> · {ref}</span> : null}
         </p>
         {job.failureReason ? <p className="text-[13px] text-bad">Reason: {job.failureReason}</p> : null}
@@ -60,7 +65,7 @@ export default function HistoryPage() {
     getNextPageParam: (last) => last.nextCursor ?? undefined,
   });
   const items = q.data?.pages.flatMap((p) => p.items);
-  const query = { ...q, data: items, refetch: q.refetch };
+  const query = { data: items, isPending: q.isPending, isError: q.isError, error: q.error, isFetching: q.isFetching, refetch: q.refetch };
 
   return (
     <>

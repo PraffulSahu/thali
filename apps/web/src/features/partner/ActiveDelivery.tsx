@@ -59,18 +59,19 @@ export function ActiveDelivery({ job, index = 1, total = 1, onChanged }: ActiveD
   const [failing, setFailing] = useState(false);
   const [actionError, setActionError] = useState<unknown>(null);
   const [contact, setContact] = useState<ContactResult | null>(null);
-  // Attempts from the last wrong-code answer; kept until the refetched job catches up.
+  // Attempts from the last wrong-code answer. The refetched job may lag behind (or catch up): the lower wins.
   const [knownLeft, setKnownLeft] = useState<number | null>(null);
+  // Only a new step (or another job) clears the entry; a refetch after a wrong code must keep its message.
   useEffect(() => {
     setKnownLeft(null);
     setCode('');
     setCodeError(null);
     setContact(null);
-  }, [job.codeAttemptsRemaining, job.status]);
+  }, [job.id, job.status]);
 
   const status = job.status;
   const pre = isPrePickup(status);
-  const left = knownLeft ?? job.codeAttemptsRemaining;
+  const left = knownLeft === null ? job.codeAttemptsRemaining : Math.min(knownLeft, job.codeAttemptsRemaining);
   const locked = left <= 0;
   const codeKind = status === 'AT_PICKUP' ? 'pickup' : status === 'OUT_FOR_DELIVERY' ? 'delivery' : null;
   const canFail = status === 'PICKED_UP' || status === 'OUT_FOR_DELIVERY';
@@ -210,7 +211,6 @@ export function ActiveDelivery({ job, index = 1, total = 1, onChanged }: ActiveD
                 key={t}
                 variant="outline"
                 icon="phone"
-                className="border-line! not-disabled:hover:border-line-2!"
                 onClick={() => call.mutate(t)}
                 loading={call.isPending && call.variables === t}
                 disabled={call.isPending}

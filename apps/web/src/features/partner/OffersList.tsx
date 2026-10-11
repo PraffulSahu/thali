@@ -94,7 +94,22 @@ export function OffersList({ enabled, activeJobs, maxActive }: OffersListProps) 
     if (accepted && acceptedJob && acceptedJob.status !== 'ASSIGNED') setAccepted(null);
   }, [accepted, acceptedJob]);
 
+  // The device clock never closes an offer: when the ring reaches 0 we refetch, and an offer is shown as
+  // "Offer expired" only once the server stops listing it (accept/decline remain the server's call meanwhile).
+  const seen = useRef(new Map<string, Offer>());
+  const handled = useRef(new Set<string>());
+  useEffect(() => {
+    if (!offers.data) return;
+    const now = new Map(offers.data.items.map((o) => [o.id, o] as const));
+    for (const [id, o] of seen.current) {
+      if (!now.has(id) && !handled.current.has(id)) close(o, 'expired');
+    }
+    seen.current = now;
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `close` only touches state setters and refs
+  }, [offers.data]);
+
   const close = (offer: Offer, reason: OfferClosedReason) => {
+    handled.current.add(offer.id);
     setClosed((c) => (c[offer.id] ? c : { ...c, [offer.id]: { offer, reason } }));
     const prev = timers.current.get(offer.id);
     if (prev) clearTimeout(prev);
@@ -117,6 +132,7 @@ export function OffersList({ enabled, activeJobs, maxActive }: OffersListProps) 
   const accept = useMutation({
     mutationFn: (o: Offer) => acceptOffer(o.id),
     onSuccess: (res, o) => {
+      handled.current.add(o.id);
       setAccepted({ job: res.job, position: activeJobs.length + 1 });
       setClosed(({ [o.id]: _gone, ...rest }) => rest);
       qc.setQueryData<{ items: Offer[] }>(partnerKeys.offers, (d) => (d ? { items: d.items.filter((x) => x.id !== o.id) } : d));
@@ -182,10 +198,7 @@ export function OffersList({ enabled, activeJobs, maxActive }: OffersListProps) 
             busy={pending?.id === o.id ? pending.action : null}
             acceptDisabledReason={capacityReason}
             error={errors[o.id]}
-            onExpire={(offer) => {
-              close(offer, 'expired');
-              void offers.refetch();
-            }}
+            onExpire={() => void offers.refetch()}
             onAccept={(offer) => {
               setError(offer.id, null);
               setPending({ id: offer.id, action: 'accept' });

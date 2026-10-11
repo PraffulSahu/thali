@@ -63,9 +63,25 @@ describe('OffersList', () => {
     expect(fetchMock.mock.calls.some((c) => String(c[0]) === '/api/v1/deliveries/offers/o1/reject')).toBe(true);
   });
 
-  it('an offer whose countdown has run out shows "Offer expired"', async () => {
+  it('the device clock never closes an offer the server still lists (Accept stays available)', async () => {
     setup({ 'GET /partner/offers': () => json(200, { items: [offer({ expiresAt: new Date(Date.now() - 1000).toISOString() })] }) });
-    expect(await screen.findByText('Offer expired')).toBeInTheDocument();
+    const accept = await screen.findByRole('button', { name: 'Accept offer' });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(accept).toBeEnabled();
+    expect(screen.queryByText('Offer expired')).not.toBeInTheDocument();
+  });
+
+  it('when the ring hits 0 it refetches; once the server drops the offer it shows "Offer expired"', async () => {
+    let calls = 0;
+    const fetchMock = setup({
+      'GET /partner/offers': () => {
+        calls += 1;
+        return json(200, { items: calls === 1 ? [offer({ expiresAt: new Date(Date.now() + 1200).toISOString() })] : [] });
+      },
+    });
+    expect(await screen.findByRole('button', { name: 'Accept offer' })).toBeInTheDocument();
+    expect(await screen.findByText('Offer expired', {}, { timeout: 4000 })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/partner/offers')).length).toBeGreaterThan(1);
   });
 
   it('at capacity, accept is disabled with the reason', async () => {
