@@ -254,6 +254,9 @@ describe('OrdersBoard (board 20)', () => {
     board();
     const card = await screen.findByRole('listitem', { name: 'Order TH-8K2M4Q7A' });
     expect(within(card).getByRole('group', { name: 'Pickup code 4 8 2 1' })).toBeInTheDocument();
+    // the rider enters the restaurant's code in the partner app (ActiveDelivery), so the owner gives it to them
+    expect(within(card).getByText(/give this code to the rider/i)).toBeInTheDocument();
+    expect(within(card).queryByText(/rider tells you/i)).not.toBeInTheDocument();
     expect(within(card).getByText('Ravi · at restaurant')).toBeInTheDocument();
     expect(within(card).getByText('Partner assigned')).toBeInTheDocument();
     expect(within(card).queryAllByRole('button').map((b) => b.textContent)).toEqual(['TH-8K2M4Q7A']);

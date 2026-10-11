@@ -396,7 +396,7 @@ export function ReadyCard({ order, onOpen, className }: CommonProps) {
       <p className="text-sm text-fg">{itemsLine(order)}</p>
       {order.pickupCode ? (
         <div className="flex flex-col items-center gap-2.5 rounded-control border border-line bg-bg-2 p-3.5">
-          <span className="text-[12.5px] text-fg-3">Pickup code &mdash; the rider tells you this</span>
+          <span className="text-[12.5px] text-fg-3">Pickup code &mdash; give this code to the rider</span>
           <CodeDigits code={order.pickupCode} label="Pickup code" size="lg" />
         </div>
       ) : null}

@@ -24,3 +24,4 @@ Other rulings:
 - Routing: `/` = landing when no location chosen, discover once a location is set; `/welcome` always the landing.
 - Status tone changes listed in design-spec §3 (Picked up/On the way → info, Awaiting approval → info, Healthy → "Up") are accepted.
 - Canonical tokens = final "Masala" app-board layer, as design-spec chose.
+- Owner pickup-code copy: "Pickup code — give this code to the rider" (final review Minor 1; the spec §853 wording "the rider tells you this" described the handover backwards — the rider enters the restaurant's code in the partner app).
