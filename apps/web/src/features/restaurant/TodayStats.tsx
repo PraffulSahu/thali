@@ -35,7 +35,7 @@ export function KpiGrid({ query }: { query: ReturnType<typeof useTodayDashboard>
       <KpiTile label="Orders today" value={o?.ordersTotal} {...common} />
       <KpiTile label="Acceptance" value={o ? (o.acceptanceRate === null ? '—' : percent(o.acceptanceRate)) : undefined} sub={o && o.acceptanceRate === null ? 'No orders decided yet' : undefined} {...common} />
       <KpiTile label="Avg. time to accept" value={o ? (o.avgAcceptSeconds === null ? '—' : shortDuration(o.avgAcceptSeconds)) : undefined} sub={o && o.avgAcceptSeconds === null ? 'No accepted orders yet' : undefined} {...common} />
-      <KpiTile label="Revenue · gross / net" value={o ? rupees(o.grossPaise) : undefined} secondary={o ? `/ ${rupees(o.netRevenuePaise)}` : undefined} {...common} />
+      <KpiTile label="Revenue · gross / net" value={o ? rupees(o.grossPaise) : undefined} secondary={o ? `/ ${rupees(o.netRevenuePaise)}` : undefined} sub={o ? 'From delivered orders' : undefined} {...common} />
     </section>
   );
 }

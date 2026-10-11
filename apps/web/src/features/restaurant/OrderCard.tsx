@@ -400,21 +400,26 @@ export function ReadyCard({ order, onOpen, className }: CommonProps) {
           <CodeDigits code={order.pickupCode} label="Pickup code" size="lg" />
         </div>
       ) : null}
-      <div className="flex items-center gap-2.5 text-[13.5px]">
-        <Avatar name={name || '?'} size={30} />
-        <span className="min-w-0 flex-1 truncate">{partnerText(order)}</span>
-        {hasPartner(order) ? (
+      {hasPartner(order) ? (
+        <div className="flex items-center gap-2.5 text-[13.5px]">
+          <Avatar name={name || '?'} size={30} />
+          <span className="min-w-0 flex-1 truncate">{partnerText(order)}</span>
           <Badge tone="info" dot>
             Partner assigned
           </Badge>
-        ) : order.deliveryStatus ? (
-          <StatusPill kind="delivery" status={order.deliveryStatus} />
-        ) : (
-          <Badge tone="warn" dot>
-            Finding a partner
-          </Badge>
-        )}
-      </div>
+        </div>
+      ) : (
+        // No rider yet: one status chip (an avatar "?" plus "Finding partner" next to the same chip said it twice).
+        <div className="flex items-center gap-2.5 text-[13.5px]">
+          {order.deliveryStatus ? (
+            <StatusPill kind="delivery" status={order.deliveryStatus} />
+          ) : (
+            <Badge tone="warn" dot>
+              Finding a partner
+            </Badge>
+          )}
+        </div>
+      )}
     </CardFrame>
   );
 }
