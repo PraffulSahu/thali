@@ -70,7 +70,7 @@ function SummaryTiles() {
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(170px,100%),1fr))] gap-3">
         <WindowTile label="Today" />
         <WindowTile label="This week" from={istWeekStart()} />
-        <KpiTile label="Available for payout" highlight {...common} value={s ? formatRupeesShort(s.availablePaise) : undefined} sub={s ? `Earnings unlock after ${plural(s.holdDays, 'day')}` : undefined} />
+        <KpiTile label="Available for payout" highlight {...common} value={s ? formatRupeesShort(s.availablePaise) : undefined} sub={s ? (s.holdDays > 0 ? `Earnings unlock after ${plural(s.holdDays, 'day')}` : 'Ready for the next payout') : undefined} />
         <KpiTile label="Balance" {...common} value={s ? formatRupeesShort(s.balancePaise) : undefined} sub="Including earnings on hold" />
         <KpiTile label="Payout in progress" {...common} value={s ? formatRupeesShort(s.pendingPayoutPaise) : undefined} />
         <KpiTile label="Paid out so far" {...common} value={s ? formatRupeesShort(s.paidOutPaise) : undefined} />

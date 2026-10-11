@@ -69,6 +69,25 @@ describe('EarningsPage', () => {
     expect(within(panel).getAllByText('Requested').length).toBeGreaterThan(0);
   });
 
+  it('available-for-payout hint: hold period in days, or "ready" when there is no hold', async () => {
+    for (const [holdDays, text] of [
+      [7, 'Earnings unlock after 7 days'],
+      [0, 'Ready for the next payout'],
+    ] as const) {
+      vi.stubGlobal(
+        'fetch',
+        routeFetch({
+          'GET /finance/partner/summary': () => json(200, { ...summary({ deliveries: 1, earningsPaise: 3800 }), holdDays }),
+          'GET /finance/partner/ledger': () => json(200, { items: [], nextCursor: null }),
+          'GET /finance/partner/payouts': () => json(200, { items: [], nextCursor: null }),
+        }),
+      );
+      const { unmount } = renderWithProviders(<EarningsPage />, { auth });
+      expect(await screen.findByText(text)).toBeInTheDocument();
+      unmount();
+    }
+  });
+
   it('a failed window shows "—" + Retry, never zeros', async () => {
     vi.stubGlobal(
       'fetch',
