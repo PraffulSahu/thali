@@ -84,6 +84,26 @@ describe('rate limits (LLD 5.4)', () => {
     expect((await request(app).get('/api/v1/restaurants/abc')).status).toBe(200);
   });
 
+  it('address search (places autocomplete / details, reverse geocode) has its own larger bucket, separate from discovery', async () => {
+    const app = gateway({ RATE_LIMIT_DISCOVERY_PER_MIN: '3', RATE_LIMIT_PLACES_PER_MIN: '5' });
+    for (let i = 1; i <= 3; i++) expect((await request(app).get('/api/v1/discovery/restaurants?lat=1&lng=2')).status, `discovery ${i}`).toBe(200);
+    expect((await request(app).get('/api/v1/discovery/restaurants?lat=1&lng=2')).status).toBe(429);
+    // discovery exhausted: address search still works, on its own bucket
+    const paths = ['/api/v1/discovery/places?q=indira', '/api/v1/discovery/places/abc123', '/api/v1/discovery/reverse?lat=1&lng=2', '/api/v1/discovery/places?q=kora', '/api/v1/discovery/reverse?lat=3&lng=4'];
+    for (const p of paths) expect((await request(app).get(p)).status, p).toBe(200);
+    const res = await request(app).get('/api/v1/discovery/places?q=hsr');
+    expect(res.status).toBe(429);
+    expect(res.headers['ratelimit-limit']).toBe('5');
+  });
+
+  it('address search does not consume the discovery bucket', async () => {
+    const app = gateway({ RATE_LIMIT_DISCOVERY_PER_MIN: '2', RATE_LIMIT_PLACES_PER_MIN: '50' });
+    for (let i = 0; i < 10; i++) expect((await request(app).get('/api/v1/discovery/places?q=x')).status).toBe(200);
+    expect((await request(app).get('/api/v1/discovery/restaurants?lat=1&lng=2')).status).toBe(200);
+    expect((await request(app).get('/api/v1/discovery/search?q=dosa')).status).toBe(200);
+    expect((await request(app).get('/api/v1/discovery/serviceability?lat=1&lng=2')).status).toBe(429);
+  });
+
   it('global: limited per IP across all routes (configurable, default 300)', async () => {
     const app = gateway({ RATE_LIMIT_GLOBAL_PER_MIN: '5' });
     for (let i = 1; i <= 5; i++) expect((await request(app).get('/api/v1/cart')).status).toBe(200);
@@ -103,9 +123,10 @@ describe('rate limits (LLD 5.4)', () => {
     expect((await get('10.0.0.2')).status).toBe(200);
   });
 
-  it('default limits are exactly 300 / 60 / 10', () => {
+  it('default limits are exactly 300 / 60 / 10, address search 180', () => {
     const c = testGatewayConfig();
     expect([c.RATE_LIMIT_GLOBAL_PER_MIN, c.RATE_LIMIT_DISCOVERY_PER_MIN, c.RATE_LIMIT_OTP_PER_MIN]).toEqual([300, 60, 10]);
+    expect(c.RATE_LIMIT_PLACES_PER_MIN).toBe(180);
   });
 
   describe('when Redis is down', () => {

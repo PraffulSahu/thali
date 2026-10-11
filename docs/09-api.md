@@ -181,7 +181,8 @@ Provider-side configuration (URLs, events, secrets) is in [05-provider-setup.md]
 | Limit | Scope | Where |
 |---|---|---|
 | 300 / min | per IP, all routes | gateway (fails open if Redis is down) |
-| 60 / min | per IP, `/api/v1/discovery*` (includes address search: `/discovery/places*`, `/discovery/reverse`) | gateway |
+| 60 / min | per IP, `/api/v1/discovery*` except address search (`RATE_LIMIT_DISCOVERY_PER_MIN`) | gateway and marketplace |
+| 180 / min | per IP, address search `/api/v1/discovery/places*`, `/discovery/reverse` (`RATE_LIMIT_PLACES_PER_MIN`, own bucket) | gateway and marketplace |
 | 10 / min | per IP, `/api/v1/auth/otp/*` | gateway (fails closed with 503 if Redis is down) |
 | 5 / hour, 30 s cooldown | per phone, OTP requests; 20 / hour per IP | identity |
 | 5 attempts | per OTP challenge | identity |

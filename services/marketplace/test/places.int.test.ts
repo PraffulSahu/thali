@@ -171,3 +171,25 @@ describe('gazetteer lazy load (demo mode, empty collection)', () => {
     }
   });
 });
+
+describe('address search rate limit (final review Minor 4)', () => {
+  let h: Harness;
+  beforeAll(async () => {
+    h = await createHarness('places_rl', { SEED_DATA_DIR: '/nonexistent-dir', RATE_LIMIT_PLACES_PER_MIN: '70' });
+    await seedServiceArea(h.models);
+    await upsertLocalities(h.db.conn, ROWS);
+  });
+  afterAll(async () => h?.close());
+
+  it('places / reverse use their own bucket (default 180/min/IP), not discovery’s 60', async () => {
+    expect(h.ctx.config.RATE_LIMIT_PLACES_PER_MIN).toBe(70);
+    for (let i = 1; i <= 65; i++) {
+      const res = await request(h.app).get(i % 2 ? '/api/v1/discovery/places' : '/api/v1/discovery/reverse').query(i % 2 ? { q: 'indira' } : { lat: 12.97, lng: 77.64 });
+      expect(res.status, `request ${i}`).toBe(200);
+    }
+    // the discovery bucket is untouched
+    expect((await request(h.app).get('/api/v1/discovery/serviceability').query({ lat: 12.97, lng: 77.64 })).status).toBe(200);
+    for (let i = 66; i <= 70; i++) expect((await request(h.app).get('/api/v1/discovery/places').query({ q: 'kora' })).status).toBe(200);
+    expect((await request(h.app).get('/api/v1/discovery/places').query({ q: 'kora' })).status).toBe(429);
+  });
+});

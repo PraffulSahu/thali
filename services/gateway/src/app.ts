@@ -61,10 +61,11 @@ export function buildApp(deps: GatewayDeps): Express {
         app.use(
           rateLimit({ redis, name: 'gw-global', keyFn: byIp, points: config.RATE_LIMIT_GLOBAL_PER_MIN, durationSec: 60, failOpen: true }),
         );
-        app.use(
-          '/api/v1/discovery',
-          rateLimit({ redis, name: 'gw-discovery', keyFn: byIp, points: config.RATE_LIMIT_DISCOVERY_PER_MIN, durationSec: 60, failOpen: true }),
-        );
+        const discoveryLimit = rateLimit({ redis, name: 'gw-discovery', keyFn: byIp, points: config.RATE_LIMIT_DISCOVERY_PER_MIN, durationSec: 60, failOpen: true });
+        // address search (places autocomplete / details, reverse geocode) has its own larger bucket (final review Minor 4)
+        const placesLimit = rateLimit({ redis, name: 'gw-places', keyFn: byIp, points: config.RATE_LIMIT_PLACES_PER_MIN, durationSec: 60, failOpen: true });
+        const isAddressSearch = (path: string) => /^\/(places|reverse)(\/|$)/.test(path);
+        app.use('/api/v1/discovery', (req, res, next) => (isAddressSearch(req.path) ? placesLimit : discoveryLimit)(req, res, next));
         // OTP abuse protection is a security control -> default fail-closed.
         app.use(
           '/api/v1/auth/otp',

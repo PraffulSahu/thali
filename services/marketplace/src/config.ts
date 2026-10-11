@@ -48,6 +48,11 @@ export const MarketplaceConfigShape = {
   DISCOVERY_CACHE_TTL_SEC: z.coerce.number().int().min(0).max(3600).default(60),
   /** MKT-10: hosts whose absolute https image URLs are served as-is (CSV, `*.example.com` = subdomains, 'none' = no external images). */
   EXTERNAL_IMAGE_HOSTS: z.string().optional(),
+  /**
+   * MKT-1 address search (`/discovery/places[/:id]`, `/discovery/reverse`) per IP per minute: its own bucket, larger
+   * than discovery's 60, so typing an address (several users behind one NAT) is not throttled (final review Minor 4).
+   */
+  RATE_LIMIT_PLACES_PER_MIN: z.coerce.number().int().min(1).default(180),
   /** MKT-1: directory holding localities.json (demo gazetteer lazy-load). Default <repo>/scripts/seed-data. */
   SEED_DATA_DIR: z.string().optional(),
   /** Upper bound on any restaurant's delivery radius (candidate pre-filter for discovery). */

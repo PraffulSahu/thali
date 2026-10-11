@@ -111,6 +111,8 @@ export const discoveryRoutes: RouteModule = {
   register(r, ctx) {
     // LLD 5.4: search 60/min per IP (coarse, fails open if Redis is down)
     const limiter = rateLimit({ redis: ctx.redis, name: 'discovery', keyFn: (req) => req.ip ?? 'unknown', points: 60, durationSec: 60, failOpen: true });
+    // address search has its own, larger bucket (RATE_LIMIT_PLACES_PER_MIN, default 180)
+    const placesLimiter = rateLimit({ redis: ctx.redis, name: 'discovery-places', keyFn: (req) => req.ip ?? 'unknown', points: ctx.config.RATE_LIMIT_PLACES_PER_MIN, durationSec: 60, failOpen: true });
 
     const vList = validate({ query: DiscoveryQuery });
     r.get(`${D}/restaurants`, limiter, vList, async (req, res) => {
@@ -127,15 +129,15 @@ export const discoveryRoutes: RouteModule = {
 
     // MKT-1: address search / place lookup / reverse geocoding
     const vPlaces = validate({ query: PlacesQuery });
-    r.get(`${D}/places`, limiter, vPlaces, async (req, res) => {
+    r.get(`${D}/places`, placesLimiter, vPlaces, async (req, res) => {
       res.json(await autocompletePlaces(ctx, vPlaces.get(req).query));
     });
     const vPlace = validate({ params: PlaceParams, query: z.object({ sessionToken: SessionToken }) });
-    r.get(`${D}/places/:placeId`, limiter, vPlace, async (req, res) => {
+    r.get(`${D}/places/:placeId`, placesLimiter, vPlace, async (req, res) => {
       const { params, query } = vPlace.get(req);
       res.json(await placeDetails(ctx, params.placeId, query.sessionToken));
     });
-    r.get(`${D}/reverse`, limiter, vPoint, async (req, res) => {
+    r.get(`${D}/reverse`, placesLimiter, vPoint, async (req, res) => {
       res.json(await reverseGeocode(ctx, vPoint.get(req).query));
     });
   },

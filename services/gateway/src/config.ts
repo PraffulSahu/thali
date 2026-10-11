@@ -37,6 +37,11 @@ export const GatewayConfigShape = {
   /** LLD 5.4: gateway global 300/min/IP, discovery 60/min/IP, OTP 10/min/IP. */
   RATE_LIMIT_GLOBAL_PER_MIN: z.coerce.number().int().min(1).default(300),
   RATE_LIMIT_DISCOVERY_PER_MIN: z.coerce.number().int().min(1).default(60),
+  /**
+   * Address search (MKT-1 `/discovery/places[/:id]`, `/discovery/reverse`): typing fires one request per pause and
+   * several people often share one NAT IP, so it has its own larger bucket instead of eating discovery's 60.
+   */
+  RATE_LIMIT_PLACES_PER_MIN: z.coerce.number().int().min(1).default(180),
   RATE_LIMIT_OTP_PER_MIN: z.coerce.number().int().min(1).default(10),
   /** Admin forgot/reset password (IDN-1), per IP, fail-closed like OTP. Identity applies its own stricter limits too. */
   RATE_LIMIT_ADMIN_PASSWORD_PER_MIN: z.coerce.number().int().min(1).default(10),

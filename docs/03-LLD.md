@@ -667,6 +667,7 @@ storage vars. Notifications: `SMS_PROVIDER=twilio|mock`, `TWILIO_ACCOUNT_SID`, `
 | `SEED_DATA_DIR` | marketplace, seeds | `<repo>/scripts/seed-data` | Directory with `localities.json` (demo gazetteer lazy load) and the seed generator inputs; absent in a Docker image = empty gazetteer |
 | `DEMO_PHONE_PREFIXES` | identity | unset = `+9191010,+9192020,+9193030` (the generated seed ranges) in demo, none elsewhere | E.164 prefixes that get the fixed demo OTP when `APP_MODE=demo` and `DEMO_OTP_ENABLED=true` (ignored, and refused as a truthy `DEMO_*` value, in production). Leave unset |
 | `RATE_LIMIT_ADMIN_PASSWORD_PER_MIN` | gateway | `10` | Fail-closed per-IP limit on `/api/v1/auth/admin/password/*` |
+| `RATE_LIMIT_PLACES_PER_MIN` | gateway, marketplace | `180` | Per-IP limit on address search (`/discovery/places*`, `/discovery/reverse`), its own bucket instead of discovery's 60 (fails open) |
 | `ADMIN_RESET_MAX_PER_EMAIL` | identity | `3` | Forgot-password requests per email per `ADMIN_LOGIN_WINDOW_SEC` |
 | `PUBLIC_WEB_URL` | identity (and all services that build links) | `http://localhost:5173` (demo) | **Required in production** and must not be a localhost address: identity refuses to start otherwise, because it builds the admin reset link `${PUBLIC_WEB_URL}/admin/reset-password?token=...` |
 | `STORAGE_PROVIDER`, `S3_*` | identity | as marketplace | Avatar uploads (`POST /me/uploads`); compose gives identity the shared storage env |
