@@ -1,83 +1,58 @@
-/** Small presentational pieces shared by consumer pages (price breakdowns, ETA labels, demo badges). */
+/** Small presentational pieces shared by consumer pages (bill rows, ETA labels, demo badges, empty cart). */
 import type { ReactNode } from 'react';
 import type { Breakdown } from '@thali/contracts';
-import { Badge, Icon, Price } from '../../components/ui';
-import { formatDistanceKm, formatMinutes } from '../../lib/format';
+import { Badge, BillRow, ButtonLink, EmptyState, EstBadge, Icon, type BillRowData } from '../../components/ui';
+import { CuisineArt } from '../../components/illustrations';
+import { formatDistanceKm, formatINR } from '../../lib/format';
 import { cn } from '../../lib/cn';
-import { etaLabel, isDemoEstimate } from './api';
+import { isDemoEstimate } from './api';
 
-export function Row({ label, children, strong, tone }: { label: ReactNode; children: ReactNode; strong?: boolean; tone?: 'success' }) {
-  return (
-    <div className={cn('flex items-baseline justify-between gap-3 py-0.5', strong ? 'font-semibold text-slate-900' : 'text-sm text-slate-700')}>
-      <dt className={cn(tone === 'success' && 'text-success-800')}>{label}</dt>
-      <dd className={cn('tabular-nums', tone === 'success' && 'text-success-800')}>{children}</dd>
-    </div>
-  );
+/**
+ * Bill rows in the spec order (design-spec §3.25): Items · Coupon share · Membership discount share · Packaging ·
+ * Delivery fee · Free delivery (−) · Platform fee · GST on food · GST on fees. Zero discounts/fees are hidden
+ * (except the delivery fee, which shows ₹0.00 when waived).
+ */
+export function billRows(b: Breakdown, opts: { couponLabel?: string } = {}): BillRowData[] {
+  const rows: BillRowData[] = [{ label: 'Items', paise: b.itemsSubtotalPaise }];
+  if (b.couponDiscountPaise > 0) rows.push({ label: opts.couponLabel ?? 'Coupon share', paise: b.couponDiscountPaise, discount: true });
+  if (b.membershipDiscountPaise > 0) rows.push({ label: 'Thali Plus discount', paise: b.membershipDiscountPaise, discount: true });
+  if (b.packagingFeePaise > 0) rows.push({ label: 'Packaging', paise: b.packagingFeePaise });
+  rows.push({ label: 'Delivery fee', paise: b.deliveryFeePaise });
+  if (b.deliveryDiscountPaise > 0) rows.push({ label: 'Free delivery', paise: b.deliveryDiscountPaise, discount: true });
+  if (b.platformFeePaise > 0) rows.push({ label: 'Platform fee', paise: b.platformFeePaise });
+  if (b.foodTaxPaise > 0) rows.push({ label: 'GST on food', paise: b.foodTaxPaise });
+  if (b.feeTaxPaise > 0) rows.push({ label: 'GST on fees', paise: b.feeTaxPaise });
+  return rows;
 }
 
-/** Line-by-line breakdown. Zero discounts/fees are hidden; the total row label is configurable. */
-export function BreakdownRows({ b, totalLabel = 'Total' }: { b: Breakdown; totalLabel?: string }) {
-  const minus = (paise: number) => (
-    <span>
-      −<Price paise={paise} tone="success" />
-    </span>
-  );
+/** A `<dl>` of bill rows with a total line (order detail, price-changed dialog). */
+export function BillList({ b, totalLabel = 'Total', className }: { b: Breakdown; totalLabel?: string; className?: string }) {
   return (
-    <dl className="divide-y-0">
-      <Row label="Items">
-        <Price paise={b.itemsSubtotalPaise} />
-      </Row>
-      {b.couponDiscountPaise > 0 ? (
-        <Row label="Coupon discount" tone="success">
-          {minus(b.couponDiscountPaise)}
-        </Row>
-      ) : null}
-      {b.membershipDiscountPaise > 0 ? (
-        <Row label="Membership discount" tone="success">
-          {minus(b.membershipDiscountPaise)}
-        </Row>
-      ) : null}
-      {b.packagingFeePaise > 0 ? (
-        <Row label="Packaging">
-          <Price paise={b.packagingFeePaise} />
-        </Row>
-      ) : null}
-      <Row label="Delivery fee">
-        <Price paise={b.deliveryFeePaise} freeLabel="Free" />
-      </Row>
-      {b.deliveryDiscountPaise > 0 ? (
-        <Row label="Delivery discount" tone="success">
-          {minus(b.deliveryDiscountPaise)}
-        </Row>
-      ) : null}
-      {b.platformFeePaise > 0 ? (
-        <Row label="Platform fee">
-          <Price paise={b.platformFeePaise} />
-        </Row>
-      ) : null}
-      {b.foodTaxPaise + b.feeTaxPaise > 0 ? (
-        <Row label="Taxes (GST)">
-          <Price paise={b.foodTaxPaise + b.feeTaxPaise} />
-        </Row>
-      ) : null}
-      <div className="mt-1 border-t border-slate-200 pt-1">
-        <Row label={totalLabel} strong>
-          <Price paise={b.totalPaise} />
-        </Row>
+    <dl className={cn('flex flex-col gap-2', className)}>
+      {billRows(b).map((r, i) => (
+        <BillRow key={i} {...r} />
+      ))}
+      <div className="mt-1 flex justify-between gap-3 border-t border-line pt-2 text-[14.5px] font-semibold">
+        <dt>{totalLabel}</dt>
+        <dd className="tabular-nums">{formatINR(b.totalPaise)}</dd>
       </div>
     </dl>
   );
 }
 
-/** "32 min · 2.1 km (demo estimate)" — never presents an estimate as fact. */
+/** "32 min EST. · 2.1 km" — never presents an estimate as fact; "demo estimate" in demo. */
 export function EtaText({ minutes, distanceKm, source, className }: { minutes?: number | null; distanceKm?: number | null; source?: string | null; className?: string }) {
   if (minutes == null && distanceKm == null) return null;
   return (
-    <span className={cn('inline-flex flex-wrap items-center gap-1 text-sm text-slate-600', className)}>
-      <Icon name="clock" size={14} />
-      {minutes != null ? <span className="tabular-nums">{formatMinutes(minutes)}</span> : null}
+    <span className={cn('inline-flex flex-wrap items-center gap-1.5 text-[13px] text-fg-2', className)}>
+      <Icon name="clock" size={14} className="text-fg-3" />
+      {minutes != null ? (
+        <span className="inline-flex items-center gap-1 tabular-nums">
+          {minutes} min <EstBadge />
+        </span>
+      ) : null}
       {distanceKm != null ? <span className="tabular-nums">· {formatDistanceKm(distanceKm)}</span> : null}
-      <span className={cn(isDemoEstimate(source) && 'font-medium text-info-800')}>({etaLabel(source)})</span>
+      {isDemoEstimate(source) ? <span className="text-fg-3">(demo estimate)</span> : null}
     </span>
   );
 }
@@ -92,9 +67,48 @@ export function DemoBadge({ show, label = 'Demo' }: { show: boolean | undefined;
 
 export function SeparateDeliveryNote({ note, className }: { note?: string; className?: string }) {
   return (
-    <p className={cn('flex items-center gap-1.5 text-sm text-slate-600', className)}>
-      <Icon name="bike" size={16} className="text-slate-500" />
+    <p className={cn('flex items-center gap-1.5 text-[13px] text-fg-3', className)}>
+      <Icon name="bike" size={15} />
       {note && /separately/i.test(note) ? note : 'Delivered separately'}
     </p>
   );
+}
+
+/** Empty cart (design-spec §7.2): cuisine "all" art + "Your cart is empty" + "Browse restaurants". */
+export function EmptyCart({ onBrowse, compact }: { onBrowse?: () => void; compact?: boolean }) {
+  return (
+    <EmptyState
+      compact={compact}
+      icon={null}
+      illustration={<CuisineArt slug="all" className="size-[72px]" />}
+      title="Your cart is empty"
+      description="Add dishes from any restaurant that delivers to you. Each restaurant delivers its part separately."
+      action={
+        <ButtonLink to="/" onClick={onBrowse}>
+          Browse restaurants
+        </ButtonLink>
+      }
+    />
+  );
+}
+
+/** Accent word helper for consumer h1s ("Delivering to <Accent>Home</Accent>"). */
+export function Accent({ children }: { children: ReactNode }) {
+  return <span className="accent-word">{children}</span>;
+}
+
+/** "12 Oct, 7:42 PM" → "today, 7:42 PM" / "yesterday, …" in IST. */
+export function relativeDay(iso: string, now = Date.now()): string {
+  const fmt = (d: Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(d);
+  const day = fmt(new Date(iso));
+  const time = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(iso)).toUpperCase();
+  if (day === fmt(new Date(now))) return `today, ${time}`;
+  if (day === fmt(new Date(now - 86_400_000))) return `yesterday, ${time}`;
+  const date = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'short' }).format(new Date(iso));
+  return `${date}, ${time}`;
+}
+
+/** IST clock time "7:42 PM". */
+export function istTime(iso: string): string {
+  return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(iso)).toUpperCase();
 }

@@ -1,20 +1,18 @@
 /**
- * Discovery filters (PRD C-3): veg-only, open now, cuisine, price band, sort. State lives in the URL
- * (`?veg=1&open=1&cuisine=a,b&price=1,2&sort=eta`) so lists are shareable and survive reloads.
- * Rating sort only orders restaurants with ≥ 5 real ratings first; others show "New" (server rule).
+ * Discover filters (board 10, 10-22…10-27; design-spec §6.4). State lives in the URL so lists are shareable:
+ * `?cuisine=biryani&veg=1&open=1&price=1,2&sort=eta`. Desktop: the "Preferences / Price / Sort by" aside;
+ * ≤1023: one horizontal scrollable pill row (Veg only · Open now · ₹ ₹₹ ₹₹₹ · Sort).
+ * Rating sort: rated restaurants (5+ real ratings) first; others are marked "New" (server rule).
  */
-import { useQuery } from '@tanstack/react-query';
-import type { ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
-import { Button, Select } from '../../components/ui';
-import { api } from '../../lib/api';
+import { Field, FilterPill, Lbl, PriceChips, Select } from '../../components/ui';
 import { cn } from '../../lib/cn';
-import type { Cuisine, DiscoveryFilterState, DiscoverySort } from './api';
+import type { DiscoveryFilterState, DiscoverySort } from './api';
 
-const SORTS: { value: DiscoverySort; label: string }[] = [
+export const SORTS: { value: DiscoverySort; label: string }[] = [
   { value: 'distance', label: 'Distance' },
-  { value: 'eta', label: 'Delivery time' },
   { value: 'deliveryFee', label: 'Delivery fee' },
+  { value: 'eta', label: 'Delivery time' },
   { value: 'rating', label: 'Rating' },
 ];
 
@@ -35,81 +33,84 @@ export function useDiscoveryFilters(): [DiscoveryFilterState, (patch: Partial<Di
     const next = { ...state, ...patch };
     const p = new URLSearchParams();
     if (next.q) p.set('q', next.q);
+    if (next.cuisine?.length) p.set('cuisine', next.cuisine.join(','));
     if (next.veg) p.set('veg', '1');
     if (next.openNow) p.set('open', '1');
-    if (next.cuisine?.length) p.set('cuisine', next.cuisine.join(','));
     if (next.priceBand?.length) p.set('price', next.priceBand.join(','));
     if (next.sort !== 'distance') p.set('sort', next.sort);
     setParams(p, { replace: true });
   };
-  const clear = () => setParams(new URLSearchParams(), { replace: true });
+  /** 10-32 "Clear filters": cuisine, veg, open and price back to defaults (sort and search kept). */
+  const clear = () => update({ cuisine: [], veg: false, openNow: false, priceBand: [] });
   return [state, update, clear];
 }
 
-export const hasActiveFilters = (f: DiscoveryFilterState) => Boolean(f.q || f.veg || f.openNow || f.cuisine?.length || f.priceBand?.length);
+export const hasActiveFilters = (f: DiscoveryFilterState) => Boolean(f.veg || f.openNow || f.cuisine?.length || f.priceBand?.length);
 
-function Chip({ pressed, onClick, children }: { pressed: boolean; onClick: () => void; children: ReactNode }) {
+const RATING_NOTE = 'Rated restaurants (5+ real ratings) first; others are marked “New”.';
+
+export function FiltersAside({ value, onChange, className }: { value: DiscoveryFilterState; onChange: (p: Partial<DiscoveryFilterState>) => void; className?: string }) {
   return (
-    <button
-      type="button"
-      aria-pressed={pressed}
-      onClick={onClick}
-      className={cn(
-        'min-h-touch shrink-0 rounded-pill border px-3 text-sm font-medium transition-colors',
-        pressed ? 'border-brand-600 bg-brand-50 text-brand-800' : 'border-slate-300 bg-surface text-slate-700 hover:bg-slate-50',
-      )}
-    >
-      {children}
-    </button>
+    <aside aria-label="Filters" className={cn('flex flex-col gap-6', className)}>
+      <div role="group" aria-labelledby="pref-lbl" className="flex flex-col gap-2">
+        <Lbl>
+          <span id="pref-lbl">Preferences</span>
+        </Lbl>
+        <FilterPill veg pressed={!!value.veg} onClick={() => onChange({ veg: !value.veg })} className="h-10 justify-start">
+          Veg only
+        </FilterPill>
+        <FilterPill pressed={!!value.openNow} onClick={() => onChange({ openNow: !value.openNow })} className="h-10 justify-start">
+          Open now
+        </FilterPill>
+      </div>
+      <div className="flex flex-col gap-2">
+        <Lbl>Price</Lbl>
+        <PriceChips value={value.priceBand ?? []} onChange={(priceBand) => onChange({ priceBand })} />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Field label={<span className="lbl">Sort by</span>}>
+          <Select value={value.sort} onChange={(e) => onChange({ sort: e.target.value as DiscoverySort })} options={SORTS} className="rounded-control" />
+        </Field>
+        {value.sort === 'rating' ? <p className="text-xs text-fg-3">{RATING_NOTE}</p> : null}
+      </div>
+    </aside>
   );
 }
 
-const toggle = <T,>(list: T[] | undefined, v: T) => (list?.includes(v) ? list.filter((x) => x !== v) : [...(list ?? []), v]);
-
-export function DiscoveryFilters({ value, onChange, onClear }: { value: DiscoveryFilterState; onChange: (p: Partial<DiscoveryFilterState>) => void; onClear: () => void }) {
-  const cuisines = useQuery({
-    queryKey: ['cuisines'],
-    queryFn: () => api<{ items: Cuisine[] }>('/cuisines', { auth: false }).then((r) => r.items),
-    staleTime: 10 * 60_000,
-  });
+/** ≤1023 horizontal filter row under the cuisine band. */
+export function FiltersRow({ value, onChange, className }: { value: DiscoveryFilterState; onChange: (p: Partial<DiscoveryFilterState>) => void; className?: string }) {
   return (
-    <div className="space-y-3" role="group" aria-label="Filters">
-      <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0">
-        <Chip pressed={!!value.veg} onClick={() => onChange({ veg: !value.veg })}>
-          Pure veg
-        </Chip>
-        <Chip pressed={!!value.openNow} onClick={() => onChange({ openNow: !value.openNow })}>
+    <div className={cn('flex flex-col gap-1.5', className)}>
+      <div role="group" aria-label="Filters" className="no-scrollbar -mx-6 flex items-center gap-2 overflow-x-auto px-6 pb-1 max-sm:-mx-4 max-sm:px-4">
+        <FilterPill veg pressed={!!value.veg} onClick={() => onChange({ veg: !value.veg })}>
+          Veg only
+        </FilterPill>
+        <FilterPill pressed={!!value.openNow} onClick={() => onChange({ openNow: !value.openNow })}>
           Open now
-        </Chip>
-        {[1, 2, 3].map((b) => (
-          <Chip key={b} pressed={!!value.priceBand?.includes(b)} onClick={() => onChange({ priceBand: toggle(value.priceBand, b) })}>
-            <span aria-hidden>{'₹'.repeat(b)}</span>
-            <span className="sr-only">{b === 1 ? 'Budget (under ₹200 per item)' : b === 2 ? 'Mid (₹200 to ₹400 per item)' : 'Premium (over ₹400 per item)'}</span>
-          </Chip>
-        ))}
-        {(cuisines.data ?? []).map((c) => (
-          <Chip key={c.id} pressed={!!value.cuisine?.includes(c.slug)} onClick={() => onChange({ cuisine: toggle(value.cuisine, c.slug) })}>
-            {c.name}
-          </Chip>
-        ))}
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <label className="flex items-center gap-2 text-sm text-slate-700">
-          Sort by
-          <Select
-            className="w-44"
+        </FilterPill>
+        <PriceChips value={value.priceBand ?? []} onChange={(priceBand) => onChange({ priceBand })} />
+        <label className="relative inline-flex h-9 shrink-0 items-center rounded-pill border border-line bg-card pl-3.5 pr-8 text-[13.5px] font-medium text-fg-2">
+          <span className="sr-only">Sort by</span>
+          <span aria-hidden="true" className="mr-1 text-fg-3">
+            Sort:
+          </span>
+          <select
             value={value.sort}
             onChange={(e) => onChange({ sort: e.target.value as DiscoverySort })}
-            options={SORTS}
-          />
+            className="appearance-none bg-transparent pr-1 text-fg outline-none"
+          >
+            {SORTS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+          <span aria-hidden="true" className="pointer-events-none absolute right-3 text-fg-3">
+            ▾
+          </span>
         </label>
-        {hasActiveFilters(value) ? (
-          <Button variant="link" size="sm" onClick={onClear}>
-            Clear filters
-          </Button>
-        ) : null}
       </div>
-      {value.sort === 'rating' ? <p className="text-xs text-slate-600">Rated restaurants (5+ real ratings) first; others are marked “New”.</p> : null}
+      {value.sort === 'rating' ? <p className="text-xs text-fg-3">{RATING_NOTE}</p> : null}
     </div>
   );
 }

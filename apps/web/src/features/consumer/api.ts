@@ -42,10 +42,18 @@ export interface DiscoveryRestaurant {
   slug: string;
   name: string;
   cuisines: string[];
+  /** MKT-5 neighbourhood ("Indiranagar"). Optional: older stacks omit it. */
+  locality?: string | null;
   imageUrl: string | null;
   isVeg?: 'PURE_VEG' | 'MIXED';
   open: boolean;
   nextOpenAt?: string;
+  /** MKT-3: PAUSED = "Not accepting orders"; OUTSIDE_HOURS = closed; null when open. */
+  closedReason?: 'PAUSED' | 'OUTSIDE_HOURS' | null;
+  pausedUntil?: string | null;
+  acceptingOrders?: boolean;
+  /** MKT-12 end of the current open period. */
+  closesAt?: string | null;
   distanceKm: number;
   deliveryFeePaise: number;
   etaMinutes: number;
@@ -53,6 +61,8 @@ export interface DiscoveryRestaurant {
   rating: Rating | null;
   priceBand: number | null;
   isDemo: boolean;
+  /** MKT-8 restaurant offer badge ("20% OFF"); render only when non-null. */
+  offer?: { label: string; code: string } | null;
   matchedItems?: MatchedItem[];
 }
 export interface ServiceArea {
@@ -65,6 +75,10 @@ export interface DiscoveryPage {
   nextCursor: string | null;
   serviceable: boolean;
   serviceArea: ServiceArea | null;
+  /** MKT-2 totals for the whole filtered listing (absent on older stacks). */
+  counts?: { total: number; open: number };
+  /** MKT-2 cuisine facet counts (slug → restaurants delivering here). */
+  facets?: { cuisines: { slug: string; count: number }[] };
 }
 export interface SearchResult {
   serviceable: boolean;
@@ -105,6 +119,11 @@ export interface MenuItem {
   isVeg: boolean;
   imageUrl: string | null;
   available: boolean;
+  /** MKT-6: SOLD_OUT = "Sold out today", UNAVAILABLE = toggled off. */
+  unavailableReason?: 'SOLD_OUT' | 'UNAVAILABLE' | null;
+  /** Only for tracked stock with 5 or fewer left. */
+  stockLeft?: number | null;
+  featured?: boolean;
   customizationGroups: CustomizationGroup[];
   tags: string[];
 }
@@ -117,14 +136,19 @@ export interface RestaurantPageData {
     cuisines: string[];
     imageUrl: string | null;
     logoUrl: string | null;
-    address: { line1: string; line2?: string; city: string; pincode: string } | null;
+    address: { line1: string; line2?: string; locality?: string; city: string; pincode: string } | null;
+    locality?: string | null;
     location: GeoPoint | null;
     hours: { day: number; open: string; close: string }[];
     timezone: string;
     open: boolean;
     closedReason?: 'PAUSED' | 'OUTSIDE_HOURS' | 'NOT_APPROVED';
     nextOpenAt?: string;
+    pausedUntil?: string | null;
+    acceptingOrders?: boolean;
+    closesAt?: string | null;
     isVeg?: 'PURE_VEG' | 'MIXED';
+    pureVeg?: boolean;
     priceBand: number | null;
     rating: Rating | null;
     packagingFeePaise: number;
@@ -140,6 +164,8 @@ export interface RestaurantPageData {
     etaSource?: string;
     minOrderPaise?: number;
   } | null;
+  /** MKT-9 owner-featured items (≤ 6), available first. Absent on older stacks. */
+  recommended?: MenuItem[];
   menu: { id: string; name: string; sortOrder: number; items: MenuItem[] }[];
 }
 export interface Cuisine {
@@ -171,8 +197,22 @@ export function discoveryQuery(point: GeoPoint, f: DiscoveryFilterState, cursor?
       openNow: f.openNow ? 'true' : undefined,
       sort: f.sort,
       cursor: cursor ?? undefined,
+      limit: 24,
     },
   });
+}
+
+export const fetchCuisines = () => api<{ items: Cuisine[] }>('/cuisines', { auth: false }).then((r) => r.items);
+export const CUISINES_KEY = ['cuisines'] as const;
+/** Cuisine slug → display name ("north-indian" → "North Indian"); falls back to a title-cased slug. */
+export function cuisineName(slug: string, list?: Cuisine[]): string {
+  const hit = list?.find((c) => c.slug === slug);
+  if (hit) return hit.name;
+  return slug
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((w) => w[0]!.toUpperCase() + w.slice(1))
+    .join(' ');
 }
 
 /* ------------------------------------------------------------------ cart (orders) */
@@ -191,6 +231,8 @@ export interface AddressSnapshot {
   city: string;
   pincode: string;
   location: GeoPoint;
+  /** ORD-4/IDN-2 neighbourhood. */
+  locality?: string | null;
 }
 export interface DeliveryMode {
   mode: 'SEPARATE';
@@ -352,7 +394,7 @@ export interface CartPreview {
   children: PricedChild[];
   problems: QuoteProblem[];
   canCheckout: boolean;
-  coupon: { code: string; valid: boolean; discountPaise: number; message?: string } | null;
+  coupon: { code: string; valid: boolean; discountPaise: number; message?: string; restaurantIds?: string[] } | null;
   membership: { applied: boolean; membershipId: string | null } | null;
   deliveryExplanation: string | null;
 }
@@ -360,6 +402,8 @@ export interface PreviewBody {
   address?: DeliveryAddressInput;
   couponCode?: string | null;
   useMembership?: boolean;
+  /** ORD-3: price only these restaurants of the cart ("Checkout only Spice Route"). */
+  restaurantIds?: string[];
 }
 export const previewCart = (body: PreviewBody) => api<CartPreview>('/cart/preview', { method: 'POST', body });
 
@@ -402,6 +446,13 @@ export interface ChildOrder {
   partner?: { name: string; vehicleType: string | null } | null;
   canCancel?: boolean;
   statusHistory?: StatusHistoryEntry[];
+  /** ORD-4 where this part is prepared (tracking map origin). */
+  restaurant?: { location: GeoPoint | null; address: { line1: string; locality: string | null; city: string } };
+  acceptedAt?: string | null;
+  readyAt?: string | null;
+  pickedUpAt?: string | null;
+  deliveredAt?: string | null;
+  cancelledAt?: string | null;
 }
 export interface CheckoutView {
   id: string;
@@ -439,6 +490,8 @@ export interface CreateCheckoutBody {
   couponCode?: string;
   useMembership: boolean;
   expectedTotalPaise?: number;
+  /** ORD-3 per-restaurant checkout. */
+  restaurantIds?: string[];
 }
 export const createCheckout = (body: CreateCheckoutBody, idempotencyKey: string) =>
   api<CheckoutResponse>('/checkouts', { method: 'POST', body, idempotencyKey });
@@ -455,6 +508,13 @@ export function priceChangedDetails(e: unknown): PriceChangedDetails | null {
   const d = e.details as Partial<PriceChangedDetails> | undefined;
   if (!d || typeof d.expectedTotalPaise !== 'number' || !d.pricing) return null;
   return { expectedTotalPaise: d.expectedTotalPaise, pricing: d.pricing, children: Array.isArray(d.children) ? d.children : [] };
+}
+/** ORD-3 409 CONFLICT details: CHECKOUT_ALREADY_PAID {checkoutId} (an overlapping checkout was paid) / CART_CHANGED. */
+export function checkoutConflict(e: unknown): { reason: 'CHECKOUT_ALREADY_PAID' | 'CART_CHANGED' | (string & {}); checkoutId?: string } | null {
+  if (!isApiError(e) || e.status !== 409) return null;
+  const d = (e.details ?? {}) as { reason?: string; checkoutId?: string };
+  if (typeof d.reason !== 'string') return null;
+  return { reason: d.reason, ...(typeof d.checkoutId === 'string' ? { checkoutId: d.checkoutId } : {}) };
 }
 export function problemsFromError(e: unknown): QuoteProblem[] {
   if (!isApiError(e)) return [];
@@ -595,6 +655,8 @@ export interface TrackingView {
   simulated: boolean;
   estimatedMinutes: number;
   estimateSource: string;
+  /** DLV-3 live remaining ETA from the rider position; null before assignment / without a position. */
+  remaining?: { minutes: number; distanceKm: number; source: string; computedAt: string } | null;
 }
 export const fetchTracking = (childId: string) => api<TrackingView>(`/deliveries/tracking/${childId}`);
 
@@ -610,6 +672,9 @@ export interface SavedAddress {
   pincode: string;
   location: GeoPoint;
   isDefault: boolean;
+  /** IDN-2 */
+  locality?: string | null;
+  formattedAddress?: string | null;
 }
 export interface NotificationPrefs {
   orderSms: boolean;
@@ -626,6 +691,8 @@ export interface Me {
   notificationPrefs: NotificationPrefs;
   addresses: SavedAddress[];
   createdAt: string;
+  /** IDN-3 profile photo. */
+  avatarUrl?: string | null;
 }
 export const ADDRESSES_KEY = ['me', 'addresses'] as const;
 export const fetchAddresses = () => api<{ items: SavedAddress[] }>('/me/addresses').then((r) => r.items);
@@ -696,9 +763,39 @@ export const purchaseMembership = (planId: string, idempotencyKey: string) =>
 export interface AvailableCoupon {
   code: string;
   description: string;
+  type?: 'FLAT' | 'PERCENT';
+  valuePaise?: number | null;
+  valueBps?: number | null;
+  maxDiscountPaise?: number | null;
   minOrderPaise?: number;
+  validTo?: string;
+  firstOrderOnly?: boolean;
+  remainingUses?: number | null;
+  /** MKT-7 "50% off up to ₹100". */
+  offerHeadline?: string;
+  /** SIGN_IN_TO_CHECK for guests. */
+  eligibility?: 'ELIGIBLE' | 'SIGN_IN_TO_CHECK';
+  /** MKT-8 restaurants it applies to (empty = all). */
+  restaurantIds?: string[];
+  badgeLabel?: string | null;
 }
-export const fetchCoupons = () => api<{ items: AvailableCoupon[] }>('/coupons/available').then((r) => r.items);
+/** MKT-7: optional auth — guests get every live coupon (SIGN_IN_TO_CHECK), signed-in users their applicable ones. */
+export const fetchCoupons = () =>
+  api<{ items: AvailableCoupon[] }>('/coupons/available', { auth: !!getAccessToken() }).then((r) => r.items);
+export const couponsKey = (signedIn: boolean) => ['coupons', 'available', signedIn ? 'user' : 'guest'] as const;
+
+/* ------------------------------------------------------------------ ratings (marketplace MKT-14) */
+
+export interface MyRating {
+  childOrderId: string;
+  restaurantId: string;
+  stars: number;
+  createdAt: string | null;
+}
+export const fetchMyRatings = (childOrderIds: string[]) =>
+  api<{ items: MyRating[] }>('/restaurants/ratings/mine', { query: { childOrderIds: childOrderIds.join(',') } }).then((r) => r.items);
+export const rateRestaurant = (restaurantId: string, childOrderId: string, stars: number) =>
+  api<unknown>(`/restaurants/${restaurantId}/ratings`, { method: 'POST', body: { childOrderId, stars } });
 
 /* ------------------------------------------------------------------ support (orders TicketView) */
 
@@ -751,6 +848,22 @@ export const fetchNotifications = (cursor?: string | null) =>
   api<{ items: InAppNotification[]; nextCursor: string | null; unreadCount: number }>('/notifications', {
     query: { limit: 20, cursor: cursor ?? undefined },
   });
+export const UNREAD_KEY = ['notifications', 'unread'] as const;
+export const markNotificationRead = (id: string) => api(`/notifications/${id}/read`, { method: 'POST' });
+
+/** Unread in-app notification count for the header bell (`GET /notifications?limit=1` → unreadCount). */
+export function useUnreadNotifications(): number {
+  const { isAuthenticated } = useAuth();
+  const q = useQuery({
+    queryKey: UNREAD_KEY,
+    queryFn: () => api<{ unreadCount: number }>('/notifications', { query: { limit: 1 } }).then((r) => r.unreadCount ?? 0),
+    enabled: isAuthenticated,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    retry: false,
+  });
+  return isAuthenticated ? (q.data ?? 0) : 0;
+}
 
 /* ------------------------------------------------------------------ helpers */
 

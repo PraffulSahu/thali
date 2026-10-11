@@ -1,73 +1,65 @@
-/** A deliverable restaurant in discovery/search lists (PRD C-2): open state, ETA estimate, delivery fee, rating or "New". */
-import { Link } from 'react-router';
-import { Badge, FoodMarker, Icon, Price } from '../../components/ui';
-import { formatTime } from '../../lib/format';
-import { cn } from '../../lib/cn';
-import type { DiscoveryRestaurant } from './api';
-import { DemoBadge, EtaText } from './parts';
+/**
+ * Discovery item → design-system RestaurantCard (design-spec §3.20, 10-31): cover/hue art, Pure veg, chili state
+ * badge ("Opens at 6:00 PM" / "Not accepting orders"), rating or "New" (≥5 rule), cuisines + price band,
+ * "32 min est. · 2.1 km · ₹29 delivery" or "Closed now", MKT-8 offer badge only when the API sends one.
+ * Search results add "Matches: Chicken Dum Biryani · ₹279" lines.
+ */
+import { useQuery } from '@tanstack/react-query';
+import { RestaurantCard as Card } from '../../components/ui';
+import { formatINR } from '../../lib/format';
+import { cuisineName, CUISINES_KEY, fetchCuisines, type Cuisine, type DiscoveryRestaurant } from './api';
+import { istTime } from './parts';
 
-export function RatingBadge({ rating }: { rating: { average: number; count: number } | null }) {
-  if (!rating) return <Badge tone="neutral">New</Badge>;
-  return (
-    <Badge tone="success" icon="star">
-      {rating.average.toFixed(1)} <span className="sr-only">out of 5 from</span>
-      <span className="font-normal">({rating.count})</span>
-    </Badge>
-  );
+export function useCuisines() {
+  return useQuery({ queryKey: CUISINES_KEY, queryFn: fetchCuisines, staleTime: 10 * 60_000 });
 }
 
-export const priceBandLabel = (b: number | null) => (b ? '₹'.repeat(b) : null);
+/** "Opens at 6:00 PM" (today, IST) / "Opens Tue, 11:00 AM". */
+export function opensLabel(iso: string, now = Date.now()): string {
+  const day = (d: number | string) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date(d));
+  if (day(iso) === day(now)) return `Opens at ${istTime(iso)}`;
+  const wd = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short' }).format(new Date(iso));
+  return `Opens ${wd}, ${istTime(iso)}`;
+}
 
-export function RestaurantCard({ r }: { r: DiscoveryRestaurant }) {
+/** State badge for a closed restaurant (null when open). Paused = "Not accepting orders" (MKT-3). */
+export function closedStateLabel(r: Pick<DiscoveryRestaurant, 'open' | 'closedReason' | 'nextOpenAt'>): string | null {
+  if (r.open) return null;
+  if (r.closedReason === 'PAUSED') return 'Not accepting orders';
+  if (r.nextOpenAt) return opensLabel(r.nextOpenAt);
+  return 'Closed now';
+}
+
+export function DiscoveryCard({ r, cuisines, index }: { r: DiscoveryRestaurant; cuisines?: Cuisine[]; index?: number }) {
   return (
-    <li className="list-none">
-      <Link
+    <li className="flex list-none flex-col">
+      <Card
         to={`/restaurants/${r.slug || r.id}`}
-        className={cn(
-          'group block overflow-hidden rounded-card border border-slate-200 bg-surface shadow-raised transition-[box-shadow,border-color] hover:border-slate-300 hover:shadow-overlay focus-visible:outline-none',
-          !r.open && 'opacity-80',
-        )}
-      >
-        <div className="relative aspect-[16/9] bg-slate-100">
-          {r.imageUrl ? (
-            <img src={r.imageUrl} alt="" loading="lazy" className={cn('h-full w-full object-cover', !r.open && 'grayscale')} />
-          ) : (
-            <div className="grid h-full place-items-center text-slate-400" aria-hidden>
-              <Icon name="store" size={36} />
-            </div>
-          )}
-          <div className="absolute left-2 top-2 flex flex-wrap gap-1">
-            {!r.open ? <Badge tone="neutral" variant="solid">{r.nextOpenAt ? `Closed · opens ${formatTime(r.nextOpenAt)}` : 'Closed now'}</Badge> : null}
-            <DemoBadge show={r.isDemo} />
-          </div>
-        </div>
-        <div className="space-y-1 p-3">
-          <div className="flex items-start justify-between gap-2">
-            <h3 className="font-semibold text-slate-900 group-hover:underline">{r.name}</h3>
-            <RatingBadge rating={r.rating} />
-          </div>
-          <p className="flex items-center gap-1.5 truncate text-sm text-slate-600">
-            {r.isVeg === 'PURE_VEG' ? (
-              <span className="inline-flex items-center gap-1 text-veg">
-                <FoodMarker veg size={12} /> Pure veg ·
-              </span>
-            ) : null}
-            {r.cuisines.join(', ')}
-            {priceBandLabel(r.priceBand) ? <span aria-label={`price band ${r.priceBand} of 3`}> · {priceBandLabel(r.priceBand)}</span> : null}
-          </p>
-          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-            <EtaText minutes={r.etaMinutes} distanceKm={r.distanceKm} source={r.etaSource} />
-            <span className="text-sm text-slate-700">
-              Delivery <Price paise={r.deliveryFeePaise} size="sm" freeLabel="free" />
-            </span>
-          </div>
-          {r.matchedItems?.length ? (
-            <p className="truncate text-sm text-slate-600">
-              Matches: {r.matchedItems.slice(0, 3).map((i) => i.name).join(', ')}
-            </p>
-          ) : null}
-        </div>
-      </Link>
+        id={r.id}
+        name={r.name}
+        imageUrl={r.imageUrl}
+        cuisines={r.cuisines.slice(0, 2).map((c) => cuisineName(c, cuisines))}
+        priceBand={r.priceBand}
+        rating={r.rating ? { avg: r.rating.average, count: r.rating.count } : null}
+        etaMin={r.etaMinutes}
+        distanceKm={r.distanceKm}
+        deliveryFeePaise={r.deliveryFeePaise}
+        open={r.open}
+        stateLabel={closedStateLabel(r)}
+        pureVeg={r.isVeg === 'PURE_VEG'}
+        offer={r.offer ?? null}
+        index={index}
+        className="h-full"
+      />
+      {r.matchedItems?.length ? (
+        <ul aria-label={`Dishes matching your search at ${r.name}`} className="mt-2 flex flex-col gap-1 px-1">
+          {r.matchedItems.slice(0, 3).map((m) => (
+            <li key={m.id} className="truncate text-[13.5px] text-fg-2">
+              <span className="text-fg-3">Matches:</span> {m.name} · {formatINR(m.pricePaise).replace(/\.00$/, '')}
+            </li>
+          ))}
+        </ul>
+      ) : null}
     </li>
   );
 }

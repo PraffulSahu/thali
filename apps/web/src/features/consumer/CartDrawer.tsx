@@ -1,22 +1,20 @@
 /**
- * Cart quick-view drawer (opened from the header cart button in HeaderActions.tsx): per-restaurant groups
- * (each "Delivered separately"), subtotal, and links to the full cart / checkout (sign-in first for guests).
+ * Cart drawer (11-04; design-spec §7.2): right sheet 440px (bottom sheet on phones) with one tray slot per
+ * restaurant, items subtotal and "Proceed to checkout" (guests sign in first). "Open full cart" → /cart.
  */
-import { useState } from 'react';
-import { useNavigate } from 'react-router';
-import { Button, ButtonLink, EmptyState, Price, Sheet, Skeleton } from '../../components/ui';
-import { useAuth } from '../../lib/auth';
-import { errorMessage } from '../../lib/errors';
+import { Button, ButtonLink, ErrorState, Price, Sheet, Skeleton } from '../../components/ui';
+import { EmptyCart } from './parts';
 import { useCart } from './api';
-import { CartGroups } from './CartPage';
-import { LoginDialog } from './LoginDialog';
+import { CartGroupSlot } from './CartLines';
+import { useDeliveryLabel } from './cartState';
+import { checkoutHref, useCheckoutGate } from './CheckoutGate';
 
 export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
   const cart = useCart();
-  const { isAuthenticated } = useAuth();
-  const navigate = useNavigate();
-  const [login, setLogin] = useState(false);
+  const label = useDeliveryLabel();
+  const { go, dialog } = useCheckoutGate();
   const c = cart.data;
+  const many = (c?.groups.length ?? 0) > 1;
   return (
     <>
       <Sheet
@@ -26,22 +24,23 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
         side="right"
         footer={
           c && c.groups.length ? (
-            <div className="w-full space-y-2">
-              <div className="flex justify-between font-semibold">
-                <span>Items subtotal</span>
-                <Price paise={c.subtotalPaise} />
+            <div className="flex w-full flex-col gap-2.5">
+              <div className="flex items-baseline justify-between">
+                <span className="text-[15px] font-medium">Items subtotal</span>
+                <Price paise={c.subtotalPaise} size="xl" />
               </div>
-              <p className="text-xs text-slate-600">Fees and taxes are calculated per restaurant at checkout.</p>
-              {isAuthenticated ? (
-                <ButtonLink to="/checkout" fullWidth onClick={onClose}>
-                  Checkout
-                </ButtonLink>
-              ) : (
-                <Button fullWidth onClick={() => setLogin(true)}>
-                  Sign in to checkout
-                </Button>
-              )}
-              <ButtonLink to="/cart" variant="secondary" fullWidth onClick={onClose}>
+              <p className="text-xs text-fg-3">Fees and taxes are shown per restaurant at checkout. One payment covers every cart.</p>
+              <Button
+                size="lg"
+                fullWidth
+                onClick={() => {
+                  onClose();
+                  go(checkoutHref());
+                }}
+              >
+                Proceed to checkout
+              </Button>
+              <ButtonLink to="/cart" variant="outline" fullWidth onClick={onClose}>
                 Open full cart
               </ButtonLink>
             </div>
@@ -51,26 +50,40 @@ export function CartDrawer({ open, onClose }: { open: boolean; onClose: () => vo
         {cart.isPending ? (
           <Skeleton className="h-40 w-full" />
         ) : cart.isError ? (
-          <div className="space-y-2 text-sm text-danger-800" role="alert">
-            <p>Couldn&rsquo;t load your cart: {errorMessage(cart.error)}</p>
-            <Button size="sm" variant="secondary" onClick={() => void cart.refetch()}>
-              Retry
-            </Button>
-          </div>
+          <ErrorState compact error={cart.error} title="Couldn't load your cart" onRetry={() => void cart.refetch()} />
         ) : !c || c.groups.length === 0 ? (
-          <EmptyState compact icon="cart" title="Your cart is empty" description="Add dishes from any restaurant that delivers to you." />
+          <EmptyCart onBrowse={onClose} compact />
         ) : (
-          <CartGroups cart={c} compact />
+          <div className="flex flex-col gap-3">
+            {many ? <p className="text-[13px] text-fg-3">{c.deliveryExplanation ?? 'Each restaurant cooks and delivers its part separately.'}</p> : null}
+            {c.groups.map((g, i) => (
+              <div key={g.restaurantId} className="overflow-hidden rounded-card border border-line bg-card [&>div]:border-r-0 [&>div]:border-b-0">
+                <CartGroupSlot
+                  group={g}
+                  deliveryLabel={label(g.restaurantId, i + 1)}
+                  linkName
+                  action={
+                    many ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="self-start"
+                        onClick={() => {
+                          onClose();
+                          go(checkoutHref(g.restaurantId));
+                        }}
+                      >
+                        Checkout only {g.restaurantName} →
+                      </Button>
+                    ) : null
+                  }
+                />
+              </div>
+            ))}
+          </div>
         )}
       </Sheet>
-      <LoginDialog
-        open={login}
-        onClose={() => setLogin(false)}
-        onSignedIn={() => {
-          onClose();
-          navigate('/checkout');
-        }}
-      />
+      {dialog}
     </>
   );
 }
