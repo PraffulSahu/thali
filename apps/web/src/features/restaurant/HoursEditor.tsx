@@ -1,15 +1,16 @@
 /**
- * Weekly hours editor (PRD R-4). Up to 3 slots per day; a closing time earlier than the opening time means the
- * slot runs past midnight into the next day; identical open and close means open 24 hours (API semantics).
+ * Weekly hours editor (PRD R-4, design-spec §7.3 "Hours: weekly editor rows"). One row per day: open switch,
+ * up to 3 slots (open / close time inputs), "+ add slot", copy to all days. A closing time earlier than the
+ * opening time runs past midnight into the next day; identical open and close = open 24 hours (API semantics).
  */
-import { Button, Field, Icon, Input, Switch } from '../../components/ui';
+import { Button, Icon, IconButton, Input, Toggle } from '../../components/ui';
 import { DAY_NAMES, DAY_ORDER } from './api';
 import { MAX_SLOTS_PER_DAY, slotKind, type WeekState } from './hours';
 
 export interface HoursEditorProps {
   value: WeekState;
   onChange: (next: WeekState) => void;
-  /** from validateWeek(); shown only for slots the user touched, or all when `showAll` */
+  /** from validateWeek() */
   errors: Record<string, string>;
   disabled?: boolean;
 }
@@ -24,9 +25,9 @@ export function HoursEditor({ value, onChange, errors, disabled }: HoursEditorPr
   };
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col">
       {errors.week ? (
-        <p role="alert" className="text-sm font-medium text-danger-700">
+        <p role="alert" className="mb-2 text-[13px] font-medium text-bad">
           {errors.week}
         </p>
       ) : null}
@@ -35,74 +36,72 @@ export function HoursEditor({ value, onChange, errors, disabled }: HoursEditorPr
         const name = DAY_NAMES[day]!;
         const open = slots.length > 0;
         return (
-          <fieldset key={day} className="rounded-card border border-slate-200 bg-surface p-3 sm:p-4" disabled={disabled}>
+          <fieldset key={day} disabled={disabled} className="flex flex-wrap items-start gap-x-4 gap-y-2 border-b border-line py-3 last:border-0">
             <legend className="sr-only">{name}</legend>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <Switch
-                label={name}
-                description={open ? undefined : 'Closed'}
-                checked={open}
-                onChange={(e) => setDay(day, e.target.checked ? [{ open: '09:00', close: '22:00' }] : [])}
-              />
-              {open ? (
-                <Button variant="ghost" size="sm" onClick={() => copyToAll(day)} aria-label={`Copy ${name} hours to every day`}>
-                  Copy to all days
-                </Button>
-              ) : null}
+            <div className="flex min-h-[46px] w-36 shrink-0 items-center gap-3">
+              <Toggle checked={open} onChange={(v) => setDay(day, v ? [{ open: '09:00', close: '22:00' }] : [])} label={name} />
+              <span className="text-sm font-medium text-fg" aria-hidden="true">
+                {name}
+              </span>
             </div>
-            {slots.map((s, i) => {
-              const err = errors[`${day}.${i}`];
-              const kind = slotKind(s);
-              return (
-                <div key={i} className="mt-2 flex flex-col gap-1">
-                  <div className="flex flex-wrap items-end gap-3">
-                    <Field label={`${name} slot ${i + 1} opens`} error={err}>
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              {!open ? <p className="flex min-h-[46px] items-center text-sm text-fg-3">Closed</p> : null}
+              {slots.map((s, i) => {
+                const err = errors[`${day}.${i}`];
+                const kind = slotKind(s);
+                return (
+                  <div key={i} className="flex flex-col gap-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="w-[150px]">
                       <Input
                         type="time"
+                        aria-label={`${name} slot ${i + 1} opens`}
+                        aria-invalid={err ? true : undefined}
                         value={s.open}
                         onChange={(e) => setDay(day, slots.map((x, k) => (k === i ? { ...x, open: e.target.value } : x)))}
+                        className="px-3 font-mono"
                       />
-                    </Field>
-                    <Field label={`${name} slot ${i + 1} closes`}>
+                      </span>
+                      <span className="text-fg-3" aria-hidden="true">
+                        –
+                      </span>
+                      <span className="w-[150px]">
                       <Input
                         type="time"
+                        aria-label={`${name} slot ${i + 1} closes`}
                         value={s.close}
                         onChange={(e) => setDay(day, slots.map((x, k) => (k === i ? { ...x, close: e.target.value } : x)))}
+                        className="px-3 font-mono"
                       />
-                    </Field>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      icon="trash"
-                      aria-label={`Remove ${name} slot ${i + 1}`}
-                      onClick={() => setDay(day, slots.filter((_, k) => k !== i))}
-                    >
-                      Remove
-                    </Button>
+                      </span>
+                      <IconButton icon="trash" size="sm" label={`Remove ${name} slot ${i + 1}`} onClick={() => setDay(day, slots.filter((_, k) => k !== i))} />
+                    </div>
+                    {err ? <p className="text-[13px] font-medium text-bad">{err}</p> : null}
+                    {kind === 'overnight' ? (
+                      <p className="flex items-center gap-1 text-[13px] text-fg-3">
+                        <Icon name="clock" size={14} /> Closes after midnight, on the next day.
+                      </p>
+                    ) : kind === 'allDay' ? (
+                      <p className="flex items-center gap-1 text-[13px] text-fg-3">
+                        <Icon name="clock" size={14} /> Open 24 hours.
+                      </p>
+                    ) : null}
                   </div>
-                  {kind === 'overnight' ? (
-                    <p className="flex items-center gap-1 text-sm text-slate-600">
-                      <Icon name="clock" size={14} /> Closes after midnight, on the next day.
-                    </p>
-                  ) : kind === 'allDay' ? (
-                    <p className="flex items-center gap-1 text-sm text-slate-600">
-                      <Icon name="clock" size={14} /> Open 24 hours.
-                    </p>
+                );
+              })}
+              {open ? (
+                <div className="flex flex-wrap gap-x-3">
+                  {slots.length < MAX_SLOTS_PER_DAY ? (
+                    <Button variant="link" size="sm" icon="plus" onClick={() => setDay(day, [...slots, { open: '18:00', close: '23:00' }])} aria-label={`Add another slot for ${name}`}>
+                      Add slot
+                    </Button>
                   ) : null}
+                  <Button variant="link" size="sm" onClick={() => copyToAll(day)} aria-label={`Copy ${name} hours to every day`}>
+                    Copy to all days
+                  </Button>
                 </div>
-              );
-            })}
-            {open && slots.length < MAX_SLOTS_PER_DAY ? (
-              <Button
-                variant="link"
-                size="sm"
-                icon="plus"
-                className="mt-2"
-                onClick={() => setDay(day, [...slots, { open: '18:00', close: '23:00' }])}
-              >
-                Add another slot for {name}
-              </Button>
-            ) : null}
+              ) : null}
+            </div>
           </fieldset>
         );
       })}

@@ -15,9 +15,10 @@ describe('StoreSettingsPage', () => {
     const api = mockApi([['POST', /pause$/, () => json(makeRestaurant({ pausedUntil: new Date(Date.now() + 30 * 60_000).toISOString() }))]]);
     const user = userEvent.setup();
     render();
-    expect(screen.getByRole('button', { name: 'Pause 15 min' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Pause 60 min' })).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Pause 30 min' }));
+    expect(screen.getByRole('button', { name: '15 min' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '60 min' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: '30 min' }));
+    await user.click(screen.getByRole('button', { name: 'Pause for 30 min' }));
     await waitFor(() => expect(api.find('POST', /pause$/)).toHaveLength(1));
     expect(api.find('POST', /pause$/)[0]!.body).toEqual({ minutes: 30 });
   });
