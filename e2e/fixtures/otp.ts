@@ -2,7 +2,7 @@
  * UI phone sign-in with the demo OTP (OtpSignInForm: /signin page or the consumer LoginDialog).
  */
 import { expect, type Locator, type Page } from '@playwright/test';
-import { DEMO_OTP, national } from './env.js';
+import { DEMO_OTP, national, sleep } from './env.js';
 import { resetAuthRateLimits } from './stack.js';
 
 /**
@@ -12,8 +12,21 @@ import { resetAuthRateLimits } from './stack.js';
 export async function fillOtpForm(scope: Page | Locator, phone: string): Promise<void> {
   await resetAuthRateLimits();
   await scope.getByLabel('Mobile number').fill(national(phone));
-  await scope.getByRole('button', { name: 'Send code' }).click();
-  await expect(scope.getByText('Demo mode: no SMS is sent. Use code 123456.')).toBeVisible();
+  const notice = scope.getByText('Demo mode: no SMS is sent. Use code 123456.');
+  // The resend cooldown (30 s per phone) also lives on identity's OTP record, not only in the Redis counters reset
+  // above: a phone signed in by the previous spec seconds ago gets "Please wait 0:0N…". Wait it out once.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await scope.getByRole('button', { name: 'Send code' }).click();
+    const wait = scope.getByText(/Please wait (\d+):(\d+) before requesting another code/);
+    const outcome = await Promise.race([
+      notice.waitFor({ timeout: 20_000 }).then(() => 'sent' as const),
+      wait.waitFor({ timeout: 20_000 }).then(() => 'cooldown' as const),
+    ]);
+    if (outcome === 'sent') break;
+    const [, m, sec] = (await wait.innerText()).match(/(\d+):(\d+)/)!;
+    await sleep((Number(m) * 60 + Number(sec) + 1) * 1000);
+  }
+  await expect(notice).toBeVisible();
   const code = scope.getByLabel('6-digit code');
   await code.fill(DEMO_OTP);
   await expect(code).toBeHidden({ timeout: 20_000 });
