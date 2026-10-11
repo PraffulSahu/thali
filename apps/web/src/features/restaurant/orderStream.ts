@@ -43,11 +43,12 @@ function createContext(): AudioContext | null {
   }
 }
 
-/** Must be called from a user gesture. */
-export function armSound(): void {
+/** Must be called from a user gesture. Resolves once the audio context is running (or could not start). */
+export function armSound(): Promise<void> {
   audioCtx ??= createContext();
-  void audioCtx?.resume().then(emitSound, emitSound);
   emitSound();
+  if (!audioCtx) return Promise.resolve();
+  return audioCtx.resume().then(emitSound, emitSound);
 }
 
 function hookFirstGesture() {
@@ -57,21 +58,28 @@ function hookFirstGesture() {
     document.removeEventListener('pointerdown', once);
     document.removeEventListener('keydown', once);
     gestureHooked = false;
-    if (snapshot.enabled && !snapshot.armed) armSound();
+    if (snapshot.enabled && !snapshot.armed) void armSound();
   };
   document.addEventListener('pointerdown', once);
   document.addEventListener('keydown', once);
 }
 
-export function setSoundEnabled(enabled: boolean): void {
+/**
+ * Turn the chime on/off (persisted). Turning it on from a click unlocks audio and, with `test`, plays one chime
+ * so the owner hears what a new order sounds like.
+ */
+export function setSoundEnabled(enabled: boolean, opts: { test?: boolean } = {}): void {
   try {
     localStorage.setItem(SOUND_KEY, enabled ? '1' : '0');
   } catch {
     /* ignore */
   }
   snapshot = { ...snapshot, enabled };
-  if (enabled) armSound();
-  else emitSound();
+  if (enabled) {
+    void armSound().then(() => {
+      if (opts.test) playOrderChime();
+    });
+  } else emitSound();
 }
 
 /** Two short notes. No-op unless the owner enabled sound and the context was unlocked by a gesture. */
@@ -106,7 +114,7 @@ export function useSoundState() {
   useEffect(() => {
     if (s.enabled && !s.armed) hookFirstGesture();
   }, [s.enabled, s.armed]);
-  return { ...s, setEnabled: setSoundEnabled };
+  return { ...s, setEnabled: setSoundEnabled, toggle: () => setSoundEnabled(!s.enabled, { test: !s.enabled }) };
 }
 
 /* ---------------------------------------------------------------- stream */
@@ -168,5 +176,11 @@ export function useOrderStream(restaurantId: string | undefined, opts: OrderStre
   }, [query.data, alert]);
 
   const placedCount = active.filter((o) => o.status === 'PLACED').length;
-  return { query, active, newIds, placedCount, realtime: status };
+  // screen-reader announcement for arrivals (rendered by the board in an aria-live region)
+  const announcement = useMemo(() => {
+    const arrived = active.filter((o) => o.status === 'PLACED' && newIds.has(o.id));
+    if (arrived.length === 0) return '';
+    return `New order${arrived.length > 1 ? 's' : ''}: ${arrived.map((o) => o.code).join(', ')}`;
+  }, [active, newIds]);
+  return { query, active, newIds, placedCount, announcement, realtime: status };
 }

@@ -1,11 +1,12 @@
 import '../setup';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import RestaurantLayout from '../../src/features/restaurant/RestaurantLayout';
 import { useCurrentRestaurant } from '../../src/features/restaurant/RestaurantContext';
 import { setSelectedRestaurantId } from '../../src/features/restaurant/selection';
+import { RestaurantSwitcher } from '../../src/features/restaurant/RestaurantSwitcher';
 import { makeAuth, renderWithProviders } from '../utils';
 import { apiError, makeRestaurant, mockApi } from './fixtures';
 
@@ -15,11 +16,14 @@ function Child() {
 }
 const render = () =>
   renderWithProviders(
-    <Routes>
-      <Route element={<RestaurantLayout />}>
-        <Route index element={<Child />} />
-      </Route>
-    </Routes>,
+    <>
+      <RestaurantSwitcher />
+      <Routes>
+        <Route element={<RestaurantLayout />}>
+          <Route index element={<Child />} />
+        </Route>
+      </Routes>
+    </>,
     { route: '/restaurant', path: '/restaurant/*', auth: makeAuth({ roles: ['RESTAURANT_OWNER'] }) },
   );
 
@@ -33,15 +37,19 @@ describe('RestaurantLayout', () => {
     expect(screen.getByRole('link', { name: /start onboarding/i })).toHaveAttribute('href', '/restaurant/onboarding');
   });
 
-  it('lets an owner with several stores switch between them', async () => {
+  it('lets an owner with several stores switch between them from the sidebar switcher (locality + status shown)', async () => {
     mockApi([
-      ['GET', /^\/owner\/restaurants$/, { items: [makeRestaurant({ id: 'r1', name: 'Spice Route' }), makeRestaurant({ id: 'r2', name: 'Dosa Corner' })] }],
+      ['GET', /^\/owner\/restaurants$/, { items: [makeRestaurant({ id: 'r1', name: 'Spice Route', address: { line1: '1', locality: 'Indiranagar', city: 'Bengaluru', pincode: '560038' } }), makeRestaurant({ id: 'r2', name: 'Dosa Corner', status: 'APPROVAL_PENDING' })] }],
       ['GET', /^\/owner\/orders$/, { items: [], nextCursor: null }],
     ]);
     const user = userEvent.setup();
     render();
     expect(await screen.findByText('Working on Spice Route')).toBeInTheDocument();
-    await user.selectOptions(screen.getByLabelText('Restaurant'), 'r2');
+    await user.click(screen.getByRole('button', { name: 'Switch restaurant. Current: Spice Route, Indiranagar' }));
+    const menu = screen.getByRole('dialog', { name: 'Switch restaurant' });
+    expect(within(menu).getByText('Awaiting approval')).toBeInTheDocument();
+    expect(within(menu).getByRole('link', { name: 'Add restaurant' })).toHaveAttribute('href', '/restaurant/onboarding');
+    await user.click(within(menu).getByRole('button', { name: /Dosa Corner/ }));
     expect(await screen.findByText('Working on Dosa Corner')).toBeInTheDocument();
     expect(localStorage.getItem('thali.restaurant.selected')).toBe('r2');
   });
@@ -59,8 +67,8 @@ describe('RestaurantLayout', () => {
   it('shows the status banner for the selected restaurant', async () => {
     mockApi([['GET', /^\/owner\/restaurants$/, { items: [makeRestaurant({ status: 'SUSPENDED', statusReason: 'Safety audit' })] }]]);
     render();
-    expect(await screen.findByRole('heading', { name: /your restaurant is suspended/i })).toBeInTheDocument();
-    expect(screen.getByText('Safety audit')).toBeInTheDocument();
+    expect(await screen.findByText('Restaurant suspended')).toBeInTheDocument();
+    expect(screen.getByText(/Safety audit/)).toBeInTheDocument();
   });
 
   it('shows a forbidden state when the API refuses the owner role', async () => {

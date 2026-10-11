@@ -1,184 +1,411 @@
 /**
- * One order on the board (PRD R-5). Shows what to cook, the acceptance countdown, prep-time controls and the
- * pickup code the delivery partner must quote. Every action calls the orders API and reports failures inline.
+ * Owner order cards (design-spec §3.26, board 20):
+ *   NewOrderCard        PLACED — accept-by ring (red ≤ 60 s), items + options + notes, prep pills 10/15/20/30 (+ other
+ *                       times), Reject → inline reason mode (Out of stock / Kitchen busy / Closing soon / Other…), Accept · N min
+ *   PreparingCard       ACCEPTED / PREPARING — items line, prep progress from acceptedAt + readyEta/prepMinutes,
+ *                       rider line, Change time, Start preparing / Mark ready
+ *   ReadyCard           READY_FOR_PICKUP — pickup code boxes, rider row + delivery chip
+ * Every action calls the orders API; failures toast and refetch so the card shows the server's truth.
  */
 import { useMutation } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useId, useState, type MouseEvent, type ReactNode } from 'react';
 import {
-  Badge, Button, Card, ConfirmDialog, Countdown, Field, FoodMarker, Icon, InlineError, Price, RelativeTime, Select, StatusPill, useToast,
+  Avatar, Badge, Button, ChoicePills, CodeDigits, CountdownRing, FoodMarker, KanbanEmpty, ProgressBar, StatusPill, Textarea, useToast,
 } from '../../components/ui';
-import { formatPhone, formatTime, plural } from '../../lib/format';
+import { useNow } from '../../hooks/useNow';
 import { cn } from '../../lib/cn';
+import { errorMessage } from '../../lib/errors';
 import { PREP_TIME_OPTIONS, allowedActions, ordersApi, type OwnerOrder } from './api';
-import { RejectDialog } from './RejectDialog';
+import { Popover } from './kit';
+import { PREP_PILLS, firstName, hasPartner, itemsLine, maskedPhone, optionText, partnerText, prepProgress } from './orderText';
 
-export interface OrderCardProps {
+export type EndedKind = 'auto' | 'rejected';
+
+export const REJECT_REASONS = ['Out of stock', 'Kitchen busy', 'Closing soon'] as const;
+
+interface CommonProps {
   order: OwnerOrder;
-  /** Arrived since the screen opened: highlighted until it is accepted or rejected. */
-  isNew?: boolean;
-  /** Default prep time offered in the accept dialog. */
-  defaultPrepMinutes: number;
-  /** option id -> name, resolved from the owner's menu (the order view only carries ids). */
-  optionNames?: ReadonlyMap<string, string>;
-  /** Called after any successful change so the board refetches. */
+  /** Refetch the board after a change (or a failure, to show the server's state). */
   onChanged: () => void;
+  /** Open the detail dialog (card click). */
+  onOpen: (o: OwnerOrder) => void;
+  className?: string;
 }
 
-function prepOptions(current: number) {
-  const mins = PREP_TIME_OPTIONS.includes(current) ? PREP_TIME_OPTIONS : [...PREP_TIME_OPTIONS, current].sort((a, b) => a - b);
-  return mins.map((m) => ({ value: String(m), label: `${m} min` }));
+/** Card frame: whole-card click opens details (clicks on controls are ignored), the code is a real button. */
+function CardFrame({ order, onOpen, className, children, label }: { order: OwnerOrder; onOpen: (o: OwnerOrder) => void; className?: string; children: ReactNode; label?: string }) {
+  const click = (e: MouseEvent<HTMLElement>) => {
+    if ((e.target as HTMLElement).closest('button,a,input,select,textarea,label')) return;
+    onOpen(order);
+  };
+  return (
+    <li aria-label={label ?? `Order ${order.code}`} onClick={click} className={cn('flex cursor-pointer list-none flex-col rounded-card border border-line bg-card p-4', className)}>
+      {children}
+    </li>
+  );
 }
 
-export function OrderCard({ order, isNew, defaultPrepMinutes, optionNames, onChanged }: OrderCardProps) {
+function CodeButton({ order, onOpen }: { order: OwnerOrder; onOpen: (o: OwnerOrder) => void }) {
+  return (
+    <button type="button" onClick={() => onOpen(order)} className="w-fit text-left font-mono text-sm font-medium text-fg hover:underline" aria-label={`Order ${order.code}, view details`}>
+      {order.code}
+    </button>
+  );
+}
+
+/** "8:14 PM" (IST, board 20 style). */
+const time = (iso: string | null | undefined) =>
+  iso ? new Intl.DateTimeFormat('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' }).format(new Date(iso)).toUpperCase() : '';
+
+/* ------------------------------------------------------------------ New */
+
+export interface NewOrderCardProps extends CommonProps {
+  /** Arrived after the board opened: arrive animation + ring. */
+  isNew?: boolean;
+  defaultPrep: number;
+  /** The order left the New column on this device (auto-rejected window, or rejected here). */
+  onEnded: (o: OwnerOrder, kind: EndedKind) => void;
+}
+
+export function NewOrderCard({ order, isNew, defaultPrep, onChanged, onOpen, onEnded, className }: NewOrderCardProps) {
   const { toast } = useToast();
-  const [dialog, setDialog] = useState<'accept' | 'reject' | 'prep' | null>(null);
-  const [prep, setPrep] = useState(String(order.prepMinutes ?? defaultPrepMinutes));
+  const id = useId();
+  const [prep, setPrep] = useState<number>(defaultPrep);
+  const [mode, setMode] = useState<'new' | 'reject'>('new');
+  const [other, setOther] = useState<string | null>(null);
   const [expired, setExpired] = useState(false);
 
-  const done = (title: string) => () => {
-    toast({ title, tone: 'success' });
+  const fail = (what: string) => (e: unknown) => {
+    toast({ title: `Couldn't ${what} ${order.code}`, description: errorMessage(e), tone: 'danger' });
     onChanged();
   };
-  const failed = () => onChanged(); // e.g. ORDER_ACCEPT_WINDOW_EXPIRED: show the server's current state
-  const accept = useMutation({ mutationFn: (m: number) => ordersApi.accept(order.id, m), onSuccess: done(`Order ${order.code} accepted`), onError: failed });
-  const reject = useMutation({ mutationFn: (r: string) => ordersApi.reject(order.id, r), onSuccess: done(`Order ${order.code} rejected`), onError: failed });
-  const preparing = useMutation({ mutationFn: () => ordersApi.preparing(order.id), onSuccess: done('Marked as preparing'), onError: failed });
-  const ready = useMutation({ mutationFn: () => ordersApi.ready(order.id), onSuccess: done('Marked ready for pickup'), onError: failed });
-  const setPrepTime = useMutation({ mutationFn: (m: number) => ordersApi.setPrepTime(order.id, m), onSuccess: done('Prep time updated'), onError: failed });
+  const accept = useMutation({
+    mutationFn: (m: number) => ordersApi.accept(order.id, m),
+    onSuccess: () => {
+      toast({ title: `${order.code} accepted · ${prep} min`, tone: 'success' });
+      onChanged();
+    },
+    onError: fail('accept'),
+  });
+  const reject = useMutation({
+    mutationFn: (reason: string) => ordersApi.reject(order.id, reason),
+    onSuccess: () => {
+      onEnded(order, 'rejected');
+      onChanged();
+    },
+    onError: fail('reject'),
+  });
 
-  const itemCount = order.lines.reduce((n, l) => n + l.quantity, 0);
-  const subtotal = order.breakdown?.itemsSubtotalPaise ?? order.breakdown?.totalPaise;
-  const s = order.status;
-  const showCode = (s === 'ACCEPTED' || s === 'PREPARING' || s === 'READY_FOR_PICKUP') && order.pickupCode;
-  const windowClosed = s === 'PLACED' && (expired || (order.acceptBy ? Date.parse(order.acceptBy) <= Date.now() : false));
-  // the server decides what is allowed (it returns none once the accept window has passed)
+  const windowClosed = expired || (order.acceptBy ? Date.parse(order.acceptBy) <= Date.now() : false);
   const actions = windowClosed ? [] : allowedActions(order);
-  const can = (a: ReturnType<typeof allowedActions>[number]) => actions.includes(a);
+  if (windowClosed || (actions.length === 0 && order.allowedTransitions)) {
+    return <KanbanEmpty title="Auto-rejected — the accept window passed" sub={`${order.code} · the customer is being refunded`} />;
+  }
+
+  const placed = order.placedAt ? Date.parse(order.placedAt) : NaN;
+  const by = order.acceptBy ? Date.parse(order.acceptBy) : NaN;
+  const windowSec = !Number.isNaN(placed) && !Number.isNaN(by) && by > placed ? Math.round((by - placed) / 1000) : 300;
+  const notes = order.lines.filter((l) => l.note?.trim());
+  const busy = accept.isPending || reject.isPending;
+  const extraTimes = PREP_TIME_OPTIONS.filter((m) => !(PREP_PILLS as readonly number[]).includes(m));
+  const customer = firstName(order.customer?.name);
 
   return (
-    <Card
-      as="li"
-      padding="sm"
-      aria-label={`Order ${order.code}`}
-      className={cn('flex list-none flex-col gap-3', isNew && s === 'PLACED' && 'ring-2 ring-brand-500 motion-safe:animate-pop-in')}
+    <CardFrame
+      order={order}
+      onOpen={onOpen}
+      label={`New order ${order.code}`}
+      className={cn('gap-3.5 border-acc', isNew && 'motion-safe:animate-arrive', className)}
     >
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className="flex items-center gap-2 text-base font-semibold text-slate-900">
-            <span className="font-mono">{order.code}</span>
-            {isNew && s === 'PLACED' ? <Badge tone="brand" variant="solid">New</Badge> : null}
-            {order.isDemo ? <Badge tone="info">Demo</Badge> : null}
-          </h3>
-          <p className="text-sm text-slate-600">
-            {plural(itemCount, 'item')}
-            {order.placedAt ? <> · <RelativeTime value={order.placedAt} prefix="placed" /></> : null}
-            {order.customer?.name ? <> · {order.customer.name}{order.customer.phoneMasked ? ` ${formatPhone(order.customer.phoneMasked)}` : ''}</> : null}
-          </p>
+      <div className="flex justify-between gap-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <CodeButton order={order} onOpen={onOpen} />
+          <span className="text-[12.5px] text-fg-3">
+            {[time(order.placedAt), customer, maskedPhone(order.customer?.phoneMasked)].filter(Boolean).join(' · ')}
+          </span>
         </div>
-        <StatusPill kind="childOrder" status={s} />
+        <CountdownRing
+          to={order.acceptBy}
+          totalSec={windowSec}
+          variant="accept"
+          label="left to accept"
+          onExpire={() => {
+            setExpired(true);
+            onEnded(order, 'auto');
+            onChanged();
+          }}
+        />
       </div>
 
-      <ul className="flex flex-col gap-1.5 border-y border-slate-100 py-2">
-        {order.lines.map((l, i) => (
-          <li key={`${l.itemId ?? l.name}-${i}`} className="flex items-start gap-2 text-[0.9375rem]">
-            <FoodMarker veg={l.isVeg ?? true} />
-            <div className="min-w-0 flex-1">
-              <p className="text-slate-900">
-                <span className="font-semibold tabular-nums">{l.quantity} ×</span> {l.name}
-              </p>
-              {l.addOns?.length ? <p className="text-sm text-slate-600">{l.addOns.map((a) => a.name).join(', ')}</p> : null}
-              {(() => {
-                const names = (l.selections ?? []).flatMap((sel) => sel.optionIds.map((id) => optionNames?.get(id))).filter((n): n is string => Boolean(n));
-                return names.length ? <p className="text-sm text-slate-600">{names.join(', ')}</p> : null;
-              })()}
-              {l.note ? <p className="text-sm font-medium text-warn-800">Note: {l.note}</p> : null}
-            </div>
-            {typeof l.lineTotalPaise === 'number' ? <Price paise={l.lineTotalPaise} size="sm" tone="muted" /> : null}
-          </li>
+      <div className="flex flex-col gap-2 text-[14.5px]">
+        <ul className="flex flex-col gap-2">
+          {order.lines.map((l, i) => (
+            <li key={`${l.itemId ?? l.name}-${i}`} className="flex gap-2.5">
+              <span className="min-w-6 font-mono font-semibold">{l.quantity}×</span>
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className="flex items-center gap-1.5 font-medium">
+                  {typeof l.isVeg === 'boolean' ? <FoodMarker veg={l.isVeg} size={12} /> : null}
+                  {l.name}
+                </span>
+                {optionText(l) ? <span className="text-[12.5px] text-fg-3">{optionText(l)}</span> : null}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {notes.map((l, i) => (
+          <p key={i} className="rounded-item bg-warn-bg px-2.5 py-2 text-[13px] text-warn">
+            Note{notes.length > 1 ? ` (${l.name})` : ''}: {l.note}
+          </p>
         ))}
-        {subtotal !== undefined ? (
-          <li className="flex justify-between pt-1 text-sm font-semibold text-slate-900">
-            <span>Items total</span>
-            <Price paise={subtotal} />
-          </li>
-        ) : null}
-      </ul>
-
-      {s === 'PLACED' ? (
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <Icon name="clock" size={16} />
-          <span className="text-slate-700">Accept within</span>
-          <Countdown
-            to={order.acceptBy}
-            label="Time left to accept"
-            expiredLabel="Window closed"
-            onExpire={() => {
-              setExpired(true);
-              onChanged();
-            }}
-          />
-          {windowClosed ? <span className="text-slate-600">This order will be rejected automatically and refunded.</span> : null}
-        </div>
-      ) : null}
-
-      {(s === 'ACCEPTED' || s === 'PREPARING') && (order.readyEta || order.prepMinutes) ? (
-        <p className="flex items-center gap-1.5 text-sm text-slate-700">
-          <Icon name="clock" size={16} />
-          {order.readyEta ? <>Ready by <strong className="tabular-nums">{formatTime(order.readyEta)}</strong></> : null}
-          {order.prepMinutes ? <span className="text-slate-600">({order.prepMinutes} min prep)</span> : null}
-        </p>
-      ) : null}
-
-      {showCode ? (
-        <div className="rounded-control bg-brand-50 px-3 py-2 ring-1 ring-inset ring-brand-200" role="group" aria-label="Pickup code">
-          <p className="text-xs font-medium uppercase tracking-wide text-brand-800">Pickup code</p>
-          <p className="font-mono text-2xl font-bold tracking-[0.3em] text-slate-900" data-testid="pickup-code">{order.pickupCode}</p>
-          <p className="text-sm text-slate-700">Ask the delivery partner for this code before handing over the food.</p>
-        </div>
-      ) : null}
-
-      <InlineError error={preparing.error ?? ready.error} />
-
-      <div className="flex flex-wrap gap-2">
-        {can('accept') ? <Button onClick={() => setDialog('accept')} icon="check">Accept</Button> : null}
-        {can('reject') ? <Button variant="danger" onClick={() => setDialog('reject')} icon="x">Reject</Button> : null}
-        {can('preparing') ? <Button onClick={() => preparing.mutate()} loading={preparing.isPending}>Start preparing</Button> : null}
-        {can('ready') ? (
-          <Button variant={s === 'PREPARING' ? 'primary' : 'secondary'} onClick={() => ready.mutate()} loading={ready.isPending} icon="check">Mark ready</Button>
-        ) : null}
-        {s === 'ACCEPTED' || s === 'PREPARING' ? <Button variant="ghost" onClick={() => setDialog('prep')}>Update prep time</Button> : null}
-        {s === 'READY_FOR_PICKUP' ? (
-          <p className="flex items-center gap-1.5 text-sm text-slate-700">
-            <Icon name="bike" size={16} /> Waiting for the delivery partner{order.deliveryStatus ? ` (${order.deliveryStatus.toLowerCase().replace(/_/g, ' ')})` : ''}.
-          </p>
-        ) : null}
       </div>
 
-      <ConfirmDialog
-        open={dialog === 'accept'}
-        onClose={() => setDialog(null)}
-        title={`Accept order ${order.code}?`}
-        description="Choose how long the order will take to prepare. The customer and the delivery partner see this time."
-        confirmLabel="Accept order"
-        onConfirm={() => accept.mutateAsync(Number(prep))}
-      >
-        <Field label="Preparation time" required>
-          <Select value={prep} onChange={(e) => setPrep(e.target.value)} options={prepOptions(defaultPrepMinutes)} />
-        </Field>
-      </ConfirmDialog>
-      <ConfirmDialog
-        open={dialog === 'prep'}
-        onClose={() => setDialog(null)}
-        title="Update preparation time"
-        description="Let the customer and delivery partner know if the order will take longer."
-        confirmLabel="Update"
-        onConfirm={() => setPrepTime.mutateAsync(Number(prep))}
-      >
-        <Field label="New preparation time" required>
-          <Select value={prep} onChange={(e) => setPrep(e.target.value)} options={prepOptions(order.prepMinutes ?? defaultPrepMinutes)} />
-        </Field>
-      </ConfirmDialog>
-      <RejectDialog open={dialog === 'reject'} onClose={() => setDialog(null)} orderCode={order.code} onReject={(r) => reject.mutateAsync(r)} />
-    </Card>
+      {mode === 'new' ? (
+        <>
+          <div className="flex flex-col gap-2">
+            <span className="flex items-center justify-between gap-2 text-[12.5px] text-fg-3">
+              <span id={`${id}-prep`}>Prep time</span>
+              <label className="flex items-center gap-1.5">
+                <span className="sr-only">Other prep time</span>
+                <select
+                  value={(PREP_PILLS as readonly number[]).includes(prep) ? '' : String(prep)}
+                  onChange={(e) => e.target.value && setPrep(Number(e.target.value))}
+                  className="h-7 rounded-xs border border-line bg-card px-1.5 text-[12.5px] text-fg-2"
+                >
+                  <option value="">Other…</option>
+                  {extraTimes.map((m) => (
+                    <option key={m} value={m}>
+                      {m} min
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </span>
+            <ChoicePills
+              label="Prep time"
+              columns={4}
+              value={String(prep)}
+              onChange={(v) => setPrep(Number(v))}
+              options={PREP_PILLS.map((m) => ({ value: String(m), label: `${m} min`, disabled: busy }))}
+            />
+          </div>
+          <div className="grid grid-cols-[1fr_2fr] gap-2">
+            {actions.includes('reject') ? (
+              <Button variant="danger-outline" shape="block" size="lg" className="min-w-0 px-3 hover:border-line-2" disabled={busy} onClick={() => setMode('reject')}>
+                Reject
+              </Button>
+            ) : (
+              <span />
+            )}
+            {actions.includes('accept') ? (
+              <Button shape="block" size="lg" className="min-w-0 px-3 text-[15px]" loading={accept.isPending} disabled={reject.isPending} onClick={() => accept.mutate(prep)}>
+                Accept · {prep} min
+              </Button>
+            ) : null}
+          </div>
+        </>
+      ) : (
+        <div className="flex flex-col gap-2" role="group" aria-labelledby={`${id}-reason`}>
+          <span id={`${id}-reason`} className="text-sm font-medium text-fg">
+            Reason <span className="font-normal text-fg-3">(required)</span>
+          </span>
+          {other === null ? (
+            <div className="grid grid-cols-2 gap-1.5">
+              {REJECT_REASONS.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  disabled={busy}
+                  aria-pressed={reject.isPending && reject.variables === r}
+                  onClick={() => reject.mutate(r)}
+                  className="h-11 rounded-control border border-line bg-card px-2 text-sm font-medium text-fg hover:border-line-2 disabled:opacity-45"
+                >
+                  {reject.isPending && reject.variables === r ? 'Rejecting…' : r}
+                </button>
+              ))}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setOther('')}
+                className="h-11 rounded-control border border-line bg-card px-2 text-sm font-medium text-fg hover:border-line-2 disabled:opacity-45"
+              >
+                Other…
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              <label htmlFor={`${id}-other`} className="text-[13px] text-fg-3">
+                Tell the customer what happened
+              </label>
+              <Textarea id={`${id}-other`} rows={2} maxLength={500} value={other} onChange={(e) => setOther(e.target.value)} autoFocus />
+              <Button
+                variant="danger"
+                shape="block"
+                size="lg"
+                loading={reject.isPending}
+                disabled={other.trim().length < 3}
+                onClick={() => reject.mutate(other.trim())}
+              >
+                Reject order
+              </Button>
+            </div>
+          )}
+          <Button
+            variant="ghost"
+            disabled={reject.isPending}
+            onClick={() => {
+              if (other !== null) setOther(null);
+              else setMode('new');
+            }}
+          >
+            Back
+          </Button>
+        </div>
+      )}
+    </CardFrame>
+  );
+}
+
+/* ------------------------------------------------------------------ Preparing */
+
+function ChangeTime({ order, onChanged }: { order: OwnerOrder; onChanged: () => void }) {
+  const { toast } = useToast();
+  const [m, setM] = useState<string>(String(order.prepMinutes ?? 20));
+  const save = useMutation({
+    mutationFn: (minutes: number) => ordersApi.setPrepTime(order.id, minutes),
+    onSuccess: (_d, minutes) => {
+      toast({ title: `${order.code}: ready in ${minutes} min`, tone: 'success' });
+      onChanged();
+    },
+    onError: (e) => {
+      toast({ title: "Couldn't change the prep time", description: errorMessage(e), tone: 'danger' });
+      onChanged();
+    },
+  });
+  return (
+    <Popover
+      label={`Change prep time for ${order.code}`}
+      align="start"
+      panelClassName="w-[300px] p-3"
+      trigger={(p) => (
+        <button type="button" {...p} className="font-medium text-fg-2 underline underline-offset-2 hover:text-fg">
+          Change time
+        </button>
+      )}
+    >
+      {(close) => (
+        <div className="flex flex-col gap-2.5">
+          <p className="text-sm font-medium text-fg">Ready in…</p>
+          <p className="text-[12.5px] text-fg-3">Minutes from now. The customer and the rider see the new time.</p>
+          <ChoicePills
+            label="Ready in"
+            columns={3}
+            value={m}
+            onChange={setM}
+            options={PREP_TIME_OPTIONS.filter((x) => x <= 60).map((x) => ({ value: String(x), label: `${x} min` }))}
+          />
+          <Button shape="block" fullWidth loading={save.isPending} onClick={() => save.mutate(Number(m), { onSuccess: close })}>
+            Update · {m} min
+          </Button>
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+export function PreparingCard({ order, onChanged, onOpen, className }: CommonProps) {
+  const { toast } = useToast();
+  const now = useNow(15_000);
+  const actions = allowedActions(order);
+  const run = (fn: () => Promise<unknown>, ok: string) => ({
+    mutationFn: fn,
+    onSuccess: () => {
+      toast({ title: ok, tone: 'success' });
+      onChanged();
+    },
+    onError: (e: unknown) => {
+      toast({ title: `Couldn't update ${order.code}`, description: errorMessage(e), tone: 'danger' });
+      onChanged();
+    },
+  });
+  const preparing = useMutation(run(() => ordersApi.preparing(order.id), `${order.code} is being prepared`));
+  const ready = useMutation(run(() => ordersApi.ready(order.id), `${order.code} is ready for pickup`));
+  const progress = prepProgress(order, now);
+  const canReady = actions.includes('ready');
+  const canPrep = actions.includes('preparing');
+
+  return (
+    <CardFrame order={order} onOpen={onOpen} className={cn('gap-3', className)}>
+      <div className="flex items-baseline justify-between gap-3">
+        <CodeButton order={order} onOpen={onOpen} />
+        <span className="truncate text-[12.5px] text-fg-3">{firstName(order.customer?.name)}</span>
+      </div>
+      <p className="text-sm leading-[1.45] text-fg">{itemsLine(order)}</p>
+      {progress ? (
+        <ProgressBar
+          value={progress.elapsed}
+          max={progress.total}
+          overdue={progress.overdue}
+          label={`Preparation of ${order.code}`}
+          left={progress.text}
+          right={partnerText(order)}
+        />
+      ) : (
+        <p className="text-xs text-fg-3">{partnerText(order)}</p>
+      )}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-3">
+        {order.readyEta ? <span>Ready by {time(order.readyEta)}</span> : null}
+        <ChangeTime order={order} onChanged={onChanged} />
+        {canPrep && canReady ? (
+          <button type="button" onClick={() => preparing.mutate()} disabled={preparing.isPending} className="font-medium text-fg-2 underline underline-offset-2 hover:text-fg disabled:opacity-45">
+            {preparing.isPending ? 'Updating…' : 'Mark as preparing'}
+          </button>
+        ) : null}
+      </div>
+      {canReady ? (
+        <Button shape="block" size="lg" className="h-11" fullWidth loading={ready.isPending} onClick={() => ready.mutate()}>
+          Mark ready
+        </Button>
+      ) : canPrep ? (
+        <Button shape="block" size="lg" className="h-11" fullWidth loading={preparing.isPending} onClick={() => preparing.mutate()}>
+          Start preparing
+        </Button>
+      ) : null}
+    </CardFrame>
+  );
+}
+
+/* ------------------------------------------------------------------ Ready */
+
+export function ReadyCard({ order, onOpen, className }: CommonProps) {
+  const name = firstName(order.partner?.name);
+  return (
+    <CardFrame order={order} onOpen={onOpen} className={cn('gap-3.5', className)}>
+      <div className="flex items-baseline justify-between gap-3">
+        <CodeButton order={order} onOpen={onOpen} />
+        <span className="truncate text-[12.5px] text-fg-3">{firstName(order.customer?.name)}</span>
+      </div>
+      <p className="text-sm text-fg">{itemsLine(order)}</p>
+      {order.pickupCode ? (
+        <div className="flex flex-col items-center gap-2.5 rounded-control border border-line bg-bg-2 p-3.5">
+          <span className="text-[12.5px] text-fg-3">Pickup code &mdash; the rider tells you this</span>
+          <CodeDigits code={order.pickupCode} label="Pickup code" size="lg" />
+        </div>
+      ) : null}
+      <div className="flex items-center gap-2.5 text-[13.5px]">
+        <Avatar name={name || '?'} size={30} />
+        <span className="min-w-0 flex-1 truncate">{partnerText(order)}</span>
+        {hasPartner(order) ? (
+          <Badge tone="info" dot>
+            Partner assigned
+          </Badge>
+        ) : order.deliveryStatus ? (
+          <StatusPill kind="delivery" status={order.deliveryStatus} />
+        ) : (
+          <Badge tone="warn" dot>
+            Finding a partner
+          </Badge>
+        )}
+      </div>
+    </CardFrame>
   );
 }

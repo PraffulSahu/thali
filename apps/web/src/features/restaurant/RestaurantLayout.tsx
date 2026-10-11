@@ -1,18 +1,37 @@
 /**
- * Wraps every post-onboarding page: loads the owner's restaurants, applies the switcher selection, shows the
- * status banner and keeps new-order alerts running on pages other than the orders board.
+ * Wraps every post-onboarding page (inside the KITCHEN RoleSidebarShell): loads the owner's restaurants, applies
+ * the switcher selection (sidebar context card, RestaurantSwitcher), keeps the status banner on top of main and
+ * keeps new-order chimes running on pages other than the live board.
  */
 import { Outlet, useLocation } from 'react-router';
-import { ButtonLink, Field, QueryState, Select, StatusPill } from '../../components/ui';
+import { ButtonLink, QueryState, Skeleton } from '../../components/ui';
 import { RestaurantContext } from './RestaurantContext';
 import { useRestaurants } from './api';
 import { useOrderStream } from './orderStream';
-import { resolveSelected, setSelectedRestaurantId, useSelectedRestaurantId } from './selection';
+import { resolveSelected, useSelectedRestaurantId } from './selection';
 import { StatusBanner } from './StatusBanner';
 
 function BackgroundAlerts({ restaurantId }: { restaurantId: string }) {
-  useOrderStream(restaurantId);
-  return null;
+  const stream = useOrderStream(restaurantId);
+  return (
+    <div role="status" aria-live="assertive" className="sr-only">
+      {stream.announcement}
+    </div>
+  );
+}
+
+function LayoutSkeleton() {
+  return (
+    <div className="flex flex-col gap-5" aria-hidden="true">
+      <Skeleton className="h-9 w-64" />
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(170px,100%),1fr))] gap-2.5">
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} className="h-[86px] rounded-card" />
+        ))}
+      </div>
+      <Skeleton className="h-64 rounded-card" />
+    </div>
+  );
 }
 
 export default function RestaurantLayout() {
@@ -24,6 +43,7 @@ export default function RestaurantLayout() {
   return (
     <QueryState
       query={list}
+      loading={<LayoutSkeleton />}
       loadingLabel="Loading your restaurants…"
       isEmpty={(d) => d.length === 0}
       empty={{
@@ -37,26 +57,7 @@ export default function RestaurantLayout() {
         const current = resolveSelected(restaurants, selectedId)!;
         return (
           <RestaurantContext.Provider value={{ restaurant: current }}>
-            <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-              {restaurants.length > 1 ? (
-                <Field label="Restaurant" className="min-w-56">
-                  <Select
-                    value={current.id}
-                    onChange={(e) => setSelectedRestaurantId(e.target.value)}
-                    options={restaurants.map((r) => ({ value: r.id, label: r.name }))}
-                  />
-                </Field>
-              ) : (
-                <p className="flex items-center gap-2 text-sm text-slate-600">
-                  <span className="font-medium text-slate-900">{current.name}</span>
-                  <StatusPill kind="restaurant" status={current.status} />
-                </p>
-              )}
-              <ButtonLink to="/restaurant/onboarding" variant="ghost" size="sm" icon="plus">
-                Add another restaurant
-              </ButtonLink>
-            </div>
-            <StatusBanner restaurant={current} />
+            <StatusBanner restaurant={current} className="mb-5" />
             {current.status === 'APPROVED' && !onBoard ? <BackgroundAlerts key={current.id} restaurantId={current.id} /> : null}
             {/* remount pages when the selection changes so no state leaks between restaurants */}
             <Outlet key={current.id} />

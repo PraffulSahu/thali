@@ -25,9 +25,12 @@ export interface OwnerRestaurant {
   emailVerified: boolean;
   emailVerifiedAt: string | null;
   emailVerification: { sentAt: string | null; expiresAt: string | null } | null;
-  address: { line1: string; line2?: string; city: string; pincode: string } | null;
+  /** `locality` (MKT-5) is omitted by the server when unset. */
+  address: { line1: string; line2?: string; locality?: string; city: string; pincode: string } | null;
   location: { lat: number; lng: number } | null;
   deliveryRadiusKm: number;
+  /** Owner-declared pure-veg kitchen (MKT-4). Absent on older servers = false. */
+  pureVeg?: boolean;
   hours: HoursSlot[];
   timezone: string;
   pausedUntil: string | null;
@@ -50,8 +53,9 @@ export type RestaurantPatch = Partial<{
   cuisines: string[];
   phone: string;
   businessEmail: string;
-  address: { line1: string; line2?: string; city: string; pincode: string };
+  address: { line1: string; line2?: string; locality?: string; city: string; pincode: string };
   location: { lat: number; lng: number };
+  pureVeg: boolean;
   deliveryRadiusKm: number;
   packagingFeePaise: number;
   avgPrepMinutes: number;
@@ -192,8 +196,13 @@ export interface OwnerItem {
   availableQty: number | null;
   customizationGroups: MenuGroup[];
   tags: string[];
+  /** Shown in the customer "Recommended" row (MKT-9, at most MAX_FEATURED per restaurant). */
+  featured?: boolean;
   updatedAt: string | null;
 }
+
+/** Server cap on featured (recommended) items per restaurant (MKT-9). */
+export const MAX_FEATURED = 6;
 export type ItemBody = Partial<{
   categoryId: string;
   name: string;
@@ -205,6 +214,7 @@ export type ItemBody = Partial<{
   trackStock: boolean;
   stockQty: number;
   customizationGroups: MenuGroup[];
+  featured: boolean;
 }>;
 
 export const menuApi = {
@@ -263,6 +273,12 @@ export interface OwnerOrder {
   placedAt: string | null;
   acceptedAt?: string | null;
   readyAt?: string | null;
+  pickedUpAt?: string | null;
+  deliveredAt?: string | null;
+  cancelledAt?: string | null;
+  /** Assigned delivery partner (first name only). */
+  partner?: { name: string; vehicleType: string | null } | null;
+  statusHistory?: { from: string | null; to: string; actor: string; reason: string | null; at: string | null }[];
   isDemo?: boolean;
 }
 
@@ -372,6 +388,11 @@ export interface FinanceSummary {
   holdDays: number;
   totalsByType: Partial<Record<LedgerEntryType, number>>;
   asOf: string;
+  /**
+   * PAY-1: the requested window (default IST midnight → now). `earningsPaise` = ORDER_EARNING + COMMISSION +
+   * REFUND_ADJUSTMENT in the window; `entriesByType` lists every type. Absent on older servers.
+   */
+  window?: { from: string; to: string; earningsPaise: number; entriesByType: Partial<Record<LedgerEntryType, number>>; deliveries: number };
 }
 export interface LedgerRow {
   id: string;
@@ -397,7 +418,8 @@ export interface PayoutRow {
 
 const fin = (rid: string) => `/finance/restaurants/${encodeURIComponent(rid)}`;
 export const financeApi = {
-  summary: (rid: string) => api<FinanceSummary>(`${fin(rid)}/summary`),
+  /** All-time balances + the PAY-1 window (default: today in IST). */
+  summary: (rid: string, range?: { from: string; to?: string }) => api<FinanceSummary>(`${fin(rid)}/summary`, { query: range }),
   ledger: (rid: string, cursor?: string) => api<Paginated<LedgerRow>>(`${fin(rid)}/ledger`, { query: { limit: 20, cursor } }),
   payouts: (rid: string, cursor?: string) => api<Paginated<PayoutRow>>(`${fin(rid)}/payouts`, { query: { limit: 20, cursor } }),
 };

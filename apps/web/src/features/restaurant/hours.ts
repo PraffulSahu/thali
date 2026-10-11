@@ -72,3 +72,33 @@ export function summarizeHours(hours: HoursSlot[]): string[] {
     .filter((d) => w[d]!.length)
     .map((d) => `${names[d]} ${w[d]!.map((s) => `${s.open}-${s.close}`).join(', ')}`);
 }
+
+const IST_OFFSET_MS = 330 * 60_000;
+const DAY_MS = 86_400_000;
+
+/**
+ * Next time a slot opens after `now` (hours are Asia/Kolkata wall-clock times; IST has no DST), searching the
+ * coming 7 days. null when the week has no slots. Used for "Closed · opens 6:00 PM".
+ */
+export function nextOpening(hours: HoursSlot[], now: number = Date.now()): Date | null {
+  if (!hours.length) return null;
+  const ist = now + IST_OFFSET_MS;
+  const dayStart = ist - (ist % DAY_MS);
+  for (let d = 0; d <= 7; d++) {
+    const start = dayStart + d * DAY_MS;
+    const weekday = new Date(start).getUTCDay();
+    const opens = hours
+      .filter((h) => h.day === weekday)
+      .map((h) => start + toMinutes(h.open) * 60_000 - IST_OFFSET_MS)
+      .filter((t) => t > now)
+      .sort((a, b) => a - b);
+    if (opens.length) return new Date(opens[0]!);
+  }
+  return null;
+}
+
+/** IST calendar-day key, to tell "today" from a later day. */
+export function istDayKey(t: number): number {
+  const ist = t + IST_OFFSET_MS;
+  return ist - (ist % DAY_MS);
+}
