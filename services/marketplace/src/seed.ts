@@ -7,9 +7,9 @@
  * Content (every document flagged isDemo):
  *  - service area `service-area:blr-koramangala`: since the Bengaluru dataset it is ONE city-wide polygon named
  *    "Bengaluru" (`BLR_CITY_POLYGON`). Discovery requires restaurant and drop in the same area and the oldest
- *    area wins on overlap, so the existing seed-owned document is upgraded in place by one targeted update that
- *    only matches while it still has the original Koramangala/HSR box (idempotent; edits made through the admin
- *    UI are never touched; a fresh install inserts the city polygon directly) + cuisines
+ *    area wins on overlap, so the existing seed-owned document is upgraded in place by targeted updates: the
+ *    polygon only while it still is the original Koramangala/HSR box, the name only while it still is the original
+ *    demo name (idempotent; an admin-edited polygon or name is kept; a fresh install inserts the city polygon) + cuisines
  *  - restaurants (`restaurant:<slug>`):
  *      spice-route   APPROVED, non-veg, owner user:owner1   (menu with customization groups, add-ons and
  *                                                             a tracked-stock item: Mutton Rogan Josh, stock 3)
@@ -19,8 +19,9 @@
  *  - coupons WELCOME50 (50% up to ₹100) and FLAT100 (₹100 off, total limit 1); membership plan "Thali Plus"
  *  - one labelled demo banner ("DEMO · …", links to WELCOME50)
  * Menu ids: `category:<rest>:<slug>`, `item:<rest>:<slug>`, `group:<rest>:<item>:<slug>`, `option:<rest>:<item>:<group>:<slug>`.
- * Demo restaurants carry `address.locality`; installs seeded before MKT-4/5 get `locality` and Green Leaf's
- * `pureVeg` once (targeted updates of the seed-owned documents, only while the field is still unset).
+ * Demo restaurants carry `address.locality`; older installs get `locality` (only while unset) and Green Leaf
+ * `pureVeg: true` (whenever it is not true: databases seeded after MKT-4 store the default false) by targeted
+ * updates of the seed-owned documents.
  *
  * The CLI then adds the Bengaluru dataset (`./seed-blr.ts`; skip with SEED_BLR=0) and bumps the discovery
  * cache epoch so listings show it at once.
@@ -41,6 +42,8 @@ export type MarketplaceSeedConfig = Pick<
 >;
 
 const SEEDED_AT = new Date('2026-09-01T04:30:00.000Z');
+/** Name of `service-area:blr-koramangala` before the city-wide upgrade. */
+export const LEGACY_DEMO_AREA_NAME = 'Bengaluru — Koramangala & HSR (demo)';
 const ALL_DAY = [0, 1, 2, 3, 4, 5, 6].map((day) => ({ day, open: '00:00', close: '00:00' })); // 24 h, every day
 const pt = (lat: number, lng: number) => ({ type: 'Point', coordinates: [lng, lat] });
 
@@ -365,18 +368,19 @@ export async function seedMarketplace(conn: Connection, cfg: MarketplaceSeedConf
     report,
   );
 
-  // upgrade the original demo box to the city polygon (once: only while it still has the original seed polygon)
-  await m.ServiceArea.updateOne(
-    { _id: seedId('service-area:blr-koramangala'), isDemo: true, 'polygon.coordinates': BLR_LEGACY_DEMO_POLYGON },
-    { $set: { name: 'Bengaluru', polygon: BLR_CITY_POLYGON } },
-  );
+  // upgrade the original demo box to the city polygon (once: only while it still has the original seed polygon),
+  // and the original demo name to "Bengaluru" (only while it still has that name: an admin rename is kept)
+  const areaId = seedId('service-area:blr-koramangala');
+  await m.ServiceArea.updateOne({ _id: areaId, isDemo: true, 'polygon.coordinates': BLR_LEGACY_DEMO_POLYGON }, { $set: { polygon: BLR_CITY_POLYGON } });
+  await m.ServiceArea.updateOne({ _id: areaId, isDemo: true, name: LEGACY_DEMO_AREA_NAME }, { $set: { name: 'Bengaluru' } });
 
   await ensureDocs(m.Restaurant, RESTAURANTS.map((r) => restaurantDoc(r, cfg.FIELD_ENCRYPTION_KEY)), report);
   // installs seeded before MKT-4/5: locality on every demo restaurant, Green Leaf declared pure veg
   for (const r of RESTAURANTS) {
     await m.Restaurant.updateOne({ _id: seedId(`restaurant:${r.slug}`), isDemo: true, 'address.locality': { $exists: false } }, { $set: { 'address.locality': r.locality } });
   }
-  await m.Restaurant.updateOne({ _id: seedId('restaurant:green-leaf'), isDemo: true, pureVeg: { $exists: false } }, { $set: { pureVeg: true } });
+  // (installs seeded after MKT-4 store the schema default `false`, so match anything but `true`)
+  await m.Restaurant.updateOne({ _id: seedId('restaurant:green-leaf'), isDemo: true, pureVeg: { $ne: true } }, { $set: { pureVeg: true } });
 
   for (const [rest, cats, items] of [
     ['spice-route', SPICE_ROUTE_CATEGORIES, SPICE_ROUTE_ITEMS],

@@ -2,7 +2,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { seedId } from '@thali/contracts/seed';
 import { createTestDb, type TestDb } from '@thali/service-kit/testing';
 import { ensureMarketplaceIndexes, getModels } from '../src/models/index.js';
-import { seedMarketplace } from '../src/seed.js';
+import { BLR_CITY_POLYGON, BLR_LEGACY_DEMO_POLYGON } from '@thali/contracts/seed-blr';
+import { LEGACY_DEMO_AREA_NAME, seedMarketplace } from '../src/seed.js';
 
 let db: TestDb;
 const cfg = {
@@ -43,5 +44,39 @@ describe('seedMarketplace', () => {
 
     const second = await seedMarketplace(db.conn, cfg);
     expect(Object.values(second).every((t) => t.inserted === 0)).toBe(true);
+  });
+
+  it('fresh install: Green Leaf pure veg, demo localities, one city-wide "Bengaluru" area', async () => {
+    const m = getModels(db.conn);
+    const gl = (await m.Restaurant.findById(seedId('restaurant:green-leaf')).lean())!;
+    expect(gl.pureVeg).toBe(true);
+    expect(gl.address?.locality).toBe('Koramangala 1st Block');
+    expect((await m.Restaurant.findById(seedId('restaurant:spice-route')).lean())!.pureVeg).toBe(false);
+    const area = (await m.ServiceArea.findById(seedId('service-area:blr-koramangala')).lean())!;
+    expect(area.name).toBe('Bengaluru');
+    expect(area.polygon.coordinates).toEqual(BLR_CITY_POLYGON.coordinates);
+    expect(await m.ServiceArea.countDocuments({})).toBe(1);
+  });
+
+  it('existing install: upgrades the stored default pureVeg=false, the legacy box and name, and missing localities', async () => {
+    const m = getModels(db.conn);
+    const glId = seedId('restaurant:green-leaf');
+    const areaId = seedId('service-area:blr-koramangala');
+    await m.Restaurant.updateOne({ _id: glId }, { $set: { pureVeg: false }, $unset: { 'address.locality': '' } });
+    await m.ServiceArea.updateOne({ _id: areaId }, { $set: { name: LEGACY_DEMO_AREA_NAME, 'polygon.coordinates': BLR_LEGACY_DEMO_POLYGON } });
+    await seedMarketplace(db.conn, cfg);
+    const gl = (await m.Restaurant.findById(glId).lean())!;
+    expect(gl.pureVeg).toBe(true);
+    expect(gl.address?.locality).toBe('Koramangala 1st Block');
+    const area = (await m.ServiceArea.findById(areaId).lean())!;
+    expect(area.name).toBe('Bengaluru');
+    expect(area.polygon.coordinates).toEqual(BLR_CITY_POLYGON.coordinates);
+
+    // an admin-renamed area keeps its name (only the legacy polygon is upgraded)
+    await m.ServiceArea.updateOne({ _id: areaId }, { $set: { name: 'Namma Bengaluru', 'polygon.coordinates': BLR_LEGACY_DEMO_POLYGON } });
+    await seedMarketplace(db.conn, cfg);
+    const renamed = (await m.ServiceArea.findById(areaId).lean())!;
+    expect(renamed.name).toBe('Namma Bengaluru');
+    expect(renamed.polygon.coordinates).toEqual(BLR_CITY_POLYGON.coordinates);
   });
 });
