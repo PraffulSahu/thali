@@ -1,8 +1,7 @@
 /**
  * Admin API layer: typed wrappers over `api()` for every admin endpoint, plus small input helpers.
- * Shapes marked VERIFIED were read from the implemented service code; shapes marked UNVERIFIED follow
- * LLD §10 / §3 because the service routes did not exist yet (see task-20-report "Unverified API shapes").
- * All wrappers are thin so pages keep control of loading/error UX through TanStack Query.
+ * Shapes were read from the implemented service routes/schemas (redesign wave: ORD-1/2/7, DLV-4/5/7,
+ * NTF-1/2/3, GW-1). All wrappers are thin so pages keep control of loading/error UX through TanStack Query.
  */
 import { api } from '../../lib/api';
 
@@ -33,6 +32,9 @@ export const qk = {
   health: ['admin', 'health'] as const,
   deadLetters: ['admin', 'health', 'dead-letters'] as const,
   notifications: (params: object) => ['admin', 'health', 'notifications', params] as const,
+  notificationSummary: ['admin', 'health', 'notification-summary'] as const,
+  checkouts: (params: object) => ['admin', 'checkouts', params] as const,
+  picker: (jobId: string) => ['admin', 'tms', 'picker', jobId] as const,
 };
 
 /* ------------------------------------------------------------------ input helpers */
@@ -155,8 +157,25 @@ export interface AdminPartner {
   isDemo: boolean;
   createdAt: string | null;
 }
-export const listPartners = (p: { status?: string; cursor?: string; limit?: number }) =>
-  api<Page<AdminPartner>>('/admin/delivery/partners', { query: { limit: 20, ...p } });
+/** DLV-7 picker rows: `distanceToPickupKm` is set only with `nearJobId`. */
+export interface AdminPartnerRow extends AdminPartner {
+  distanceToPickupKm?: number | null;
+  activeJobCount?: number;
+}
+export interface PartnerListParams {
+  status?: string;
+  cursor?: string;
+  limit?: number;
+  online?: boolean;
+  hasCapacity?: boolean;
+  /** Sort by distance to this job's pickup (no cursor; partners without a location are left out). */
+  nearJobId?: string;
+}
+const flag = (v: boolean | undefined) => (v === undefined ? undefined : String(v));
+export const listPartners = (p: PartnerListParams) =>
+  api<Page<AdminPartnerRow>>('/admin/delivery/partners', {
+    query: { limit: 20, ...p, online: flag(p.online), hasCapacity: flag(p.hasCapacity) },
+  });
 /** There is no `GET /admin/delivery/partners/:id`; scan the list (bounded) for the partner. */
 export async function findPartner(id: string): Promise<AdminPartner> {
   let cursor: string | undefined;
@@ -224,8 +243,11 @@ export interface AdminJob {
   status: DeliveryStatusValue;
   partnerId: string | null;
   partnerUserId: string | null;
+  /** DLV-4: order codes on the job (null for jobs the backfill has not reached). */
+  childOrderCode?: string | null;
+  checkoutCode?: string | null;
   pickup: { name: string; address: string; location: { lat: number; lng: number } };
-  drop: { name: string; address: string; phoneMasked?: string; location: { lat: number; lng: number } };
+  drop: { name: string; address: string; area?: string | null; label?: string | null; phoneMasked?: string; location: { lat: number; lng: number } };
   dispatchRound: number;
   exception: boolean;
   exceptionReason: string | null;
@@ -242,12 +264,15 @@ export interface AdminJob {
 }
 export interface TmsOverview {
   jobsByStatus: Record<string, number>;
+  /** DLV-5: PENDING_ASSIGNMENT + OFFERED. */
+  unassigned?: number;
   exceptions: number;
   liveOffers: number;
-  partners: { byStatus: Record<string, number>; online: number };
+  /** DLV-5: `approved`, `onDelivery` (approved ∧ online ∧ holding an active job). */
+  partners: { byStatus: Record<string, number>; online: number; approved?: number; onDelivery?: number };
   generatedAt: string;
 }
-export const listJobs = (p: { status?: string; exception?: boolean; cursor?: string; limit?: number }) =>
+export const listJobs = (p: { status?: string; exception?: boolean; q?: string; cursor?: string; limit?: number }) =>
   api<Page<AdminJob>>('/admin/delivery/jobs', { query: { limit: 20, ...p, exception: p.exception === undefined ? undefined : String(p.exception) } });
 export const tmsOverview = () => api<TmsOverview>('/admin/delivery/overview');
 export const assignJob = (jobId: string, partnerId: string) =>
@@ -316,9 +341,69 @@ export interface MarketplaceOverview {
   menu: { items: number };
 }
 export const marketplaceOverview = () => api<MarketplaceOverview>('/admin/marketplace/overview');
-export const ordersOverview = () => api<OverviewData>('/admin/orders/overview');
 
-/* ------------------------------------------------------------------ orders (UNVERIFIED: services/orders admin routes not written) */
+/** VERIFIED: services/orders domain/stats.ts `ordersOverview` (ORD-2; "today" = since IST midnight). */
+export interface OrdersOverview {
+  generatedAt: string;
+  today: {
+    since: string;
+    /** Checkouts placed today. */
+    checkouts: number;
+    /** Child orders placed today. */
+    placed: number;
+    delivered: number;
+    rejected: number;
+    cancelled: number;
+    gmvPaise: number;
+    /** Children placed today by their CURRENT status (all 13 keys). */
+    byStatus: Record<string, number>;
+    /** Refund entries that succeeded today. */
+    refundedPaise: number;
+  };
+  activeByStatus: Record<string, number>;
+  awaitingAcceptance: number;
+  overdueAcceptance: number;
+  deliveryFailed: number;
+  refundsPending: number;
+  /** All-time Σ (requested − refunded) over pending refunds. */
+  refundsPendingPaise: number;
+  refundsFailed: number;
+  support: { open: number; inProgress: number };
+}
+export const ordersOverview = () => api<OrdersOverview>('/admin/orders/overview');
+
+/* ------------------------------------------------------------------ checkouts list (VERIFIED: ORD-1 order-schemas AdminCheckoutRow) */
+export type CheckoutAttention = 'DELIVERY_FAILED' | 'REFUND_FAILED' | 'FINDING_PARTNER' | 'AWAITING_ACCEPTANCE';
+export interface AdminCheckoutRow {
+  id: string;
+  code: string;
+  status: string;
+  userId: string;
+  placedAt: string | null;
+  createdAt: string | null;
+  customer: { name: string | null; phoneMasked: string | null } | null;
+  restaurants: { id: string; childOrderId: string; childCode: string; name: string; childStatus: string; deliveryStatus: string | null; refundStatus: string }[];
+  totalPaise: number;
+  paidPaise: number;
+  refundedPaise: number;
+  refundPendingPaise: number;
+  attention: CheckoutAttention | null;
+}
+export interface CheckoutListParams {
+  /** TH- code, ids, restaurant-name prefix, or 4–13 digits (phone last-4 search, ORD-7). */
+  q?: string;
+  /** CSV of checkout statuses. */
+  status?: string;
+  phone?: string;
+  restaurantId?: string;
+  from?: string;
+  to?: string;
+  cursor?: string;
+  limit?: number;
+}
+export const listCheckouts = (p: CheckoutListParams) => api<Page<AdminCheckoutRow>>('/admin/orders/checkouts', { query: { limit: 20, ...p } });
+
+/* ------------------------------------------------------------------ order detail (VERIFIED: orders order-views adminOrderDetail) */
 export interface AdminChildOrder {
   id: string;
   code?: string;
@@ -463,7 +548,7 @@ export const cancelChildOrder = (childId: string, body: { reason: string; refund
 export const transitionChildOrder = (childId: string, body: { to: string; reason: string }) =>
   api(`/admin/orders/child/${encodeURIComponent(childId)}/transition`, { method: 'POST', body });
 
-/* ------------------------------------------------------------------ support (UNVERIFIED: services/orders admin-support not written) */
+/* ------------------------------------------------------------------ support (services/orders admin-support) */
 export interface TicketMessage { authorId: string; authorRole: string; body: string; at: string }
 export interface Ticket {
   id: string;
@@ -536,7 +621,7 @@ export interface PaymentRow {
   isDemo: boolean;
   createdAt: string;
 }
-export const searchPayments = (q: string) => api<Page<PaymentRow>>('/admin/finance/payments', { query: { q, limit: 5 } });
+export const searchPayments = (q: string, limit = 5) => api<Page<PaymentRow>>('/admin/finance/payments', { query: { q, limit } });
 
 export interface Balance {
   accountType: string;
@@ -584,6 +669,12 @@ export type HealthState = 'up' | 'degraded' | 'down';
 export interface ServiceHealth {
   status: HealthState;
   latencyMs: number;
+  /** GW-1: why the service is degraded (empty when up or down). */
+  degradedReasons?: string[];
+  /** GW-1: one line for the health row ("All checks passing", "Unreachable: …", reasons). */
+  summary?: string;
+  /** GW-1: provider category → up | failing. A failing provider makes the service Degraded, never Down. */
+  providers?: Record<string, 'up' | 'failing'>;
   details?: {
     service?: string;
     mode?: string;
@@ -629,6 +720,13 @@ export interface DeadLettersResponse {
 export const listDeadLetters = () => api<DeadLettersResponse>('/admin/notifications/dead-letters', { query: { limit: 50 } });
 export const replayDeadLetter = (service: string, id: string) =>
   api<{ id: string }>(`/admin/notifications/dead-letters/${encodeURIComponent(service)}/${encodeURIComponent(id)}/replay`, { method: 'POST' });
+/** NTF-3: replay every unreplayed dead letter (optionally one service), oldest first. */
+export interface BulkReplayResult {
+  replayed: number;
+  failed: { service: string; id: string; error: string }[];
+}
+export const replayAllDeadLetters = (body: { service?: string; limit?: number } = {}) =>
+  api<BulkReplayResult>('/admin/notifications/dead-letters/replay', { method: 'POST', body });
 
 export interface AdminNotification {
   id: string;
@@ -647,5 +745,46 @@ export interface AdminNotification {
 export const listNotifications = (p: { status?: string; channel?: string; cursor?: string; limit?: number }) =>
   api<Page<AdminNotification>>('/admin/notifications', { query: { limit: 20, ...p } });
 export const retryNotification = (id: string) => api<AdminNotification>(`/admin/notifications/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+
+/** NTF-1 (VERIFIED: notifications routes/admin.ts `/summary`). `byStatus` is all-time. */
+export interface NotificationSummary {
+  byStatus: Record<'QUEUED' | 'SENDING' | 'SENT' | 'DELIVERED' | 'FAILED' | 'DEAD' | 'SKIPPED', number>;
+  failedLast24h: number;
+  byChannel: { SMS: { failed: number }; EMAIL: { failed: number } };
+  lastError: { channel: string; provider: string | null; message: string; at: string } | null;
+}
+const NTF_STATUSES = ['QUEUED', 'SENDING', 'SENT', 'DELIVERED', 'FAILED', 'DEAD', 'SKIPPED'] as const;
+/** Fills missing keys with 0 so a partial payload never renders as a crash (or as invented numbers: absent = 0 rows). */
+export function normalizeNotificationSummary(raw: unknown): NotificationSummary {
+  const r = rec(raw);
+  const by = rec(r.byStatus);
+  const ch = rec(r.byChannel);
+  const last = rec(r.lastError);
+  return {
+    byStatus: Object.fromEntries(NTF_STATUSES.map((k) => [k, numOr(by[k], 0)])) as NotificationSummary['byStatus'],
+    failedLast24h: numOr(r.failedLast24h, 0),
+    byChannel: { SMS: { failed: numOr(rec(ch.SMS).failed, 0) }, EMAIL: { failed: numOr(rec(ch.EMAIL).failed, 0) } },
+    lastError: str(last.message) ? { channel: str(last.channel) ?? '', provider: str(last.provider), message: str(last.message)!, at: str(last.at) ?? '' } : null,
+  };
+}
+export const notificationSummary = async () => {
+  const raw = await api<unknown>('/admin/notifications/summary');
+  if (!raw || typeof raw !== 'object' || !('byStatus' in raw)) {
+    const { ApiError } = await import('../../lib/errors');
+    throw new ApiError({ code: 'UPSTREAM_ERROR', status: 502, message: 'Notification summary is unavailable' });
+  }
+  return normalizeNotificationSummary(raw);
+};
+/** The admin "N failed notifications" figure: every retryable notification (FAILED + DEAD, all time). */
+export const retryableCount = (s: NotificationSummary | undefined) => (s ? (s.byStatus.FAILED ?? 0) + (s.byStatus.DEAD ?? 0) : 0);
+/** NTF-2: re-queue every FAILED or DEAD notification (never OTP). */
+export const retryAllNotifications = (body: { status: 'FAILED' | 'DEAD'; channel?: 'SMS' | 'EMAIL' | 'IN_APP'; before?: string; limit?: number }) =>
+  api<{ queued: number }>('/admin/notifications/retry', { method: 'POST', body });
+
+/** Unreplayed dead letters across services, from the health report (`details.deadLetters`). */
+export function deadLetterCount(report: HealthReport | undefined): number {
+  if (!report) return 0;
+  return Object.values(report.services).reduce((n, s) => n + (typeof s.details?.deadLetters === 'number' ? s.details.deadLetters : 0), 0);
+}
 export const setFailMode = (body: { sms: boolean; email: boolean }) =>
   api<{ sms: boolean; email: boolean }>('/admin/notifications/demo/fail-mode', { method: 'POST', body });

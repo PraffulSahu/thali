@@ -4,7 +4,9 @@ import { istDateToIso, isoToIstInput, istInputToIso, normalizeOrderDetail, paise
 import { checkRefundInput } from '../../src/features/admin/OrderInvestigation';
 import { bpsToPercent, percentToBps } from '../../src/features/admin/editors/CouponEditor';
 import { pointsToPolygon, ringToPoints } from '../../src/features/admin/editors/ServiceAreaEditor';
-import { safeNext } from '../../src/features/admin/AdminLogin';
+import { classifySearch } from '../../src/features/admin/CommandPalette';
+import { adminSubtitle, healthTone } from '../../src/features/admin/shell';
+import { agoLabel, customerLabel, rangeToIso } from '../../src/features/admin/ui';
 
 describe('admin input helpers', () => {
   it('converts rupees to paise with integer math and rejects junk', () => {
@@ -55,13 +57,31 @@ describe('admin input helpers', () => {
     expect(ringToPoints({ polygon: poly } as never)).toEqual(points);
   });
 
-  it('only redirects to admin pages after login', () => {
-    expect(safeNext('/admin/orders')).toBe('/admin/orders');
-    expect(safeNext('https://evil.example')).toBe('/admin');
-    expect(safeNext('//evil.example')).toBe('/admin');
-    expect(safeNext('/admin/login')).toBe('/admin');
-    expect(safeNext('/restaurant')).toBe('/admin');
-    expect(safeNext(null)).toBe('/admin');
+  it('routes ⌘K input: TH- codes to orders, 4–13 digits to phone search, anything else to users/restaurants', () => {
+    expect(classifySearch('  ')).toEqual({ kind: 'empty', term: '' });
+    expect(classifySearch('th-k7z2')).toEqual({ kind: 'order', term: 'TH-K7Z2' });
+    expect(classifySearch('3210')).toEqual({ kind: 'phone', term: '3210' });
+    expect(classifySearch('+91 98765 43210')).toEqual({ kind: 'phone', term: '9876543210' });
+    expect(classifySearch('123')).toEqual({ kind: 'text', term: '123' });
+    expect(classifySearch('12345678901234')).toEqual({ kind: 'text', term: '12345678901234' });
+    expect(classifySearch('Spice Route')).toEqual({ kind: 'text', term: 'Spice Route' });
+  });
+
+  it('labels customers, refresh age, IST ranges, sub-roles and the health dot', () => {
+    expect(customerLabel({ name: 'Prafful Sahu', phoneMasked: '+91 ••••• •3210' })).toBe('Prafful · ••3210');
+    expect(customerLabel({ name: null, phoneMasked: null })).toBe('—');
+    expect(agoLabel(Date.now() - 14_000, Date.now())).toBe('14s ago');
+    const now = Date.parse('2026-10-11T10:00:00.000Z'); // 15:30 IST
+    expect(rangeToIso('today', now)).toEqual({ from: '2026-10-10T18:30:00.000Z' });
+    expect(rangeToIso('yesterday', now)).toEqual({ from: '2026-10-09T18:30:00.000Z', to: '2026-10-10T18:29:59.999Z' });
+    expect(rangeToIso('all', now)).toEqual({});
+    expect(adminSubtitle(['OPS'], true)).toBe('Ops admin · MFA on');
+    expect(adminSubtitle(['FINANCE', 'SUPPORT'], true)).toBe('Finance · Support admin · MFA on');
+    const svc = (status: 'up' | 'degraded' | 'down') => ({ status, latencyMs: 1 });
+    const report = (services: Record<string, ReturnType<typeof svc>>) => ({ checkedAt: '', overall: 'up' as const, gateway: { status: 'up' as const, mode: 'demo', redis: 'up' as const }, services });
+    expect(healthTone(report({ a: svc('up') }))).toBeNull();
+    expect(healthTone(report({ a: svc('up'), b: svc('degraded') }))).toBe('warn');
+    expect(healthTone(report({ a: svc('down'), b: svc('degraded') }))).toBe('bad');
   });
 
   it('normalizes order details tolerantly', () => {

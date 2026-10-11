@@ -40,16 +40,16 @@ export function useAdminMutation<TVars, TData>(
 }
 
 export function Mono({ children, className }: { children: ReactNode; className?: string }) {
-  return <code className={`break-all font-mono text-[0.8125rem] text-slate-700 ${className ?? ''}`}>{children}</code>;
+  return <code className={`break-all font-mono text-[12.5px] text-fg-2 ${className ?? ''}`}>{children}</code>;
 }
 
 export function KeyValues({ items }: { items: { label: string; value: ReactNode }[] }) {
   return (
-    <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
+    <dl className="grid grid-cols-1 gap-x-6 gap-y-3.5 sm:grid-cols-2">
       {items.map((it) => (
         <div key={it.label} className="min-w-0">
-          <dt className="text-sm text-slate-600">{it.label}</dt>
-          <dd className="break-words text-[0.9375rem] font-medium text-slate-900">{it.value ?? '-'}</dd>
+          <dt className="lbl text-[11px]!">{it.label}</dt>
+          <dd className="mt-1 break-words text-[14px] text-fg">{it.value ?? '—'}</dd>
         </div>
       ))}
     </dl>
@@ -59,25 +59,17 @@ export function KeyValues({ items }: { items: { label: string; value: ReactNode 
 export function SectionTitle({ children, actions }: { children: ReactNode; actions?: ReactNode }) {
   return (
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-      <h2 className="text-lg font-semibold text-slate-900">{children}</h2>
+      <h2 className="text-[15px] text-fg">{children}</h2>
       {actions}
     </div>
   );
 }
 
-export function StatTile({ label, value, tone }: { label: string; value: ReactNode; tone?: 'warn' | 'danger' }) {
-  return (
-    <div className={`rounded-card border p-4 ${tone === 'danger' ? 'border-danger-100 bg-danger-50' : tone === 'warn' ? 'border-warn-100 bg-warn-50' : 'border-slate-200 bg-surface'}`}>
-      <p className="text-sm text-slate-600">{label}</p>
-      <p className="mt-1 text-2xl font-bold tabular-nums text-slate-900">{value}</p>
-    </div>
-  );
-}
-
 export function DemoBadge({ label = 'Demo' }: { label?: string }) {
-  return <Badge tone="info">{label}</Badge>;
+  return <Badge tone="info" density="dense">{label}</Badge>;
 }
 
+/** Filter form above a list: card-less grid, 2 columns ≥640, 4 ≥1024 (design-spec §7.1 Filters). */
 export function FilterBar({ children, onSubmit }: { children: ReactNode; onSubmit?: () => void }) {
   return (
     <form
@@ -166,16 +158,16 @@ export function DocumentViewer({ open, onClose, title, fileHint, load }: Documen
       {state.status === 'ready' ? (
         <div className="flex flex-col gap-3">
           {expired ? (
-            <p role="alert" className="rounded-control bg-warn-50 px-3 py-2 text-sm text-warn-800">
+            <p role="alert" className="rounded-control bg-warn-bg px-3 py-2 text-sm text-warn">
               This link has expired. Use “Get a fresh link”.
             </p>
           ) : (
-            <p className="text-sm text-slate-600">Link valid until {formatDateTime(state.data.expiresAt)}.</p>
+            <p className="text-sm text-fg-3">Link valid until {formatDateTime(state.data.expiresAt)}.</p>
           )}
-          {!expired && kind === 'image' ? <img src={state.data.url} alt={title} className="max-h-[60vh] w-full rounded-control border border-slate-200 object-contain" /> : null}
-          {!expired && kind === 'pdf' ? <iframe src={state.data.url} title={title} className="h-[60vh] w-full rounded-control border border-slate-200" /> : null}
+          {!expired && kind === 'image' ? <img src={state.data.url} alt={title} className="max-h-[60vh] w-full rounded-control border border-line object-contain" /> : null}
+          {!expired && kind === 'pdf' ? <iframe src={state.data.url} title={title} className="h-[60vh] w-full rounded-control border border-line" /> : null}
           {!expired ? (
-            <a href={state.data.url} target="_blank" rel="noopener noreferrer" className="w-fit text-sm font-medium text-brand-700 underline underline-offset-4">
+            <a href={state.data.url} target="_blank" rel="noopener noreferrer" className="w-fit text-sm font-medium text-acc-fg underline underline-offset-4">
               Open in a new tab
             </a>
           ) : null}
@@ -206,10 +198,10 @@ export function ApprovalPanel({ entity, name, status, approveBlockedReason, canA
   const none = !['APPROVAL_PENDING', 'APPROVED', 'SUSPENDED'].includes(status);
 
   if (none) {
-    return <p className="text-sm text-slate-600">No action available while the status is {status.toLowerCase().replace(/_/g, ' ')}.</p>;
+    return <p className="text-[13.5px] text-fg-3">No action available while the status is {status.toLowerCase().replace(/_/g, ' ')}.</p>;
   }
   if (!canAct) {
-    return <p className="text-sm text-slate-600">Your admin role can view this {what} but not change its status. Ask an OPS or super admin.</p>;
+    return <p className="text-[13.5px] text-fg-3">Your admin role can view this {what} but not change its status. Ask an Ops or super admin.</p>;
   }
 
   return (
@@ -220,19 +212,19 @@ export function ApprovalPanel({ entity, name, status, approveBlockedReason, canA
             <Button icon="check" onClick={() => setDialog('approve')} disabled={Boolean(approveBlockedReason)}>
               Approve
             </Button>
-            <Button variant="danger" icon="x" onClick={() => setDialog('reject')}>
+            <Button variant="danger-outline" icon="x" onClick={() => setDialog('reject')}>
               Reject
             </Button>
           </>
         ) : null}
         {status === 'APPROVED' ? (
-          <Button variant="danger" onClick={() => setDialog('suspend')}>
+          <Button variant="danger-outline" onClick={() => setDialog('suspend')}>
             Suspend
           </Button>
         ) : null}
-        {status === 'SUSPENDED' ? <Button onClick={() => setDialog('reinstate')}>Reinstate</Button> : null}
+        {status === 'SUSPENDED' ? <Button variant="outline" onClick={() => setDialog('reinstate')}>Reinstate</Button> : null}
       </div>
-      {approveBlockedReason && status === 'APPROVAL_PENDING' ? <p className="mt-2 text-sm text-warn-800">{approveBlockedReason}</p> : null}
+      {approveBlockedReason && status === 'APPROVAL_PENDING' ? <p className="mt-2 text-[13px] text-warn">{approveBlockedReason}</p> : null}
 
       <ConfirmDialog
         open={dialog === 'approve'}
