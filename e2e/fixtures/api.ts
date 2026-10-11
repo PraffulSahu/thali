@@ -29,7 +29,21 @@ export interface CallOpts {
   headers?: Record<string, string>;
 }
 
+/**
+ * One API call. The whole suite shares one client IP, so a busy minute can hit the gateway's global 300/min/IP
+ * limiter: a read-only GET answered 429 waits `retryAfterSec` (≤ 30 s) and retries, up to 3 times. Writes are never
+ * retried here (specs that exercise limits see the 429).
+ */
 export async function call<T = Json>(method: string, path: string, o: CallOpts = {}): Promise<ApiRes<T>> {
+  for (let attempt = 0; ; attempt++) {
+    const r = await callOnce<T>(method, path, o);
+    const retryAfter = Number((r.body as Json)?.error?.details?.retryAfterSec ?? 5);
+    if (r.status !== 429 || method !== 'GET' || attempt >= 3 || !(retryAfter <= 30)) return r;
+    await new Promise((done) => setTimeout(done, retryAfter * 1000 + 250));
+  }
+}
+
+async function callOnce<T = Json>(method: string, path: string, o: CallOpts = {}): Promise<ApiRes<T>> {
   const headers: Record<string, string> = { origin: WEB_URL, 'x-requested-with': 'thali-web', accept: 'application/json', ...o.headers };
   if (o.body !== undefined) headers['content-type'] = 'application/json';
   if (o.token) headers.authorization = `Bearer ${o.token}`;
