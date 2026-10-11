@@ -17,7 +17,7 @@
  *      tandoor-tales APPROVAL_PENDING (email verified, KYC uploaded), owner user:owner1
  *      coastal-curry VERIFICATION_PENDING (business email not verified yet), owner user:owner2
  *  - coupons WELCOME50 (50% up to ₹100) and FLAT100 (₹100 off, total limit 1); membership plan "Thali Plus"
- *  - one labelled demo banner ("DEMO · …", links to WELCOME50)
+ *  - one labelled demo banner ("DEMO · …" title, links to WELCOME50; the art itself has no DEMO text — the web badge labels it)
  * Menu ids: `category:<rest>:<slug>`, `item:<rest>:<slug>`, `group:<rest>:<item>:<slug>`, `option:<rest>:<item>:<group>:<slug>`.
  * Demo restaurants carry `address.locality`; older installs get `locality` (only while unset) and Green Leaf
  * `pureVeg: true` (whenever it is not true: databases seeded after MKT-4 store the default false) by targeted
@@ -305,8 +305,7 @@ function coverSvg(r: RestaurantSpec): Buffer {
     `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="600" viewBox="0 0 1200 600">` +
       `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs>` +
       `<rect width="1200" height="600" fill="url(#g)"/>` +
-      `<text x="60" y="520" font-family="Georgia,serif" font-size="96" fill="#fff" fill-opacity="0.95">${esc(r.name)}</text>` +
-      `<text x="1140" y="80" text-anchor="end" font-family="sans-serif" font-size="28" fill="#fff" fill-opacity="0.8">DEMO</text></svg>`,
+      `<text x="60" y="520" font-family="Georgia,serif" font-size="96" fill="#fff" fill-opacity="0.95">${esc(r.name)}</text></svg>`,
   );
 }
 function logoSvg(r: RestaurantSpec): Buffer {
@@ -325,10 +324,16 @@ function bannerSvg(): Buffer {
       `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#b91c1c"/><stop offset="1" stop-color="#f59e0b"/></linearGradient></defs>` +
       `<rect width="1200" height="400" fill="url(#g)"/>` +
       `<text x="60" y="190" font-family="Georgia,serif" font-size="84" fill="#fff">50% off with WELCOME50</text>` +
-      `<text x="60" y="270" font-family="sans-serif" font-size="36" fill="#fff" fill-opacity="0.9">Up to ₹100 on orders above ₹199</text>` +
-      `<text x="1140" y="60" text-anchor="end" font-family="sans-serif" font-size="28" fill="#fff" fill-opacity="0.85">DEMO</text></svg>`,
+      `<text x="60" y="270" font-family="sans-serif" font-size="36" fill="#fff" fill-opacity="0.9">Up to ₹100 on orders above ₹199</text></svg>`,
   );
 }
+
+/**
+ * The demo art as text (tests). No baked-in "DEMO" text (seed realism 3c): the web's Demo badge on the card /
+ * banner is the label, the art itself stays clean.
+ */
+export const demoCoverSvgs = () => RESTAURANTS.map((r) => ({ name: r.name, svg: coverSvg(r).toString('utf8') }));
+export const demoBannerSvg = () => bannerSvg().toString('utf8');
 
 // ---------------------------------------------------------------------------------------- seed -----
 export async function seedMarketplace(conn: Connection, cfg: MarketplaceSeedConfig): Promise<SeedReport> {

@@ -9,6 +9,9 @@
  *  - every DELIVERED child has a DELIVERED delivery job and a captured payment intent for its checkout, and its
  *    restaurant ORDER_EARNING posting; every REJECTED / CANCELLED child has SUCCEEDED refunds = refundedPaise
  *  - checkout totals = Σ child totals; memberships.freeDeliveriesUsed = Σ usage; jobs reference real partners
+ *  - realism: no cover photo twice within a locality; no two branches of one brand (owner + name) in a locality;
+ *    live Discover (gateway, first two pages at Indiranagar / Koramangala / HSR) repeats no cover and no restaurant
+ *    name (skipped with a note when the gateway is unreachable; SEED_VERIFY_API, default http://localhost:8080)
  *
  *   npx tsx scripts/seed-verify.ts                    # docker stack: runs inside the orders container as Mongo root
  *   npx tsx scripts/seed-verify.ts --uri <mongo-uri> [--db-prefix thali_]   # any reachable Mongo (e.g. infra / tests)
@@ -123,9 +126,60 @@ async function verify(db: (name: string) => Db, prefix: string): Promise<Report>
   const partnerIds = new Set((await dl.collection('partners').find({}, { projection: { _id: 1 } }).toArray()).map((p) => sid(p._id)));
   const assigned = jobs.filter((j) => j.partnerId);
   add('delivery jobs reference existing partners', assigned.filter((j) => !partnerIds.has(sid(j.partnerId))).map((j) => sid(j._id)), assigned.length);
+  const byLocality = new Map<string, typeof restaurants>();
+  const realism = await mk.collection('restaurants').find({ status: 'APPROVED' }, { projection: { slug: 1, name: 1, ownerUserId: 1, 'address.locality': 1, 'images.cover': 1 } }).toArray();
+  for (const r of realism) {
+    const loc = r.address?.locality ?? '';
+    byLocality.set(loc, [...(byLocality.get(loc) ?? []), r]);
+  }
+  const twice = <T,>(xs: T[]) => [...new Set(xs.filter((x, i) => xs.indexOf(x) !== i))];
+  add(
+    'realism: no cover photo twice within a locality',
+    [...byLocality].flatMap(([loc, rs]) => twice(rs.map((r) => r.images?.cover).filter(Boolean)).map((c) => `${loc}: ${c}`)),
+    byLocality.size,
+  );
+  add(
+    'realism: no two branches of one brand in a locality',
+    [...byLocality].flatMap(([loc, rs]) => twice(rs.map((r) => `${r.ownerUserId}|${r.name}`)).map((k) => `${loc}: ${k.split('|')[1]}`)),
+    byLocality.size,
+  );
   const projections = new Set((await od.collection('restaurant_projection').find({}, { projection: { _id: 1 } }).toArray()).map((p) => sid(p._id)));
   add('every restaurant has an orders projection', restaurants.filter((r) => !projections.has(sid(r._id))).map((r) => r.slug), restaurants.length);
   return { counts, checks };
+}
+
+// ------------------------------------------------------------------------------------- live discover --
+/** Indiranagar / Koramangala / HSR: the first two Discover pages (gateway) repeat no cover and no restaurant name. */
+async function discoverRealism(base: string): Promise<Report['checks']> {
+  const SPOTS: [string, number, number][] = [
+    ['Indiranagar', 12.9719, 77.6412],
+    ['Koramangala', 12.9352, 77.6245],
+    ['HSR Layout', 12.9116, 77.6389],
+  ];
+  const coverBad: string[] = [];
+  const nameBad: string[] = [];
+  try {
+    for (const [name, lat, lng] of SPOTS) {
+      const items: { name: string; imageUrl: string | null }[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < 2; page++) {
+        const q = new URLSearchParams({ lat: String(lat), lng: String(lng), ...(cursor ? { cursor } : {}) });
+        const res = await fetch(`${base}/api/v1/discovery/restaurants?${q}`, { signal: AbortSignal.timeout(10_000) });
+        if (!res.ok) throw new Error(`discovery ${res.status}`);
+        const body = (await res.json()) as { items: { name: string; imageUrl: string | null }[]; nextCursor: string | null };
+        items.push(...body.items);
+        cursor = body.nextCursor;
+        if (!cursor) break;
+      }
+      const twice = (xs: string[]) => [...new Set(xs.filter((x, i) => xs.indexOf(x) !== i))];
+      for (const c of twice(items.map((i) => i.imageUrl ?? '').filter(Boolean))) coverBad.push(`${name}: ${c.split('/').slice(-2).join('/')}`);
+      for (const n of twice(items.map((i) => i.name))) nameBad.push(`${name}: ${n}`);
+    }
+  } catch (e) {
+    return [{ name: 'realism: live Discover pages', ok: true, detail: `skipped (${base} unreachable: ${(e as Error).message})` }];
+  }
+  const row = (n: string, bad: string[]) => ({ name: n, ok: bad.length === 0, detail: bad.length ? `${bad.length} repeats, e.g. ${bad.slice(0, 3).join('; ')}` : `${SPOTS.length} localities ok` });
+  return [row('realism: live Discover first 2 pages repeat no cover', coverBad), row('realism: live Discover first 2 pages repeat no restaurant (brand twins)', nameBad)];
 }
 
 // ------------------------------------------------------------------------------------------- cli --
@@ -151,7 +205,9 @@ async function main() {
     const { default: mongoose } = await import('mongoose');
     const client = await new mongoose.mongo.MongoClient(args[ui + 1]!).connect();
     try {
-      const ok = print(await verify((n) => client.db(n) as unknown as Db, prefix));
+      const report = await verify((n) => client.db(n) as unknown as Db, prefix);
+      report.checks.push(...(await discoverRealism(apiBase())));
+      const ok = print(report);
       process.exit(ok ? 0 : 1);
     } finally {
       await client.close();
@@ -184,8 +240,12 @@ try { process.stdout.write(JSON.stringify(await verify((n) => client.db(n), ${JS
     child.on('close', (code) => (code === 0 ? done(buf) : fail(new Error(`verify in the orders container exited ${code}`))));
     child.stdin.end(program);
   });
-  process.exit(print(JSON.parse(out) as Report) ? 0 : 1);
+  const report = JSON.parse(out) as Report;
+  report.checks.push(...(await discoverRealism(apiBase())));
+  process.exit(print(report) ? 0 : 1);
 }
+
+const apiBase = () => (process.env.SEED_VERIFY_API ?? mergedEnv().SEED_VERIFY_API ?? 'http://localhost:8080').replace(/\/$/, '');
 
 main().catch((e: unknown) => {
   process.stderr.write(`seed-verify: ${(e as Error).message}\n`);

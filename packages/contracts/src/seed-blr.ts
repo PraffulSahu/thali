@@ -633,28 +633,52 @@ function genRestaurants(data: BlrData, manifest: ImageManifest, total: number): 
   slots.length = total;
   const slotOrder = rs.shuffle(slots);
 
-  // assign branches (distinct localities per brand)
-  const assignments: { brand: Brand; li: number; branch: number }[] = [];
-  let cursor = 0;
-  for (const brand of brands) {
-    const used = new Set<number>();
+  // assign branches: a brand's branches sit in distinct localities ≥ BRANCH_MIN_KM apart (centroids), so two branches
+  // never show up next to each other on one Discover page. Multi-branch brands pick first (from the shuffled slot
+  // pool, closest-fit relaxed only when nothing is left); singles take the remaining slots in order.
+  const pool = [...slotOrder];
+  const locKm = (a: number, b: number) => haversineKm(locs[a]!, locs[b]!);
+  const take = (ok: (li: number) => boolean): number | null => {
+    const k = pool.findIndex(ok);
+    return k < 0 ? null : pool.splice(k, 1)[0]!;
+  };
+  const brandLocs = new Map<Brand, number[]>();
+  for (const brand of brands.filter((b) => b.branches > 1)) {
+    const used: number[] = [];
     for (let br = 0; br < brand.branches; br++) {
-      let pick = cursor;
-      while (pick < slotOrder.length - 1 && used.has(slotOrder[pick]!)) pick++;
-      [slotOrder[cursor], slotOrder[pick]] = [slotOrder[pick]!, slotOrder[cursor]!];
-      used.add(slotOrder[cursor]!);
-      assignments.push({ brand, li: slotOrder[cursor]!, branch: br });
-      cursor++;
+      const li =
+        take((x) => used.every((u) => locKm(u, x) >= BRANCH_MIN_KM)) ??
+        take((x) => used.every((u) => locKm(u, x) >= BRANCH_MIN_KM / 2)) ??
+        take((x) => !used.includes(x)) ??
+        pool.shift()!;
+      used.push(li);
     }
+    brandLocs.set(brand, used);
   }
+  for (const brand of brands) if (!brandLocs.has(brand)) brandLocs.set(brand, [pool.shift()!]);
+  const assignments = brands.flatMap((brand) => brandLocs.get(brand)!.map((li, branch) => ({ brand, li, branch })));
 
   const slugs = new Set<string>();
-  const out = assignments.map(({ brand, li, branch }, i) => buildRestaurant(data, manifest, brand, locs[li]!, branch, i, slugs));
+  const covers = new Map<number, string[]>();
+  const out = assignments.map(({ brand, li, branch }, i) => buildRestaurant(data, manifest, brand, locs[li]!, branch, i, slugs, covers));
+  assignCovers(data, manifest, out, covers);
   assignStatuses(out);
   return out;
 }
 
-function buildRestaurant(data: BlrData, manifest: ImageManifest, brand: Brand, loc: LocalityRow, branch: number, i: number, slugs: Set<string>): BlrRestaurant {
+/** Minimum distance between the locality centroids of two branches of one brand (seed realism 3b). */
+const BRANCH_MIN_KM = 9;
+
+function buildRestaurant(
+  data: BlrData,
+  manifest: ImageManifest,
+  brand: Brand,
+  loc: LocalityRow,
+  branch: number,
+  i: number,
+  slugs: Set<string>,
+  covers: Map<number, string[]>,
+): BlrRestaurant {
   const r = rng(`restaurant:${i}`);
   const row = brand.row;
   const known = new Set(data.cuisines.map((c) => c.slug));
@@ -683,7 +707,9 @@ function buildRestaurant(data: BlrData, manifest: ImageManifest, brand: Brand, l
   if (brand.primary === 'biryani' || brand.primary === 'mughlai') [pmin, pmax] = [pmin + 2, pmax + 4];
   const { hours, kind: hoursKind } = genHours(r, type, brand.primary);
   const menu = genMenu(data, manifest, r, i, brand, secondary, mult);
-  const cover = pickCover(data, manifest, r, brand.primary, menu.items);
+  const coverCandidates = coverCandidatesFor(data, r, brand.primary, menu.items);
+  covers.set(i, coverCandidates);
+  const cover = { id: coverCandidates[0] ?? null, ref: coverCandidates[0] ? imageRef(data, manifest, coverCandidates[0]) : null }; // final pick: assignCovers
   const accountNumber = `50${String(100000000000 + (seedNumeric(`acct:${i}`) % 899999999999)).slice(0, 12)}`;
   const name = row.name;
   return {
@@ -869,24 +895,77 @@ function genMenu(data: BlrData, manifest: ImageManifest, r: Rng, i: number, bran
   return { categories, items };
 }
 
-function pickCover(data: BlrData, manifest: ImageManifest, r: Rng, primary: string, items: BlrItem[]): { ref: string | null; id: string | null } {
+/**
+ * Cover photo candidates, most fitting first (prior ruling: covers are signature-dish photos; cafés / bakeries / sweet
+ * shops may use a curated interior / display photo). The first candidate is what a restaurant shows when no
+ * neighbour already uses it; `assignCovers` walks down the list to keep covers near-unique around each locality.
+ */
+function coverCandidatesFor(data: BlrData, r: Rng, primary: string, items: BlrItem[]): string[] {
   const allow = COVER_ALLOW[primary === 'ice-cream' ? 'desserts' : primary];
   const imgs = imageById(data);
-  if (allow && r.chance(0.4)) {
-    const present = allow.filter((x) => imgs.has(x));
-    if (present.length) {
-      const id = r.pick(present);
-      return { ref: imageRef(data, manifest, id), id };
-    } // none of the curated covers in images.json: fall through to the dish photo
-  }
-  // food-forward: a photo of a signature dish (first featured bestseller)
+  const present = allow ? allow.filter((x) => imgs.has(x)) : [];
+  const out: string[] = [];
+  const add = (id: string | undefined) => {
+    if (id && imgs.has(id) && !out.includes(id)) out.push(id);
+  };
+  const curatedFirst = present.length > 0 && r.chance(0.4);
+  if (curatedFirst) add(r.pick(present));
+  // food-forward: the signature dish (first featured bestseller), then the other featured dishes, then the menu
+  const dishOf = (it: BlrItem) => data.dishes.find((d) => d.id === it.dishId);
   const sig = items.find((it) => it.featured && it.tags.includes('bestseller')) ?? items.find((it) => it.featured) ?? items[0];
-  if (!sig) return { ref: null, id: null };
-  const dish = data.dishes.find((d) => d.id === sig.dishId);
-  const ids = dish?.imageIds ?? [];
-  if (!ids.length) return { ref: null, id: null };
-  const id = ids[r.int(0, ids.length - 1)]!;
-  return { ref: imageRef(data, manifest, id), id };
+  if (sig) {
+    const ids = dishOf(sig)?.imageIds ?? [];
+    if (ids.length) {
+      const k = r.int(0, ids.length - 1);
+      for (let n = 0; n < ids.length; n++) add(ids[(k + n) % ids.length]);
+    }
+  }
+  const rank = (it: BlrItem) => (it.featured ? 0 : 2) + (it.tags.includes('bestseller') ? 0 : 1);
+  for (const it of [...items].sort((a, b) => rank(a) - rank(b))) for (const id of dishOf(it)?.imageIds ?? []) add(id);
+  for (const id of present) add(id);
+  return out;
+}
+
+/** How much two restaurants `km` apart sharing a cover hurts (they would sit on the same Discover pages). */
+const coverClash = (km: number) => (km < 3 ? 100 : km < 6 ? 25 : km < 10 ? 6 : km < 15 ? 1 : 0);
+
+/**
+ * Neighbour-aware cover assignment (seed realism 3a): each restaurant takes its most fitting candidate that no
+ * nearby restaurant uses (cost = Σ clash with every restaurant already on that photo + a small preference
+ * penalty), then two refinement passes re-pick each cover against all the others. Deterministic.
+ */
+function assignCovers(data: BlrData, manifest: ImageManifest, rs: BlrRestaurant[], covers: Map<number, string[]>): void {
+  const users = new Map<string, BlrRestaurant[]>();
+  const choice = new Map<BlrRestaurant, string>();
+  const cost = (r: BlrRestaurant, id: string, rankIdx: number) => {
+    let c = rankIdx * 0.05;
+    for (const o of users.get(id) ?? []) if (o !== r) c += coverClash(haversineKm(r.location, o.location));
+    return c;
+  };
+  const pick = (r: BlrRestaurant) => {
+    const cands = covers.get(r.i) ?? [];
+    let best: string | null = null;
+    let bestCost = Infinity;
+    cands.forEach((id, k) => {
+      const c = cost(r, id, k);
+      if (c < bestCost) [best, bestCost] = [id, c];
+    });
+    return best;
+  };
+  const set = (r: BlrRestaurant, id: string | null) => {
+    const prev = choice.get(r);
+    if (prev) users.set(prev, (users.get(prev) ?? []).filter((o) => o !== r));
+    if (!id) return choice.delete(r);
+    choice.set(r, id);
+    users.set(id, [...(users.get(id) ?? []), r]);
+  };
+  for (const r of rs) set(r, pick(r));
+  for (let pass = 0; pass < 2; pass++) for (const r of rs) set(r, pick(r));
+  for (const r of rs) {
+    const id = choice.get(r) ?? null;
+    r.coverImageId = id;
+    r.coverRef = id ? imageRef(data, manifest, id) : null;
+  }
 }
 
 function assignStatuses(rs: BlrRestaurant[]): void {
