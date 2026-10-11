@@ -37,7 +37,7 @@ export function demoPayUrl(ctx: PaymentsContext, intentId: string): string {
   return `${base}/demo-pay/${intentId}`;
 }
 
-/** Internal API response shape (binding: service-context.md "payments POST /internal/payment-intents"). */
+/** Internal API response shape (binding: docs/03-LLD.md, payments POST /internal/payment-intents). */
 export function intentView(ctx: PaymentsContext, intent: PaymentIntentDoc): IntentView {
   return {
     paymentIntentId: intent.id as string,

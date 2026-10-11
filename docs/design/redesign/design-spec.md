@@ -984,7 +984,7 @@ Component count: 35 sections (§3.1–3.35) covering ~75 named components/varian
 
 ## 4. Illustrations
 
-All dish art is inline SVG (no raster). Extracted to `.superpowers/sdd/2026-10-11-ui-reillustrations/`
+All dish art is inline SVG (no raster). Extracted to `illustrations/`
 (viewBox kept, outer width/height removed; port as React components or `?react` SVG imports into
 `apps/web/src/components/illustrations/`). Colours inside dish art are fixed literals (they read on both themes because
 they sit on tinted discs).

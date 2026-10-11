@@ -1,5 +1,5 @@
 /**
- * Recipient lookup (identity `GET /internal/users/:id`, binding shape from service-context.md) and the
+ * Recipient lookup (identity `GET /internal/users/:id`, binding shape in docs/03-LLD.md) and the
  * channel plan: in-app always for user-facing templates; SMS/email only when the template allows the
  * channel, the user has an address, is not blocked, and the preference (or "transactional") permits it.
  */

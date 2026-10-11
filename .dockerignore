@@ -13,7 +13,6 @@
 .superpowers
 .playwright-mcp
 docs
-context.md
 playwright-report
 test-results
 e2e/**

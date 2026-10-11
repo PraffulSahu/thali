@@ -1,4 +1,4 @@
-/** Unauthorized / out-of-order state changes are rejected by the backend (context.md §8). */
+/** Unauthorized / out-of-order state changes are rejected by the backend (PRD §4.5). */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { outboxEvents, setup, type Harness } from './helpers.js';
 import { asAdmin, child, placedCheckout } from './lifecycle-helpers.js';

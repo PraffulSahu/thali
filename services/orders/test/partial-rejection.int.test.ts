@@ -1,5 +1,5 @@
 /**
- * Mandatory acceptance flow (context.md §7, HLD §4.2): Restaurant A accepts, Restaurant B rejects →
+ * Mandatory acceptance flow (PRD §4.5, HLD §4.2): Restaurant A accepts, Restaurant B rejects →
  * B refunded, A continues, the customer sees an accurate explanation and updated totals.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';

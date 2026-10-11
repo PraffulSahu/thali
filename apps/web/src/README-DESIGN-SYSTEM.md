@@ -2,7 +2,7 @@
 
 For role-area implementers (consumer, restaurant, partner, admin). Read with `README-FOUNDATION.md` (API client,
 auth, realtime, data conventions) and the binding visual spec
-`.superpowers/sdd/2026-10-11-ui-redesign/design-spec.md` (§ numbers below refer to it).
+[`docs/design/redesign/design-spec.md`](../../../docs/design/redesign/design-spec.md) (§ numbers below refer to it).
 
 Contents: [1 Rules](#1-rules) · [2 Theme](#2-theme) · [3 Tokens & utilities](#3-tokens--utilities) ·
 [4 Typography](#4-typography) · [5 Shells](#5-shells) · [6 Components](#6-components) ·

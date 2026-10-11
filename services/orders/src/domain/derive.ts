@@ -5,7 +5,7 @@
  *    change or a touch) so two concurrent sibling transitions conflict and one retries — otherwise
  *    snapshot isolation could leave a stale derived status (write skew).
  *  - `explanations`: why part of the purchase will not arrive and what happens to the money
- *    (context.md §7 "accurate explanation"), e.g. "Spice Route declined your order (Out of stock).
+ *    (PRD §4.5 "accurate explanation"), e.g. "Spice Route declined your order (Out of stock).
  *    ₹536.96 refund initiated."
  *  - `adjustedTotals`: paid / refunded / refund pending / net, from the children's refund mirror.
  */

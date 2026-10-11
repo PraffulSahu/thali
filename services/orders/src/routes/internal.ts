@@ -1,5 +1,5 @@
 /**
- * Internal routes (service tokens only; binding shapes in service-context.md):
+ * Internal routes (service tokens only; binding shapes in docs/03-LLD.md):
  *   GET  /internal/checkouts/:id/status → { id, status, paymentIntentId }   (marketplace sweeper)
  *   POST /internal/cart/merge {userId, guestToken} → { merged, lineCount } (identity on OTP login)
  * Task 12 adds `/internal/orders/child/:id` and `/internal/orders/stats` in its own module.

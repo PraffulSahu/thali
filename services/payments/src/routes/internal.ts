@@ -1,4 +1,4 @@
-/** Internal API (binding shapes in service-context.md). Callers: orders, marketplace. */
+/** Internal API (binding shapes in docs/03-LLD.md). Callers: orders, marketplace. */
 import express, { type Router } from 'express';
 import { DomainError } from '@thali/contracts';
 import { requireInternal, validate } from '@thali/service-kit';

@@ -18,7 +18,7 @@ afterAll(async () => {
 describe('scrubProviderMessage', () => {
   it('removes emails, phone numbers and secrets; keeps infra detail; caps length', () => {
     expect(scrubProviderMessage('SMTP connect ECONNREFUSED 10.0.3.12:587')).toBe('SMTP connect ECONNREFUSED 10.0.3.12:587');
-    expect(scrubProviderMessage('rejected recipient prafful@example.com')).toBe('rejected recipient [email]');
+    expect(scrubProviderMessage('rejected recipient someone@example.com')).toBe('rejected recipient [email]');
     expect(scrubProviderMessage('sms to +919876543210 failed')).toBe('sms to [phone] failed');
     expect(scrubProviderMessage('sms to 9876543210 failed')).toBe('sms to [phone] failed');
     expect(scrubProviderMessage('GET /geocode/json?latlng=1,2&key=AIzaSyABC123 403')).toBe('GET /geocode/json?latlng=1,2&key=[redacted] 403');

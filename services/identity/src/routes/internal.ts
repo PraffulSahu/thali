@@ -1,5 +1,5 @@
 /**
- * Internal routes (binding shapes, service-context.md):
+ * Internal routes (binding shapes, docs/03-LLD.md):
  *   GET  /internal/users/:id                 (notifications, delivery, marketplace, orders)
  *   POST /internal/users/:id/roles {role}    (marketplace, delivery) → role.granted, idempotent
  *   POST /internal/users/:id/revoke-sessions (delivery, marketplace) → 204

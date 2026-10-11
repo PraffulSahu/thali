@@ -1,5 +1,5 @@
 /**
- * E2E suite for the 12 completion flows (context.md §17 / PRD §9) against the full Docker stack in demo mode.
+ * E2E suite for the 12 completion flows (PRD §9) against the full Docker stack in demo mode.
  *
  *   npm run e2e                      # stack:up + seed + playwright test (root script)
  *   npm test -w @thali/e2e           # against an already running + seeded stack

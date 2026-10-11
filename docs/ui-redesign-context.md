@@ -7,7 +7,6 @@
 > - Design sources (Claude Design export, per-board element tables, overrides) and the backend gap analysis:
 >   [docs/design/redesign/](design/redesign/README.md) (`design-spec.md`, `design-spec-overrides.md`, `gap-analysis.md`,
 >   board screenshots and illustrations).
-> - Implementation plan: [docs/superpowers/plans/2026-10-11-ui-redesign.md](superpowers/plans/2026-10-11-ui-redesign.md).
 > - Component library, shells, tokens and theme: `apps/web/src/README-DESIGN-SYSTEM.md`.
 > - New and changed APIs: [09-api.md](09-api.md) section 11; operations for the demo dataset: [07-runbook.md](07-runbook.md) section 14.
 > - Notable changes against this brief: paused restaurants are listed as "Not accepting orders" (ADR-034); admin

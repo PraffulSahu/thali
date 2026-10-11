@@ -1,5 +1,5 @@
 /**
- * Payments internal client (binding shapes in service-context.md):
+ * Payments internal client (binding shapes in docs/03-LLD.md):
  *  - `POST /internal/payment-intents {purpose, referenceId, userId, amountPaise}` → intent (idempotent per purpose+referenceId)
  *  - `POST /internal/payment-intents/:id/reconcile` → `{ paymentIntentId, status, capturedPaise, refundedPaise, refundReservedPaise }`
  *  - `GET /internal/payment-intents/by-reference/:purpose/:refId` → intent or 404

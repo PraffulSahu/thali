@@ -1,5 +1,5 @@
 /**
- * Typed clients for other services (binding internal API shapes, service-context.md).
+ * Typed clients for other services (binding internal API shapes, docs/03-LLD.md).
  * marketplace `GET /internal/restaurants/:id` → restaurant ownership for finance routes.
  * orders `GET /internal/orders/child/:id` → child checkout/restaurant/total for manual refunds.
  */

@@ -1,7 +1,7 @@
 # PRD — "Thali" Food Delivery Platform (Pilot)
 
 Status: Approved for build · Owner: Platform team · Date: 2026-10-10
-Source brief: `context.md` (treated as the product brief; this PRD resolves its open choices).
+This PRD is the product brief; it resolves every open choice of the original requirements.
 
 ## 1. Problem & goal
 

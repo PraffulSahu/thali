@@ -1,5 +1,5 @@
 /**
- * Internal order routes (service tokens; binding shapes in service-context.md):
+ * Internal order routes (service tokens; binding shapes in docs/03-LLD.md):
  *   GET /internal/orders/child/:id → { id, code, checkoutGroupId, checkoutCode, userId, restaurantId,
  *       restaurantOwnerId, status, deliveredAt, totalPaise, committedRefundPaise }
  *       (marketplace ratings, notifications, payments manual-refund caps, …)

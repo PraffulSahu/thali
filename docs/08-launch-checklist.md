@@ -123,7 +123,7 @@ delivery outcome (`e2e/tests/system/`).
 |---|---|
 | Consumer, restaurant, partner and admin areas call real APIs with loading, empty, error, forbidden and session-expired states | `apps/web/test/**` (component tests for each area: cart, checkout, payment step, orders board, onboarding wizard, offers, active delivery, refunds and payouts panels, health page, service-area editor) |
 | Accessibility fixes from review (dialog focus trap, focus on session-expired, live regions, keyboard polygon editing) | review fix rounds for tasks 16, 18, 19, 20; `apps/web/test/{components,SessionExpired}.test.tsx` |
-| Demo/simulated data is visibly labelled (mode banner, `isDemo`, `estimateSource`, `simulated`) | web component tests that render the mode banner and `Demo`/`simulated` badges (`apps/web/test/`); `docs/screenshots/` |
+| Demo/simulated data is visibly labelled (mode banner, `isDemo`, `estimateSource`, `simulated`) | web component tests that render the mode banner and `Demo`/`simulated` badges (`apps/web/test/`) |
 
 ### 1.8 Operations documentation
 
