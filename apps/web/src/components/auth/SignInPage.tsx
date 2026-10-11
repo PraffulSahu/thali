@@ -43,7 +43,7 @@ const COPY: Record<SignInRole, RoleCopy> = {
     subtitle: 'Sign in to check out, track orders and manage addresses.',
     foot: (
       <>
-        Just browsing? You don’t need an account. <FootLink to="/">Explore restaurants →</FootLink>
+        Just browsing? You don’t need an account. <FootLink to="/discover">Explore restaurants →</FootLink>
       </>
     ),
     tag: 'CUSTOMER',

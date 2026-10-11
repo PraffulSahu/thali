@@ -1,6 +1,6 @@
 /**
  * Public routes (Task 7): mounted at the root under <PublicShell> by src/routes.tsx.
- *   /welcome            landing (always; `/` shows it too until a delivery location is chosen)
+ *   /  and  /welcome    landing, always (`/welcome` is an alias). Discover is the consumer area's `/discover`.
  *   /terms /privacy /refunds /help /partner-with-us /ride-with-thali
  */
 import type { RouteObject } from 'react-router';
@@ -8,8 +8,11 @@ import type { RouteObject } from 'react-router';
 const page = (name: 'TermsPage' | 'PrivacyPage' | 'RefundsPage' | 'HelpPage' | 'PartnerWithUsPage' | 'RideWithThaliPage') => () =>
   import('./StaticPages').then((m) => ({ Component: m[name] }));
 
+const landing = () => import('./LandingPage').then((m) => ({ Component: m.default }));
+
 export const publicRoutes: RouteObject[] = [
-  { path: 'welcome', lazy: () => import('./LandingPage').then((m) => ({ Component: m.default })) },
+  { index: true, lazy: landing },
+  { path: 'welcome', lazy: landing },
   { path: 'terms', lazy: page('TermsPage') },
   { path: 'privacy', lazy: page('PrivacyPage') },
   { path: 'refunds', lazy: page('RefundsPage') },

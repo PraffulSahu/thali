@@ -84,7 +84,7 @@ export function EmptyCart({ onBrowse, compact }: { onBrowse?: () => void; compac
       title="Your cart is empty"
       description="Add dishes from any restaurant that delivers to you. Each restaurant delivers its part separately."
       action={
-        <ButtonLink to="/" onClick={onBrowse}>
+        <ButtonLink to="/discover" onClick={onBrowse}>
           Browse restaurants
         </ButtonLink>
       }

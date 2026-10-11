@@ -87,7 +87,7 @@ function OrdersList() {
   if (q.isError && !q.data) return <ErrorState error={q.error} title="Couldn't load your orders" onRetry={() => void q.refetch()} retrying={q.isFetching} />;
   const items = q.data?.pages.flatMap((p) => p.items) ?? [];
   if (!items.length) {
-    return <EmptyState icon="receipt" title="No orders yet" description="Your orders from every restaurant will show up here." action={<ButtonLink to="/">Find food</ButtonLink>} />;
+    return <EmptyState icon="receipt" title="No orders yet" description="Your orders from every restaurant will show up here." action={<ButtonLink to="/discover">Find food</ButtonLink>} />;
   }
   return (
     <>

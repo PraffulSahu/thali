@@ -1,6 +1,7 @@
 /**
  * Landing address search (board 00, MKT-1) → Discover with the Bengaluru dataset.
- * A guest types an area into the hero search, picks the first suggestion and lands on Discover for that point:
+ * A guest types an area into the hero search at `/` (always the landing), picks the first suggestion and lands on
+ * Discover (`/discover`) for that point:
  * the counts, the first page and the photos are the server's (seeded Bengaluru data, mirrored images), and a
  * cuisine pill narrows the list the way the API does.
  */
@@ -28,6 +29,7 @@ test('landing address search lands on Discover with Bengaluru restaurants', asyn
     const options = page.getByRole('listbox', { name: 'Address suggestions' }).getByRole('option');
     await expect(options.first()).toContainText(suggestions[0].primary);
     await options.first().click();
+    await expect(page).toHaveURL(/\/discover$/);
 
     await expect(page.getByRole('heading', { name: new RegExp(`^Delivering to ${escapeRe(suggestions[0].primary)}`), level: 1 })).toBeVisible();
     await expect(page.getByText(`${disco.counts.open} open now · ${disco.counts.total} restaurants deliver here`)).toBeVisible();
@@ -58,6 +60,14 @@ test('landing address search lands on Discover with Bengaluru restaurants', asyn
     await expect(page).toHaveURL(new RegExp(`cuisine=${facet.slug}`));
     await expect(page.getByText(new RegExp(`${narrowed.counts.open} open now · ${narrowed.counts.total} restaurants? deliver`))).toBeVisible();
     await expect(list.getByRole('listitem').first()).toContainText((narrowed.items[0] as Json).name);
+
+    // ---- `/` stays the landing even with a chosen location; the consumer logo goes back to Discover
+    await page.goto('/');
+    await expect(page.getByRole('heading', { name: 'Where should we deliver?' })).toBeAttached();
+    await expect(page.getByRole('heading', { name: /Two kitchens/, level: 1 })).toBeVisible();
+    await page.getByRole('link', { name: /See restaurants/ }).click();
+    await expect(page).toHaveURL(/\/discover$/);
+    await expect(page.getByRole('heading', { name: new RegExp(`^Delivering to ${escapeRe(suggestions[0].primary)}`), level: 1 })).toBeVisible();
   } finally {
     await context.close();
   }

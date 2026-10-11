@@ -61,7 +61,7 @@ test('guest discovers restaurants that deliver to the chosen location', async ({
 
     // ---- a location outside every service area (location chip -> picker dialog)
     await context.setGeolocation({ ...GEO.outside, accuracy: 15 });
-    await page.goto('/');
+    await page.goto('/discover');
     await page.getByRole('button', { name: /^Delivery location: / }).click();
     const dialog = page.getByRole('dialog', { name: 'Delivery location' });
     await dialog.getByRole('button', { name: 'Use my current location' }).click();

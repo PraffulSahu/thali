@@ -1,6 +1,7 @@
 /**
  * Consumer area routes. The area mounts its own chrome (`chrome = 'none'`) as layout routes:
- *   discover   ConsumerLayout variant="discover"   /, /search, /offers
+ *   discover   ConsumerLayout variant="discover"   /discover (consumer home), /search, /offers
+ *   (`/` itself is the public landing, features/public/routes.tsx — not part of this area)
  *   restaurant ConsumerLayout variant="restaurant" /restaurants/:idOrSlug (breadcrumb + Cart · N)
  *   account    ConsumerLayout variant="account"    /orders*, /account*, /membership, /support*, /notifications, /cart
  *   checkout   CheckoutShell                       /checkout, /checkout/status/:id, /demo-pay/:intentId
@@ -55,7 +56,7 @@ export const routes: RouteObject[] = [
   {
     element: <ConsumerLayout variant="discover" />,
     children: [
-      { index: true, element: page(HomePage) },
+      { path: 'discover', element: page(HomePage) },
       { path: 'search', element: page(SearchPage) },
       { path: 'offers', element: page(OffersPage) },
     ],
@@ -87,7 +88,7 @@ export const routes: RouteObject[] = [
       { path: 'support', element: page(SupportPage) },
       { path: 'support/:ticketId', element: page(TicketPage) },
       { path: 'notifications', element: page(NotificationsPage) },
-      { path: '*', element: <NotFoundPage home="/" /> },
+      { path: '*', element: <NotFoundPage home="/discover" homeLabel="Browse restaurants" /> },
     ],
   },
 ];

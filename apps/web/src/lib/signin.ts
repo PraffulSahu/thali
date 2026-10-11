@@ -42,5 +42,5 @@ export function destinationAfterSignIn(role: SignInRole, roles: Role[], rawNext:
     if (!has) return next && within(next, onboarding) ? next : onboarding;
     return next ?? base;
   }
-  return next ?? '/';
+  return next ?? '/discover';
 }

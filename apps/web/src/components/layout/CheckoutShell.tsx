@@ -35,7 +35,7 @@ export function CheckoutShell({ backTo, title = 'Checkout', children }: Checkout
       <ModeBanner />
       <header className="mx-auto flex w-full max-w-[1160px] items-center gap-4 px-6 py-3 max-sm:gap-2 max-sm:px-4">
         <IconButton icon="chevron-left" label="Back" variant="outline" onClick={back} />
-        <Logo />
+        <Logo to="/discover" />
         <span className="text-sm text-fg-3" aria-hidden="true">
           / {title}
         </span>

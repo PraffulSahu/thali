@@ -11,7 +11,7 @@
  *
  *   const q = useQuery({ queryKey: ['orders'], queryFn: () => api<Paginated<Order>>('/orders') });
  *   <QueryState query={q} isEmpty={(d) => d.items.length === 0}
- *     empty={{ icon: 'receipt', title: 'No orders yet', description: 'Your orders will appear here.', action: <ButtonLink to="/">Browse restaurants</ButtonLink> }}
+ *     empty={{ icon: 'receipt', title: 'No orders yet', description: 'Your orders will appear here.', action: <ButtonLink to="/discover">Browse restaurants</ButtonLink> }}
  *     loading={<SkeletonList count={3} />}>
  *     {(data) => <OrderList orders={data.items} />}
  *   </QueryState>

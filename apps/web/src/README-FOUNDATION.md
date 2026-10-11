@@ -6,7 +6,8 @@ Each module's file header has more examples.
 > **UI redesign (Masala):** components, shells, theme, tokens and responsive rules are documented in
 > [`README-DESIGN-SYSTEM.md`](./README-DESIGN-SYSTEM.md). Where it disagrees with §10–§12 below (component props,
 > shells, design tokens), the design-system guide wins. Sign-in is now `/signin?role=…` (`/admin/login`
-> redirects there); `/` shows the public landing until a delivery location is chosen.
+> redirects there); `/` always shows the public landing (alias `/welcome`) and the consumer home (Discover) is
+> `/discover`.
 
 - Stack: React 19, react-router 7 (data router, `createBrowserRouter`), TanStack Query 5, Tailwind v4 (CSS-first tokens in `styles.css`), Leaflet.
 - Imports from contracts: root only (`import { formatINR, ChildOrderStatus } from '@thali/contracts'`). Never import `@thali/contracts/seed`.

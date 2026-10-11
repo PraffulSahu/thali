@@ -402,7 +402,7 @@ export default function RestaurantPage() {
     return (
       <div className="mx-auto max-w-[1200px] px-6 pt-10">
         {isNotFound(q.error) ? (
-          <EmptyState icon="store" title="Restaurant not found" description="It may no longer be listed on Thali." action={<ButtonLink to="/">Browse restaurants</ButtonLink>} />
+          <EmptyState icon="store" title="Restaurant not found" description="It may no longer be listed on Thali." action={<ButtonLink to="/discover">Browse restaurants</ButtonLink>} />
         ) : (
           <ErrorState error={q.error} title="Couldn't load this restaurant" onRetry={() => void q.refetch()} retrying={q.isFetching} />
         )}

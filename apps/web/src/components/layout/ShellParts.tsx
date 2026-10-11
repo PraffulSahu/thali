@@ -21,7 +21,7 @@ import { Kbd } from '../ui/Typography';
 
 export type AreaKey = 'consumer' | 'restaurant' | 'partner' | 'admin';
 
-export const AREA_HOME: Record<AreaKey, string> = { consumer: '/', restaurant: '/restaurant', partner: '/partner', admin: '/admin' };
+export const AREA_HOME: Record<AreaKey, string> = { consumer: '/discover', restaurant: '/restaurant', partner: '/partner', admin: '/admin' };
 
 /** Where each area sends signed-out users (keeps `?next=`). */
 export function signInHref(area: AreaKey, next: string): string {
@@ -162,7 +162,7 @@ export function AccountMenu({ area, showName, links, extra, signOutAll, themeOpt
   }
 
   const areaLinks: Array<{ to: string; label: string; icon: IconName; show: boolean }> = [
-    { to: '/', label: 'Order food', icon: 'bowl', show: area !== 'consumer' },
+    { to: AREA_HOME.consumer, label: 'Order food', icon: 'bowl', show: area !== 'consumer' },
     { to: '/restaurant', label: 'Restaurant console', icon: 'store', show: area !== 'restaurant' && auth.hasRole('RESTAURANT_OWNER') },
     { to: '/partner', label: 'Partner app', icon: 'bike', show: area !== 'partner' && auth.hasRole('DELIVERY_PARTNER') },
     { to: '/admin', label: 'Ops console', icon: 'shield', show: area !== 'admin' && auth.hasRole('ADMIN') },

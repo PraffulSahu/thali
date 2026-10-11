@@ -51,18 +51,29 @@ describe('route tree', SUITE, () => {
     expect(screen.queryByRole('heading', { name: guardHeadings })).not.toBeInTheDocument();
   });
 
-  it('/ shows the public landing until a delivery location is chosen, then the consumer index', async () => {
+  it('/ shows the public landing without a delivery location', async () => {
     localStorage.removeItem('thali.location');
     renderApp('/', makeAuth());
     expect(await screen.findByRole('heading', { level: 1, name: /two kitchens/i }, slow)).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: /delivery address/i })).toBeInTheDocument();
   });
 
-  it('/ with a chosen location renders the consumer index, not the landing', async () => {
+  it('/ still shows the landing (not Discover) with a chosen location — user decision 2026-10-11', async () => {
     localStorage.setItem('thali.location', JSON.stringify({ lat: 12.97, lng: 77.64, label: 'Home', source: 'pin' }));
     renderApp('/', makeAuth());
+    expect(await screen.findByRole('heading', { level: 1, name: /two kitchens/i }, slow)).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /delivery address/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /see restaurants/i })).toHaveAttribute('href', '/discover');
+    localStorage.removeItem('thali.location');
+  });
+
+  it('/discover renders the consumer index (Discover) inside the consumer shell; its logo and Home go to /discover', async () => {
+    localStorage.setItem('thali.location', JSON.stringify({ lat: 12.97, lng: 77.64, label: 'Home', source: 'pin' }));
+    renderApp('/discover', makeAuth());
     await expectAreaShell(/^Thali, home$/);
     expect(screen.queryByRole('heading', { level: 1, name: /two kitchens/i })).not.toBeInTheDocument();
+    for (const logo of screen.getAllByRole('link', { name: /^Thali, home$/ })) expect(logo).toHaveAttribute('href', '/discover');
+    expect(screen.getAllByRole('link', { name: /^home$/i }).every((a) => a.getAttribute('href') === '/discover')).toBe(true);
     localStorage.removeItem('thali.location');
   });
 

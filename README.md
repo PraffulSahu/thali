@@ -78,7 +78,7 @@ Then open:
 
 | What | URL |
 |---|---|
-| Web app: landing and consumer at `/`, sign-in at `/signin?role=customer\|restaurant\|partner\|admin`, then `/restaurant`, `/partner`, `/admin` | http://localhost:5173 |
+| Web app: public landing at `/` (always), consumer Discover at `/discover`, sign-in at `/signin?role=customer\|restaurant\|partner\|admin`, then `/restaurant`, `/partner`, `/admin` | http://localhost:5173 |
 | API gateway | http://localhost:8080 (health: `/health/ready`, meta: `/api/v1/meta`) |
 | Swagger UI (all seven specs) | http://localhost:8080/api/docs |
 | Mailpit inbox (demo emails) | http://localhost:8025 |
@@ -128,8 +128,9 @@ kept. Mode is shown in a persistent banner, and everything seeded is flagged `is
 
 Try it:
 
-1. Open http://localhost:5173. The public landing asks "Where should we deliver?": type `Indiranagar` or
-   `Koramangala`, pick a suggestion (or use your location) and you land on discovery for that address.
+1. Open http://localhost:5173. `/` is always the public landing; it asks "Where should we deliver?": type
+   `Indiranagar` or `Koramangala`, pick a suggestion (or use your location) and you land on Discover
+   (`/discover`) for that address. The consumer logo and Home tab go back to `/discover`.
 2. Toggle **light / dark / system** from the theme control in the header (or the account menu on phones).
 3. Sign in from `/signin?role=customer` (phone, demo OTP), `/signin?role=restaurant`, `/signin?role=partner`, or
    `/signin?role=admin` (email, password, authenticator code). `/admin/login` redirects there.

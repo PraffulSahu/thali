@@ -161,7 +161,7 @@ Props: `variant` (`discover` | `account`; default from `accountRoutes`), `breadc
 · `bleed` = no wrapper at all, pages own widths/padding), `tabs` (≤640 tab bar; default Home · Search · Orders ·
 Account), `accountLinks` (account-menu links after Profile · Your orders, e.g. Addresses · Thali Plus · Support ·
 Notifications). Pages set the breadcrumb from inside the shell:
-`useShellBreadcrumb(<Breadcrumb items={[{ label: 'Restaurants', to: '/' }, { label: name }]} />, [name])`.
+`useShellBreadcrumb(<Breadcrumb items={[{ label: 'Restaurants', to: '/discover' }, { label: name }]} />, [name])`.
 Search has the `/` shortcut and submits to `/search?q=`. If you only export the legacy `HeaderActions`, it is rendered in the right cluster (no default chip).
 The cart dock is page content: render `<CartDock>` at the end of the page.
 
@@ -283,15 +283,16 @@ Breakpoints: phone `max-sm` (<640), tablet `sm`–`lg`, desktop `lg` (≥1024), 
 
 | Route | Notes |
 |---|---|
-| `/` | landing until a delivery location is chosen (`lib/location`), then the consumer index route |
-| `/welcome` | landing, always |
+| `/` | public landing, **always** (user decision 2026-10-11; no location gate) |
+| `/welcome` | alias of `/` (landing) |
+| `/discover` | consumer home (Discover). Consumer logo, Home tab, "Restaurants" links, empty states and the landing's address pick / "Find food" / cuisines go here |
 | `/terms` `/privacy` `/refunds` `/help` `/partner-with-us` `/ride-with-thali` | public pages |
-| `/signin?role=customer\|restaurant\|partner\|admin&next=` | unified sign-in. After sign-in: customer → `next`‖`/`; restaurant → `next`‖`/restaurant` (no owner role → `/restaurant/onboarding`); partner likewise; admin → admin `next`‖`/admin` (`lib/signin.destinationAfterSignIn`) |
+| `/signin?role=customer\|restaurant\|partner\|admin&next=` | unified sign-in. After sign-in: customer → `next`‖`/discover`; restaurant → `next`‖`/restaurant` (no owner role → `/restaurant/onboarding`); partner likewise; admin → admin `next`‖`/admin` (`lib/signin.destinationAfterSignIn`) |
 | `/admin/login` | redirects to `/signin?role=admin` (keeps `next`) |
 | `/admin/forgot`, `/admin/reset-password?token=` | IDN-1 reset |
 | `/offers` | linked from the public header — **the consumer area provides it** (MKT-7) |
 
-Landing cuisine circles link to `/?cuisine=<slug>` (consumer discover reads it). Reuse `OtpSignInForm`
+Landing cuisine circles link to `/discover?cuisine=<slug>` (consumer discover reads it). Reuse `OtpSignInForm`
 (unchanged props; now has `onStepChange`) in the consumer `LoginDialog`.
 
 ## 10. Testing tips

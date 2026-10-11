@@ -97,7 +97,7 @@ test('UI shows sign-in prompts to guests and no-access states to the wrong role'
     await expect(g.page.getByRole('main').getByRole('link', { name: /Sign in|Verify with authenticator/ })).toHaveAttribute('href', /\/admin\/login/);
 
     // signed-in consumer in other roles' areas
-    await signInViaPage(c.page, PHONES.consumer3, '/');
+    await signInViaPage(c.page, PHONES.consumer3, '/discover');
     await c.page.goto('/restaurant/orders');
     await expect(c.page.getByRole('heading', { name: 'No restaurant on this account yet' })).toBeVisible();
     await c.page.goto('/partner');

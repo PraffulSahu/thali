@@ -1,9 +1,9 @@
 /**
- * Public landing — board 00 (design-spec §5.00). Rendered inside <PublicShell> at `/welcome`, and at `/` while
- * no delivery location is chosen.
+ * Public landing — board 00 (design-spec §5.00). Rendered inside <PublicShell> at `/` (always, user decision
+ * 2026-10-11) and at its alias `/welcome`.
  *
  * Address flow (MKT-1): type → debounced `GET /discovery/places?q=` → pick → `GET /discovery/places/:id` →
- * serviceable ? store location (lib/location) and go to Discover (`/`, or the pending cuisine) :
+ * serviceable ? store location (lib/location) and go to Discover (`/discover`, or the pending cuisine) :
  * "We don't deliver here yet". "Use my location" → browser geolocation → `GET /discovery/reverse` → same.
  */
 import { useQuery } from '@tanstack/react-query';
@@ -50,6 +50,9 @@ export const LANDING_GEO_MESSAGES: Record<Exclude<GeolocationStatus, 'idle' | 'l
   unsupported: 'This browser can’t share your location. Type your address instead.',
 };
 
+/** The consumer home (Discover). `/` is this landing page. */
+const DISCOVER = '/discover';
+
 const NOT_SERVICEABLE = "We don't deliver here yet. Thali is a Bengaluru pilot — try another address in the city.";
 
 interface CuisineItem {
@@ -85,9 +88,9 @@ function useLocationFlow() {
     setNoticeState(n);
     setSource(from);
   };
-  const pendingNext = useRef<string>('/');
+  const pendingNext = useRef<string>(DISCOVER);
 
-  const go = () => navigate(pendingNext.current || '/');
+  const go = () => navigate(pendingNext.current || DISCOVER);
 
   const choosePlace = async (s: PlaceSuggestion) => {
     setBusy('place');
@@ -233,7 +236,7 @@ function HeroArt() {
 }
 
 const DOORS: Array<{ icon: IconName; tile: string; title: string; body: string; cta: string; to: (signedIn: boolean) => string }> = [
-  { icon: 'bowl', tile: 'bg-pri text-pri-fg', title: 'Order food', body: 'Browse kitchens that deliver to your address. Sign in only at checkout.', cta: 'Start browsing', to: () => '/' },
+  { icon: 'bowl', tile: 'bg-pri text-pri-fg', title: 'Order food', body: 'Browse kitchens that deliver to your address. Sign in only at checkout.', cta: 'Start browsing', to: () => DISCOVER },
   { icon: 'store', tile: 'bg-sun text-[#141414]', title: 'Run a restaurant', body: 'Get listed, manage menu and stock, accept orders fast, see payouts.', cta: 'Restaurant sign in', to: () => '/signin?role=restaurant' },
   { icon: 'bike', tile: 'bg-leaf text-white dark:text-[#121212]', title: 'Deliver with Thali', body: 'Go online, take offers, carry up to two orders at once, track earnings.', cta: 'Partner sign in', to: () => '/signin?role=partner' },
   { icon: 'shield-check', tile: 'bg-fg text-bg', title: 'Thali operations', body: 'Approvals, deliveries, refunds and system health. Email, password and MFA.', cta: 'Admin sign in', to: () => '/signin?role=admin' },
@@ -312,7 +315,7 @@ export default function LandingPage() {
   /** "Find food" / Enter without a highlighted option: take the first suggestion, else continue or ask. */
   const findFood = (query: string, first: PlaceSuggestion | undefined) => {
     if (first && query.length >= 2) void flow.choosePlace(first);
-    else if (loc && !query) navigate(flow.pendingNext.current || '/');
+    else if (loc && !query) navigate(flow.pendingNext.current || DISCOVER);
     else {
       setHint(query ? 'Pick your address from the suggestions.' : 'Start typing your address — a road, locality or landmark in Bengaluru.');
       inputRef.current?.focus();
@@ -399,7 +402,7 @@ export default function LandingPage() {
               {loc ? (
                 <p className="text-sm text-fg-3">
                   Delivering to <strong className="text-fg">{loc.label}</strong>.{' '}
-                  <Link to="/" className="font-bold text-acc-fg hover:underline">
+                  <Link to={DISCOVER} className="font-bold text-acc-fg hover:underline">
                     See restaurants →
                   </Link>
                 </p>
@@ -428,13 +431,13 @@ export default function LandingPage() {
             <h2 id="cuisines-title" className="text-[32px] leading-tight max-sm:text-[26px]">
               What are you craving?
             </h2>
-            <Link to="/" onClick={needLocation('/')} className="inline-flex items-center gap-1 text-[15px] font-extrabold text-acc-fg hover:underline">
+            <Link to={DISCOVER} onClick={needLocation(DISCOVER)} className="inline-flex items-center gap-1 text-[15px] font-extrabold text-acc-fg hover:underline">
               See all restaurants <Icon name="arrow-right" size={16} />
             </Link>
           </div>
           <ul aria-label="Cuisines" className="no-scrollbar -mx-1 flex snap-x snap-mandatory gap-4 overflow-x-auto px-1 pb-1 pt-1">
             {cuisines.map((c, i) => {
-              const href = `/?cuisine=${encodeURIComponent(c.slug)}`;
+              const href = `${DISCOVER}?cuisine=${encodeURIComponent(c.slug)}`;
               return (
                 <li key={c.slug} className="shrink-0 snap-start">
                   <CuisineCircle variant="marketing" slug={c.slug} label={c.name} imageUrl={c.imageUrl} to={href} index={i} onClick={needLocation(href, c.name)} />
@@ -457,7 +460,7 @@ export default function LandingPage() {
           </p>
           <div className="mt-6 grid grid-cols-[repeat(auto-fit,minmax(min(260px,100%),1fr))] gap-4">
             {DOORS.map((d) => (
-              <Door key={d.title} door={d} signedIn={auth.isAuthenticated} onBrowse={needLocation('/')} />
+              <Door key={d.title} door={d} signedIn={auth.isAuthenticated} onBrowse={needLocation(DISCOVER)} />
             ))}
           </div>
         </Container>

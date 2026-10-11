@@ -22,14 +22,18 @@ export async function newRoleContext(browser: Browser, opts: RoleContextOptions 
 }
 
 /**
- * Landing (no chosen location yet): "Use my location" in the hero (context geolocation) -> reverse geocode ->
- * serviceable -> Discover ("Delivering to <area>"). Not serviceable -> the "We don't deliver here yet" notice.
+ * Landing at `/` (always the landing): "Use my location" in the hero (context geolocation) -> reverse geocode ->
+ * serviceable -> Discover at `/discover` ("Delivering to <area>"). Not serviceable -> the "We don't deliver here yet"
+ * notice (stays on `/`).
  */
 export async function chooseCurrentLocation(page: Page, expectServiceable = true): Promise<void> {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: /Two kitchens/, level: 1 })).toBeVisible();
   await page.getByRole('button', { name: 'Use my location' }).first().click();
-  if (expectServiceable) await expect(page.getByRole('heading', { name: /^Delivering to / })).toBeVisible();
+  if (expectServiceable) {
+    await expect(page).toHaveURL(/\/discover$/);
+    await expect(page.getByRole('heading', { name: /^Delivering to / })).toBeVisible();
+  }
   else await expect(page.getByText(/We don.t deliver here yet/)).toBeVisible();
 }
 

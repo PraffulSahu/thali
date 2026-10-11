@@ -8,12 +8,13 @@
  *   /signin              unified sign-in (?role=customer|restaurant|partner|admin&next=)
  *   /admin/login         → redirects to /signin?role=admin (keeps next)
  *   /admin/forgot, /admin/reset-password?token=   admin password reset (IDN-1), public
- *   /welcome, /terms, /privacy, /refunds, /help, /partner-with-us, /ride-with-thali   public site (PublicShell)
- *   /                    landing until a delivery location is chosen, then the consumer index (RoleArea gate)
+ *   /, /welcome          public landing (PublicShell + LandingPage), always — `/welcome` is an alias
+ *   /terms, /privacy, /refunds, /help, /partner-with-us, /ride-with-thali   public site (PublicShell)
+ *   /discover            consumer home (Discover); the landing's address pick / "Find food" / cuisines go here
  *   /restaurant/*        restaurant area (RESTAURANT_OWNER; /restaurant/onboarding needs sign-in only)
  *   /partner/*           delivery partner area (DELIVERY_PARTNER; /partner/onboarding needs sign-in only)
  *   /admin/*             admin area (ADMIN + MFA; /admin/login public)
- *   /*                   consumer area (guests allowed)
+ *   /*                   consumer area (guests allowed): /discover, /search, /restaurants/:slug, /cart, /orders…
  *
  * Usage: `createAppRouter()` in App; tests: `const cfg = createAppRouterConfig();
  * createMemoryRouter(cfg.routes, { initialEntries, patchRoutesOnNavigation: cfg.patchRoutesOnNavigation })`.

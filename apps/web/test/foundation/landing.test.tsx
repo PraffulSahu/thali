@@ -49,7 +49,7 @@ function renderLanding(path = '/welcome') {
   const router = createMemoryRouter(
     [
       { path: '/welcome', element: <LandingPage /> },
-      { path: '/', element: <p>DISCOVER</p> },
+      { path: '/discover', element: <p>DISCOVER</p> },
     ],
     { initialEntries: [path] },
   );
@@ -104,7 +104,7 @@ describe('landing address autocomplete', () => {
     expect(first).toHaveAttribute('aria-selected', 'true');
     expect(input).toHaveAttribute('aria-activedescendant', first.id);
     await user.keyboard('{ArrowDown}{ArrowUp}{Enter}');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/'), slow);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/discover'), slow);
     const stored = JSON.parse(localStorage.getItem(LOCATION_STORAGE_KEY)!);
     expect(stored).toMatchObject({ lat: 12.9716, lng: 77.6412, label: '12th Main Rd', source: 'address', placeId: 'p1' });
   });
@@ -151,7 +151,7 @@ describe('landing address autocomplete', () => {
     );
     const router = renderLanding();
     await user.click(screen.getByRole('button', { name: /use my location/i }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/'), slow);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/discover'), slow);
     const reverse = fetchFn.mock.calls.find(([u]) => String(u).includes('/discovery/reverse'))!;
     expect(String(reverse[0])).toMatch(/lat=12\.97/);
     expect(JSON.parse(localStorage.getItem(LOCATION_STORAGE_KEY)!)).toMatchObject({ lat: 12.97, lng: 77.64, source: 'gps', label: '12th Main Rd' });
@@ -213,8 +213,10 @@ describe('landing address autocomplete', () => {
   it('cuisine circles link to discover with ?cuisine=', async () => {
     mockFetch(() => undefined);
     renderLanding();
-    expect(screen.getByRole('link', { name: 'Biryani' })).toHaveAttribute('href', '/?cuisine=biryani');
-    expect(screen.getByRole('link', { name: 'Chai & Snacks' })).toHaveAttribute('href', '/?cuisine=chai-snacks');
+    expect(screen.getByRole('link', { name: 'Biryani' })).toHaveAttribute('href', '/discover?cuisine=biryani');
+    expect(screen.getByRole('link', { name: 'Chai & Snacks' })).toHaveAttribute('href', '/discover?cuisine=chai-snacks');
+    expect(screen.getByRole('link', { name: /see all restaurants/i })).toHaveAttribute('href', '/discover');
+    expect(screen.getByRole('link', { name: /start browsing/i })).toHaveAttribute('href', '/discover');
   });
 
   it('role doors link to sign-in with the right role tab', () => {

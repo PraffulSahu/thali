@@ -13,10 +13,10 @@ describe('parseSignInRole', () => {
 });
 
 describe('destinationAfterSignIn', () => {
-  it('customer → next or /', () => {
-    expect(destinationAfterSignIn('customer', ['CONSUMER'], null)).toBe('/');
+  it('customer → next or /discover', () => {
+    expect(destinationAfterSignIn('customer', ['CONSUMER'], null)).toBe('/discover');
     expect(destinationAfterSignIn('customer', ['CONSUMER'], '/orders?x=1')).toBe('/orders?x=1');
-    expect(destinationAfterSignIn('customer', ['CONSUMER'], '//evil.com')).toBe('/');
+    expect(destinationAfterSignIn('customer', ['CONSUMER'], '//evil.com')).toBe('/discover');
   });
 
   it('restaurant → console when the owner role exists, else onboarding', () => {

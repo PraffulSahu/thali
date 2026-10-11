@@ -1,5 +1,5 @@
 /**
- * Discover (board 10, design-spec §5.10): `/` once a delivery location is set.
+ * Discover (board 10, design-spec §5.10): `/discover` — the consumer home (`/` is the public landing).
  *   cuisine band (`GET /cuisines`, facet counts) · filters (aside ≥1024, pill row below) · "Delivering to Home"
  *   + counts (MKT-2 `counts`, aria-live) · EST. legend · restaurant grid (`GET /discovery/restaurants`, cursor
  *   pages) · admin banners (must-not-lose) · floating multi-cart dock.
@@ -23,7 +23,7 @@ import { DiscoveryCard, useCuisines } from './RestaurantCard';
 
 function bannerHref(b: Banner): string {
   if (b.linkType === 'RESTAURANT') return `/restaurants/${b.linkValue}`;
-  if (b.linkType === 'CUISINE') return `/?cuisine=${encodeURIComponent(b.linkValue)}`;
+  if (b.linkType === 'CUISINE') return `/discover?cuisine=${encodeURIComponent(b.linkValue)}`;
   return '/offers';
 }
 

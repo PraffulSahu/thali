@@ -270,7 +270,7 @@ export function PublicFooter() {
         <FooterCol
           title="Eat"
           links={[
-            { to: '/', label: 'Restaurants' },
+            { to: '/discover', label: 'Restaurants' },
             { to: '/membership', label: 'Thali Plus' },
             { to: '/orders', label: 'Your orders' },
           ]}

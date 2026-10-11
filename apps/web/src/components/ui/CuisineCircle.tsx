@@ -6,7 +6,7 @@
  *     {cuisines.map((c) => <CuisineCircle key={c.slug} slug={c.slug} label={c.name} imageUrl={c.imageUrl}
  *       selected={cuisine === c.slug} onClick={() => setCuisine(c.slug)} />)}
  *   </CuisineTrain>
- *   <CuisineCircle variant="marketing" slug="biryani" label="Biryani" to="/?cuisine=biryani" />   // link (board 00)
+ *   <CuisineCircle variant="marketing" slug="biryani" label="Biryani" to="/discover?cuisine=biryani" />   // link (board 00)
  *
  * Disc colour = color-mix(<cuisine hue> pct%, var(--card)) — works in both themes. Art = the extracted
  * illustration for known slugs; `imageUrl` (if given) wins; unknown slugs use the "all" art.

@@ -156,14 +156,14 @@ export function ConsumerLayout({ variant, children }: ConsumerLayoutProps) {
         <ModeBanner />
         <header className={cn('z-30 border-b border-line', variant === 'discover' ? 'sticky top-0 glass' : 'relative')}>
           <div className={cn('mx-auto flex flex-wrap items-center gap-x-4 gap-y-2.5 px-6 py-2.5 max-sm:gap-x-2 max-sm:px-4', width)}>
-            <Logo />
+            <Logo to="/discover" />
             {variant === 'account' ? (
               <div className="max-lg:hidden">
                 <RoleNav items={CONSUMER_ACCOUNT_NAV} variant="inline" label="Account" />
               </div>
             ) : variant === 'restaurant' ? (
               <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-2 text-sm text-fg-3">
-                <Link to="/" className="hover:text-fg">
+                <Link to="/discover" className="hover:text-fg">
                   Restaurants
                 </Link>
                 {breadcrumb ? (

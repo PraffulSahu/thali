@@ -13,8 +13,8 @@
  *   export const shell?: ConsumerShellConfig | RoleShellConfig;   // shell slots (location chip, context card…)
  *   export const chrome?: 'auto' | 'none';       // 'none' = the area mounts its own shells as layout routes
  *
- * Consumer index gate: `/` renders the public landing (PublicShell + LandingPage) until a delivery location
- * is chosen (lib/location), then the consumer area's index route (Discover).
+ * `/` is NOT a consumer route: it is always the public landing (publicRoutes index, same page as /welcome).
+ * The consumer home (Discover) lives at `/discover` (user decision 2026-10-11, ADR-034 note).
  *
  * <AreaLayout> = AppShell (area nav) + path-based guard + Suspense (for React.lazy pages) + <Outlet/>.
  * Guards (by path):
@@ -23,13 +23,12 @@
  *   partner    DELIVERY_PARTNER, except /partner/onboarding* which only needs sign-in
  *   admin      ADMIN + MFA (amr has 'mfa'), except /admin/login* which is public
  */
-import { lazy, Suspense, type ComponentType, type ReactNode } from 'react';
+import { Suspense, type ComponentType, type ReactNode } from 'react';
 import { isRouteErrorResponse, Outlet, useLocation, useRouteError, type RouteObject } from 'react-router';
 import { useAuth } from '../../lib/auth';
-import { useChosenLocation } from '../../lib/location';
 import { AppShell, type AreaKey } from './AppShell';
+import { AREA_HOME } from './ShellParts';
 import type { ConsumerShellConfig } from './ConsumerShell';
-import { PublicShell } from './PublicShell';
 import type { RoleShellConfig } from './RoleSidebarShell';
 import { CrashView, NotFoundPage } from './ErrorBoundary';
 import { RequireAuth, RequireRole } from './RequireRole';
@@ -44,8 +43,6 @@ export interface AreaModule {
   shell?: ConsumerShellConfig | RoleShellConfig;
   chrome?: 'auto' | 'none';
 }
-
-const LandingPage = lazy(() => import('../../features/public/LandingPage'));
 
 /* ------------------------------------------------------------------ area module registry */
 
@@ -155,37 +152,8 @@ function AreaChrome({ area, children, force }: { area: AreaKey; children: ReactN
   );
 }
 
-/** `/` with no chosen delivery location → public landing (design-spec §5.00 routing ruling). */
-function ConsumerIndexGate({ children }: { children: ReactNode }) {
-  const { pathname } = useLocation();
-  const loc = useChosenLocation();
-  if (pathname === '/' && !loc) {
-    return (
-      <PublicShell>
-        <Suspense fallback={<PageLoading />}>
-          <LandingPage />
-        </Suspense>
-      </PublicShell>
-    );
-  }
-  return <>{children}</>;
-}
-
 /** Layout route element for an area: shell + guard + Suspense + child routes. */
 export function AreaLayout({ area }: { area: AreaKey }) {
-  if (area === 'consumer') {
-    return (
-      <ConsumerIndexGate>
-        <AreaChrome area={area}>
-          <AreaGuard area={area}>
-            <Suspense fallback={<PageLoading />}>
-              <Outlet />
-            </Suspense>
-          </AreaGuard>
-        </AreaChrome>
-      </ConsumerIndexGate>
-    );
-  }
   return (
     <AreaChrome area={area}>
       <AreaGuard area={area}>
@@ -200,7 +168,7 @@ export function AreaLayout({ area }: { area: AreaKey }) {
 /** Area `ErrorBoundary`: errors thrown by area pages/loaders render inside the area shell. */
 export function AreaRouteError({ area }: { area: AreaKey }) {
   const error = useRouteError();
-  const home = area === 'consumer' ? '/' : `/${area}`;
+  const home = AREA_HOME[area];
   return (
     <AreaChrome area={area} force>
       {isRouteErrorResponse(error) && error.status === 404 ? <NotFoundPage home={home} /> : <CrashView error={error} home={home} />}

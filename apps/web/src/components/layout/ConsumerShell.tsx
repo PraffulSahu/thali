@@ -1,7 +1,7 @@
 /**
  * Consumer shell (boards 10, 11, 13; design-spec §3.28 + §6.4).
  *
- *   Header (sticky, glass): logo · location chip slot · search (`/` focuses) · Orders · bell · theme · avatar
+ *   Header (sticky, glass): logo (→ /discover, the consumer home) · location chip slot · search (`/` focuses) · Orders · bell · theme · avatar
  *   variant="account" adds the ghost nav Restaurants · Orders · Thali Plus · Support (≥1024)
  *   ≤1023 search drops to a second row; ≤640 bottom tab bar Home · Search · Orders · Account
  *
@@ -31,14 +31,14 @@ import { RoleNav, type NavItem } from './RoleNav';
 import { AccountMenu, HeaderSearch, MainRegion, NotificationBell, ShellSlotContext, SkipLink, type AccountMenuLink } from './ShellParts';
 
 export const CONSUMER_ACCOUNT_NAV: NavItem[] = [
-  { to: '/', label: 'Restaurants', icon: 'store', end: true },
+  { to: '/discover', label: 'Restaurants', icon: 'store', end: true },
   { to: '/orders', label: 'Orders', icon: 'receipt' },
   { to: '/membership', label: 'Thali Plus', icon: 'star' },
   { to: '/support', label: 'Support', icon: 'ticket' },
 ];
 
 export const CONSUMER_TAB_NAV: NavItem[] = [
-  { to: '/', label: 'Home', icon: 'home', end: true },
+  { to: '/discover', label: 'Home', icon: 'home', end: true },
   { to: '/search', label: 'Search', icon: 'search' },
   { to: '/orders', label: 'Orders', icon: 'receipt' },
   { to: '/account', label: 'Account', icon: 'user' },
@@ -63,7 +63,7 @@ export interface ConsumerShellProps extends ConsumerShellConfig {
   variant?: 'discover' | 'account';
   /**
    * Restaurant page: breadcrumb replaces the search on ≥1024. Pages can also set it from inside the shell with
-   * `useShellBreadcrumb(<Breadcrumb items={[{ label: 'Restaurants', to: '/' }, { label: name }]} />, [name])`.
+   * `useShellBreadcrumb(<Breadcrumb items={[{ label: 'Restaurants', to: '/discover' }, { label: name }]} />, [name])`.
    */
   breadcrumb?: ReactNode;
   hideSearch?: boolean;
@@ -131,7 +131,7 @@ export function ConsumerShell({
       <ModeBanner />
       <header className="sticky top-0 z-30 border-b border-line glass">
         <div className={cn('mx-auto flex flex-wrap items-center gap-x-4 gap-y-2.5 px-6 py-2.5 max-sm:gap-x-2 max-sm:px-4', headerWidth)}>
-          <Logo />
+          <Logo to="/discover" />
           {account ? (
             <div className="max-lg:hidden">
               <RoleNav items={CONSUMER_ACCOUNT_NAV} variant="inline" label="Account" />

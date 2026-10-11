@@ -484,3 +484,7 @@ Consequence: every colour must come from a token (no hard-coded light colours) a
 the design spec for both themes. Known polish backlog (sub-role tag slot, tab-bar order per role, shared table
 primitives) is tracked in the task reports, not in this ADR. Design sources: [docs/design/redesign/](design/redesign/README.md)
 (design spec, overrides, gap analysis, board screenshots, illustrations).
+
+**Note to ADR-034..041** (2026-10-11, user decision; amends the design-spec §5.00 routing ruling): `/` is now always the public
+landing page (`/welcome` stays as an alias) — there is no "landing until a location is chosen" gate any more — and
+the consumer Discover page moved from `/` to `/discover`.

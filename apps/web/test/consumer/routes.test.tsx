@@ -32,17 +32,24 @@ describe('consumer routes', () => {
   beforeEach(() => __resetApiForTests());
   afterEach(() => vi.unstubAllGlobals());
 
-  it('home without a location asks where to deliver', async () => {
+  it('/ is the public landing: it asks where to deliver', async () => {
     mockApi({});
     renderApp('/');
     expect(await screen.findByRole('heading', { name: /where should we deliver/i }, { timeout: 8000 })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /choose delivery location/i })).toBeInTheDocument();
   });
 
+  it('Discover (/discover) without a location prompts to set one', async () => {
+    mockApi({});
+    renderApp('/discover');
+    expect(await screen.findByRole('heading', { name: /set your delivery location/i }, { timeout: 8000 })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^choose location$/i })).toBeInTheDocument();
+  });
+
   it('home with a non-serviceable location shows the clear empty state', async () => {
     localStorage.setItem(LOCATION_STORAGE_KEY, JSON.stringify({ lat: 19.07, lng: 72.87, label: 'Pinned location', source: 'pin' }));
     const m = mockApi({ 'GET /discovery/restaurants': { items: [], nextCursor: null, serviceable: false, serviceArea: null } });
-    renderApp('/');
+    renderApp('/discover');
     expect(await screen.findByRole('heading', { name: /we don.t deliver here yet/i }, { timeout: 8000 })).toBeInTheDocument();
     const url = new URL(m.callsTo('GET', '/discovery/restaurants')[0]!.url, 'http://x');
     expect(url.searchParams.get('lat')).toBe('19.07');
