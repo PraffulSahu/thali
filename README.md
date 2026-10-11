@@ -33,6 +33,63 @@ live tracking. It is a MERN-style monorepo of six domain services behind an API 
 > [docs/05-provider-setup.md](docs/05-provider-setup.md) and
 > [docs/08-launch-checklist.md](docs/08-launch-checklist.md).
 
+## Run it on your machine (5 commands)
+
+You only need **Docker** and **Node.js 22**; everything else (MongoDB, Redis, MinIO, Mailpit, the seven
+services and the web app) runs in containers.
+
+1. Install
+   - [Docker Desktop](https://www.docker.com/products/docker-desktop/) (macOS, Windows, Linux) or Docker Engine
+     with Compose v2. Give Docker at least **4 GB of memory** and **10 GB of free disk** (Settings → Resources).
+     Start it and wait until it says it is running.
+   - [Node.js 22 LTS](https://nodejs.org/) (with npm 10). With nvm: `nvm install 22 && nvm use 22`.
+   - **Windows:** use WSL2 (Docker Desktop's WSL integration on) and run every command below inside the Ubuntu
+     terminal, with the project unzipped inside the Linux home folder (for example `~/thali`), not under `C:\`.
+   - Keep the project folder **inside your home folder** (for example `~/thali`). Docker Desktop and Colima only
+     share the home folder with containers by default; from `/tmp` or another disk the database container cannot
+     read its start script and keeps restarting.
+2. Unzip the project, open a terminal in its folder and run:
+
+   ```bash
+   cp .env.example .env     # demo settings; works as is, nothing to fill in
+   npm ci                   # installs the tools used by the seed and test scripts (about 1 min)
+   npm run stack:up         # builds and starts everything (first time about 5-10 min, later about 30 s)
+   npm run seed             # first run copies the demo photos (a few min), then loads the Bengaluru data: about 5-10 min
+   npm run demo:traffic     # optional: places a few live orders so the restaurant, rider and admin screens are busy
+   ```
+
+3. Open **http://localhost:5173** and sign in (header → "Sign in"). Every demo phone uses OTP **`123456`**:
+
+   | Role | Sign in with |
+   |---|---|
+   | Customer | `+919000000001` (has past orders) or any `+91910100xxxx`, for example `+919101000001` |
+   | Restaurant owner | `+919100000001` (Spice Route) or any `+91920200xxxx`, for example `+919202000001` |
+   | Delivery partner | `+919200000001` (online) or any `+91930300xxxx`, for example `+919303000002` |
+   | Admin | `/signin?role=admin`: email `admin@thali.demo`, password `ThaliDemo#2026`, plus a 6-digit code (below) |
+
+   The admin code is a TOTP for the demo secret `THALIDEMOTOTPSECRETKEY234567ABCD`. Either add that secret to an
+   authenticator app, or print the current code (valid 30 s) from the project folder:
+
+   ```bash
+   node -e "const {authenticator}=require('otplib');console.log(authenticator.generate('THALIDEMOTOTPSECRETKEY234567ABCD'))"
+   ```
+
+   Coupons to try at checkout: `WELCOME50`, `FLAT100`. Demo emails (admin password reset, receipts) land in the
+   Mailpit inbox at http://localhost:8025. API docs: http://localhost:8080/api/docs.
+
+4. Stop with `npm run stack:down` (data is kept; `npm run stack:up` brings it back). Start over with
+   `docker compose down -v && npm run stack:up && npm run seed`.
+
+The first `npm run seed` copies 1,107 real food and profile photos (Wikimedia Commons, Openverse, randomuser.me)
+into the local MinIO, so the app works offline afterwards; later runs reuse that copy. In a hurry? Use
+`npm run seed -- --no-images` (about 2 min): the app then loads the same photos straight from those sites, so the
+browser needs internet access.
+
+If something goes wrong: a "port is already allocated" error means another app uses 5173, 8080, 8025, 9000 or
+9001. Change `WEB_HOST_PORT`, `GATEWAY_HOST_PORT`, `MAILPIT_HOST_PORT`, `MINIO_HOST_PORT` or
+`MINIO_CONSOLE_HOST_PORT` in `.env` and run `npm run stack:up` again. More fixes are in
+[Common problems](#common-problems).
+
 ## Prerequisites
 
 - Node.js 22 LTS (`.nvmrc` = 22; `engines` is `>=22 <23`) and npm 10
@@ -47,7 +104,7 @@ live tracking. It is a MERN-style monorepo of six domain services behind an API 
 cp .env.example .env        # demo-only placeholder secrets; boots out of the box
 npm ci
 npm run stack:up            # docker compose up -d --build --wait (first build takes a few minutes)
-npm run seed:images         # optional: mirror the demo photos into MinIO so the app shows them offline (one time, cached)
+npm run seed:images         # optional: only the photo mirror (npm run seed runs it too; one time, cached)
 npm run seed                # idempotent demo data (refuses to run unless APP_MODE=demo)
 npm run demo:traffic        # optional: place and progress live orders so the boards are busy
 ```
@@ -151,8 +208,9 @@ Sample logins for the generated data (demo OTP `123456`; generated numbers are c
 
 Photos are real, CC-licensed pictures from Wikimedia Commons and Openverse plus randomuser.me portraits; the
 attribution for every image is in [scripts/seed-data/CREDITS.md](scripts/seed-data/CREDITS.md) (restaurant and
-person names are fictional). Run `npm run seed:images` once to copy them into the local MinIO; without it the
-app hot-links the original hosts, which are allowed by `EXTERNAL_IMAGE_HOSTS`.
+person names are fictional). `npm run seed` copies them into the local MinIO first (the same step as
+`npm run seed:images`); with `npm run seed -- --no-images` the app hot-links the original hosts instead, which are
+allowed by `EXTERNAL_IMAGE_HOSTS`.
 
 ## Demo credentials (demo mode only)
 
@@ -274,6 +332,8 @@ base64-encoded), `COOKIE_SECURE=false`, an `INTERNAL_SERVICE_SECRET` shorter tha
 | Symptom | Fix |
 |---|---|
 | `stack:up` fails with `set X in .env` | `cp .env.example .env` (compose requires the secrets) |
+| `mongo is unhealthy`; `docker logs` shows `/infra/mongo/keyfile.sh: No such file or directory` | The project folder is not shared with Docker: move it under your home folder (or add its path in Docker Desktop → Settings → Resources → File sharing) |
+| `stack:up` hangs or containers get killed while building | Give Docker more memory (at least 4 GB) in its settings |
 | Port already allocated | Override the `*_HOST_PORT` variable in `.env` (see "Host ports") |
 | Production start refused: "demo placeholder" | A `thali-demo-` value from `.env.example` is still in use: run `scripts/gen-env.sh` |
 | Browser upload fails with a DNS error for `minio` | `S3_PUBLIC_ENDPOINT` must be reachable by the browser (compose sets `http://localhost:${MINIO_HOST_PORT}`) |
