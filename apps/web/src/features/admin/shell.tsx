@@ -48,7 +48,7 @@ export function DeliveriesBadge() {
 }
 export function SupportBadge() {
   const { data } = useOrdersOverview();
-  return <NavPlainCount count={data?.support.open} label="open tickets" />;
+  return <NavPlainCount count={data?.support?.open} label="open tickets" />;
 }
 export function HealthBadge() {
   const { data } = useHealth();

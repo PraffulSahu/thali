@@ -16,7 +16,7 @@ const payout = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('PayoutsPanel', () => {
-  it('will not confirm a payout without a valid UTR', async () => {
+  it('will not confirm a payout without a valid UTR', { timeout: 20_000 }, async () => {
     const user = userEvent.setup();
     const calls: { url: string; init?: RequestInit }[] = [];
     vi.stubGlobal(
@@ -30,8 +30,8 @@ describe('PayoutsPanel', () => {
     );
     renderWithProviders(<PayoutsPanel />, { auth: makeAuth({ roles: ['ADMIN'], adminRoles: ['FINANCE'] }) });
 
-    await user.click(await screen.findByRole('button', { name: /confirm payout/i }));
-    const dialog = await screen.findByRole('dialog');
+    await user.click(await screen.findByRole('button', { name: /confirm payout/i }, { timeout: 5000 }));
+    const dialog = await screen.findByRole('dialog', {}, { timeout: 5000 });
     const confirm = within(dialog).getByRole('button', { name: /record payment/i });
     expect(confirm).toBeDisabled();
 

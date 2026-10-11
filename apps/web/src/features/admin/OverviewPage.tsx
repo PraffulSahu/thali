@@ -87,7 +87,7 @@ function Kpis({ orders, market, tms }: { orders: ReturnType<typeof useOrdersOver
         unavailable={orders.isError}
         onRetry={() => void orders.refetch()}
         value={o ? kpiMoney(o.today.gmvPaise) : undefined}
-        sub={o ? `${formatPaise(o.today.refundedPaise)} refunded` : undefined}
+        sub={o && typeof o.today.refundedPaise === 'number' ? `${formatPaise(o.today.refundedPaise)} refunded` : undefined}
       />
       <KpiTile
         label="Partners online"
@@ -96,7 +96,7 @@ function Kpis({ orders, market, tms }: { orders: ReturnType<typeof useOrdersOver
         onRetry={() => void tms.refetch()}
         value={t?.partners.online}
         secondary={t ? `/${t.partners.approved ?? t.partners.byStatus.APPROVED ?? 0}` : undefined}
-        sub={t ? `${t.partners.onDelivery ?? 0} on a delivery` : undefined}
+        sub={t && typeof t.partners.onDelivery === 'number' ? `${t.partners.onDelivery} on a delivery` : undefined}
       />
       <KpiTile
         label="Unassigned"
@@ -164,8 +164,16 @@ function StatusBarCard({ orders }: { orders: { data?: OrdersOverview; isPending:
       </div>
     );
   }
-  if (orders.isError || !orders.data) {
-    return <ErrorState compact title="Child orders by status unavailable" error={orders.error} onRetry={() => void orders.refetch()} />;
+  if (orders.isError || !orders.data || !orders.data.today.byStatus) {
+    return (
+      <ErrorState
+        compact
+        title="Child orders by status unavailable"
+        error={orders.error}
+        message={orders.isError ? undefined : 'The orders service did not report today’s status breakdown.'}
+        onRetry={() => void orders.refetch()}
+      />
+    );
   }
   return <StackedStatusBar title="Child orders by status" segments={statusSegments(orders.data.today.byStatus)} />;
 }

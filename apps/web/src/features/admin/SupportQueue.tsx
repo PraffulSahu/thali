@@ -29,7 +29,7 @@ export default function SupportQueue() {
     queryFn: () => listTickets({ status: status === 'ALL' ? undefined : status, cursor: pages.cursor }),
     placeholderData: keepPreviousData,
   });
-  const counts: Record<string, number | undefined> = { OPEN: overview.data?.support.open, IN_PROGRESS: overview.data?.support.inProgress };
+  const counts: Record<string, number | undefined> = { OPEN: overview.data?.support?.open, IN_PROGRESS: overview.data?.support?.inProgress };
 
   const columns: Column<Ticket>[] = [
     { key: 'subject', header: 'Ticket', cell: (t) => <span><span className="font-mono text-[12.5px] text-fg-3">{t.code}</span> {t.subject}</span>, primary: true },

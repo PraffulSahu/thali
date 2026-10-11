@@ -126,7 +126,7 @@ export default function TmsPage() {
           <KpiTile label="Offers out" {...kpi} value={ov?.liveOffers} sub="Waiting on a partner" />
           <KpiTile label="In progress" {...kpi} value={ov ? inProgress : undefined} sub="Assigned to on the way" />
           <KpiTile label="Exceptions" {...kpi} value={ov ? <span className={ov.exceptions > 0 ? 'text-bad' : undefined}>{ov.exceptions}</span> : undefined} sub={ov && ov.exceptions > 0 ? 'Need a decision' : 'None open'} subTone={ov && ov.exceptions > 0 ? 'muted' : 'ok'} />
-          <KpiTile label="Partners online" {...kpi} value={ov?.partners.online} secondary={ov ? `/${ov.partners.approved ?? ov.partners.byStatus.APPROVED ?? 0}` : undefined} sub={ov ? `${ov.partners.onDelivery ?? 0} on a delivery` : undefined} />
+          <KpiTile label="Partners online" {...kpi} value={ov?.partners.online} secondary={ov ? `/${ov.partners.approved ?? ov.partners.byStatus.APPROVED ?? 0}` : undefined} sub={ov && typeof ov.partners.onDelivery === 'number' ? `${ov.partners.onDelivery} on a delivery` : undefined} />
         </KpiStrip>
 
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

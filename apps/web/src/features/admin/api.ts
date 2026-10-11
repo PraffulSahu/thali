@@ -355,10 +355,10 @@ export interface OrdersOverview {
     rejected: number;
     cancelled: number;
     gmvPaise: number;
-    /** Children placed today by their CURRENT status (all 13 keys). */
-    byStatus: Record<string, number>;
-    /** Refund entries that succeeded today. */
-    refundedPaise: number;
+    /** Children placed today by their CURRENT status (all 13 keys). Absent on a pre-ORD-2 orders service. */
+    byStatus?: Record<string, number>;
+    /** Refund entries that succeeded today. Absent on a pre-ORD-2 orders service. */
+    refundedPaise?: number;
   };
   activeByStatus: Record<string, number>;
   awaitingAcceptance: number;
@@ -368,7 +368,8 @@ export interface OrdersOverview {
   /** All-time Σ (requested − refunded) over pending refunds. */
   refundsPendingPaise: number;
   refundsFailed: number;
-  support: { open: number; inProgress: number };
+  /** Absent on a pre-ORD-2 orders service (never shown as 0). */
+  support?: { open: number; inProgress: number };
 }
 export const ordersOverview = () => api<OrdersOverview>('/admin/orders/overview');
 
