@@ -222,19 +222,19 @@ async function main() {
         results.push({ code: created.checkout.code, restaurant: rest.name, state: 'New (awaiting restaurant)' });
         continue;
       }
-      // a partner for the delivery targets: online near the restaurant before the restaurant accepts
-      let partner: BlrPartner | undefined;
+      // delivery targets: every partner with spare capacity goes online at the restaurant before it accepts
+      // (so the first dispatch round includes them); whichever receives the offer takes it
+      let available: BlrPartner[] = [];
       if (target === 'ontheway' || target === 'delivered') {
-        partner = partners.find((p) => (partnerActive.get(p.phone) ?? 0) < 2);
-        if (!partner) {
+        available = partners.filter((p) => (partnerActive.get(p.phone) ?? 0) < 2);
+        if (!available.length) {
           log('    (both partners at capacity: stopping at Ready)');
           target = 'ready';
         } else {
-          const pt = await tokenFor(partner.phone);
           const at = restaurantAt.get(restId)!;
-          ok(await call('POST', '/partner/online', { token: pt, body: at }), 'partner online');
+          for (const p of available) ok(await call('POST', '/partner/online', { token: await tokenFor(p.phone), body: at }), 'partner online');
           await sleep(3100);
-          ok(await call('POST', '/partner/location', { token: pt, body: { ...at, accuracyM: 12 } }), 'partner location');
+          for (const p of available) ok(await call('POST', '/partner/location', { token: await tokenFor(p.phone), body: { ...at, accuracyM: 12 } }), 'partner location');
         }
       }
       const ot = await tokenFor(ownerPhone);
@@ -249,25 +249,33 @@ async function main() {
         results.push({ code: created.checkout.code, restaurant: rest.name, state: 'Ready for pickup' });
         continue;
       }
-      const pt = await tokenFor(partner!.phone);
-      const offer = await waitFor('dispatch offer', async () => {
-        await call('POST', '/partner/location', { token: pt, body: { ...restaurantAt.get(restId)!, accuracyM: 12 } });
-        const r = ok(await call('GET', '/partner/offers', { token: pt }), 'offers');
-        return ((r.items ?? r) as Json[]).find?.((o: Json) => o.childOrderId === childId || o.job?.childOrderId === childId) ?? null;
+      const { partner, offer } = await waitFor('dispatch offer', async () => {
+        for (const p of available) {
+          const t = await tokenFor(p.phone);
+          await call('POST', '/partner/location', { token: t, body: { ...restaurantAt.get(restId)!, accuracyM: 12 } });
+          const r = ok(await call('GET', '/partner/offers', { token: t }), 'offers');
+          const offers = ((r.items ?? r) as Json[]) ?? [];
+          const mine = offers.find((o: Json) => o.childOrderId === childId || o.job?.childOrderId === childId);
+          if (mine) return { partner: p, offer: mine };
+          // free the partner for our job: decline offers for other orders (e.g. the "Ready" ones of this run)
+          for (const o of offers) await call('POST', `/deliveries/offers/${o.id ?? o.offerId}/reject`, { token: t, body: { reason: 'demo traffic: busy' } });
+        }
+        return null;
       }, 3200);
+      const pt = await tokenFor(partner.phone);
       const job = ok(await call('POST', `/deliveries/offers/${offer.id ?? offer.offerId}/accept`, { token: pt }), 'accept offer').job;
-      partnerActive.set(partner!.phone, (partnerActive.get(partner!.phone) ?? 0) + 1);
+      partnerActive.set(partner.phone, (partnerActive.get(partner.phone) ?? 0) + 1);
       ok(await call('POST', `/deliveries/${job.id}/arrived`, { token: pt }), 'arrived');
       ok(await call('POST', `/deliveries/${job.id}/pickup`, { token: pt, body: { code: accepted.pickupCode } }), 'pickup');
       ok(await call('POST', `/deliveries/${job.id}/start`, { token: pt }), 'start');
       if (target === 'ontheway') {
-        results.push({ code: created.checkout.code, restaurant: rest.name, state: `On the way (${partner!.name})` });
+        results.push({ code: created.checkout.code, restaurant: rest.name, state: `On the way (${partner.name})` });
         continue;
       }
       const code = childOf(await view())?.deliveryCode;
       ok(await call('POST', `/deliveries/${job.id}/deliver`, { token: pt, body: { code } }), 'deliver');
-      partnerActive.set(partner!.phone, (partnerActive.get(partner!.phone) ?? 1) - 1);
-      results.push({ code: created.checkout.code, restaurant: rest.name, state: `Delivered (${partner!.name})` });
+      partnerActive.set(partner.phone, (partnerActive.get(partner.phone) ?? 1) - 1);
+      results.push({ code: created.checkout.code, restaurant: rest.name, state: `Delivered (${partner.name})` });
     } catch (e) {
       log(`    FAILED: ${(e as Error).message}`);
       results.push({ code: '-', restaurant: rest.name, state: `failed: ${(e as Error).message.slice(0, 120)}` });
