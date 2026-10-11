@@ -1,237 +1,220 @@
 /**
- * `/admin/tms`: delivery operations. Unassigned and exception jobs, manual assign / reassign with a partner
- * picker, unassign, mark failed, and (demo mode only) the location simulator. Reads: any admin; changes: OPS.
+ * `/admin/tms`: delivery operations (design-spec §7.5). KPI strip from DLV-5 overview; segmented tabs Unassigned ·
+ * Offered · Exceptions · By status (`?filter=` in the URL, `/admin/tms?filter=unassigned` from the overview tile);
+ * code search (DLV-4 `q`); Assign / Reassign (DLV-7 nearest-partner picker), Unassign, Mark failed, and the demo-only
+ * location simulator (labelled DEMO). Reads: any admin; changes: OPS (others see why).
  */
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
-import { Badge } from '../../components/ui/Badge';
+import { useState } from 'react';
+import { useSearchParams } from 'react-router';
 import { Button } from '../../components/ui/Button';
-import { Checkbox } from '../../components/ui/Checkbox';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { DataTable, type Column } from '../../components/ui/DataTable';
-import { Dialog } from '../../components/ui/Dialog';
-import { InlineError } from '../../components/ui/ErrorState';
-import { Field } from '../../components/ui/Field';
-import { FormActions } from '../../components/ui/FormActions';
+import { Input } from '../../components/ui/Input';
+import { KpiStrip, KpiTile } from '../../components/ui/KpiTile';
 import { PageHeader } from '../../components/ui/PageHeader';
 import { Pagination, useCursorPages } from '../../components/ui/Pagination';
-import { QueryState } from '../../components/ui/QueryState';
-import { RadioGroup } from '../../components/ui/Radio';
-import { RelativeTime } from '../../components/ui/RelativeTime';
+import { SegmentedTabs } from '../../components/ui/SegmentedTabs';
 import { Select } from '../../components/ui/Select';
 import { StatusPill, statusLabel } from '../../components/ui/StatusPill';
+import { EstBadge } from '../../components/ui/EstBadge';
 import { useMeta } from '../../hooks/useMeta';
-import { formatDistanceKm, formatMinutes } from '../../lib/format';
-import { assignJob, failJob, listJobs, listPartners, qk, simulateJob, tmsOverview, unassignJob, type AdminJob, type AdminPartner } from './api';
-import { DemoBadge, Mono, StatTile, useAdminMutation, useAdminRoles } from './shared';
+import { formatDistanceKm, formatMinutes, plural } from '../../lib/format';
+import { failJob, listJobs, listPartners, qk, simulateJob, unassignJob, type AdminJob } from './api';
+import { PartnerPicker, jobLabel } from './PartnerPicker';
+import { Mono, useAdminMutation, useAdminRoles } from './shared';
+import { unassignedCount, useTmsOverview } from './shell';
+import { agoLabel, ageLabel, DemoTag, RoleNote, useNow } from './ui';
 
 const POLL_MS = 15_000;
 const STATUSES = ['PENDING_ASSIGNMENT', 'OFFERED', 'ASSIGNED', 'AT_PICKUP', 'PICKED_UP', 'OUT_FOR_DELIVERY', 'FAILED', 'DELIVERED', 'CANCELLED'];
 const SIMULATABLE = new Set(['ASSIGNED', 'AT_PICKUP', 'PICKED_UP', 'OUT_FOR_DELIVERY']);
-
-function PartnerPicker({ job, open, onClose }: { job: AdminJob | null; open: boolean; onClose: () => void }) {
-  const [partnerId, setPartnerId] = useState('');
-  const partners = useQuery({
-    queryKey: qk.partners({ status: 'APPROVED', picker: true }),
-    queryFn: () => listPartners({ status: 'APPROVED', limit: 100 }),
-    enabled: open,
-  });
-  const assign = useAdminMutation((v: { jobId: string; partnerId: string }) => assignJob(v.jobId, v.partnerId), {
-    success: (_d, v) => (job?.partnerId ? 'Delivery reassigned' : `Delivery assigned (${v.partnerId.slice(-4)})`),
-    invalidate: [['admin', 'tms'], ['admin', 'partners']],
-  });
-  const [error, setError] = useState<unknown>(null);
-
-  const options = useMemo(() => {
-    const list = (partners.data?.items ?? []).filter((p) => p.id !== job?.partnerId);
-    const free = (p: AdminPartner) => p.activeJobIds.length < p.maxActive;
-    list.sort((a, b) => Number(b.online && free(b)) - Number(a.online && free(a)) || a.name.localeCompare(b.name));
-    return list.map((p) => {
-      const blocked = !p.online ? 'Offline' : !free(p) ? 'At delivery limit' : null;
-      return {
-        value: p.id,
-        disabled: blocked !== null,
-        label: p.name,
-        description: (
-          <span className="text-sm text-slate-600">
-            {p.online ? 'Online' : 'Offline'} · {p.activeJobIds.length}/{p.maxActive} deliveries
-            {p.lastLocationAt ? <> · <RelativeTime value={p.lastLocationAt} prefix="seen" /></> : ''}
-          </span>
-        ),
-        aside: blocked ? <Badge>{blocked}</Badge> : <Badge tone="success">Available</Badge>,
-      };
-    });
-  }, [partners.data, job?.partnerId]);
-
-  const submit = async () => {
-    if (!job || !partnerId) return;
-    setError(null);
-    try {
-      await assign.mutateAsync({ jobId: job.id, partnerId });
-      setPartnerId('');
-      onClose();
-    } catch (e) {
-      setError(e);
-    }
-  };
-
-  return (
-    <Dialog
-      open={open}
-      onClose={onClose}
-      title={job?.partnerId ? 'Reassign delivery' : 'Assign a partner'}
-      description={job ? `${job.pickup.name} to ${job.drop.address}` : undefined}
-      footer={
-        <FormActions>
-          <Button variant="secondary" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button onClick={() => void submit()} disabled={!partnerId} loading={assign.isPending}>
-            {job?.partnerId ? 'Reassign' : 'Assign'}
-          </Button>
-        </FormActions>
-      }
-    >
-      <QueryState query={partners} isEmpty={(d) => d.items.length === 0} empty={{ icon: 'bike', title: 'No approved partners', description: 'Approve a delivery partner first.', compact: true }}>
-        {() => (
-          <div className="flex flex-col gap-3">
-            {options.length === 0 ? (
-              <p className="text-sm text-slate-600">No other approved partners to choose from.</p>
-            ) : (
-              <RadioGroup legend="Partner" name="partner" variant="cards" value={partnerId} onChange={setPartnerId} options={options} hint="Only online partners under their delivery limit can be assigned." />
-            )}
-            <InlineError error={error} />
-          </div>
-        )}
-      </QueryState>
-    </Dialog>
-  );
-}
+type Filter = 'unassigned' | 'offered' | 'exceptions' | 'status';
+const FILTERS: Filter[] = ['unassigned', 'offered', 'exceptions', 'status'];
 
 export default function TmsPage() {
   const { canOps } = useAdminRoles();
   const { isDemo } = useMeta();
-  const [status, setStatus] = useState('PENDING_ASSIGNMENT');
-  const [exceptionsOnly, setExceptionsOnly] = useState(false);
+  const now = useNow();
+  const [params, setParams] = useSearchParams();
+  const filter: Filter = FILTERS.includes(params.get('filter') as Filter) ? (params.get('filter') as Filter) : 'unassigned';
+  const status = params.get('status') && STATUSES.includes(params.get('status')!) ? params.get('status')! : 'ASSIGNED';
+  const q = params.get('q') ?? '';
+  const [draft, setDraft] = useState(q);
   const [picking, setPicking] = useState<AdminJob | null>(null);
   const [unassigning, setUnassigning] = useState<AdminJob | null>(null);
   const [failing, setFailing] = useState<AdminJob | null>(null);
   const pages = useCursorPages();
 
-  const overview = useQuery({ queryKey: qk.tmsOverview, queryFn: tmsOverview, refetchInterval: POLL_MS });
+  const setParam = (next: Record<string, string | null>) => {
+    const p = new URLSearchParams(params);
+    for (const [k, v] of Object.entries(next)) (v ? p.set(k, v) : p.delete(k));
+    pages.reset();
+    setParams(p, { replace: true });
+  };
+
+  const overview = useTmsOverview(POLL_MS);
+  const jobsParams =
+    filter === 'exceptions' ? { exception: true } : filter === 'unassigned' ? { status: 'PENDING_ASSIGNMENT' } : filter === 'offered' ? { status: 'OFFERED' } : { status };
   const jobs = useQuery({
-    queryKey: qk.jobs({ status, exceptionsOnly, cursor: pages.cursor }),
-    queryFn: () => listJobs({ status: exceptionsOnly ? undefined : status, exception: exceptionsOnly ? true : undefined, cursor: pages.cursor }),
+    queryKey: qk.jobs({ ...jobsParams, q, cursor: pages.cursor }),
+    queryFn: () => listJobs({ ...jobsParams, q: q || undefined, cursor: pages.cursor }),
     placeholderData: keepPreviousData,
     refetchInterval: POLL_MS,
   });
-  const names = useQuery({ queryKey: qk.partners({ status: 'APPROVED', picker: true }), queryFn: () => listPartners({ status: 'APPROVED', limit: 100 }), staleTime: 60_000 });
+  const names = useQuery({ queryKey: qk.partners({ status: 'APPROVED', names: true }), queryFn: () => listPartners({ status: 'APPROVED', limit: 100 }), staleTime: 60_000 });
   const partnerName = (id: string | null) => (id ? names.data?.items.find((p) => p.id === id)?.name ?? `Partner …${id.slice(-4)}` : null);
 
   const unassign = useAdminMutation((v: { id: string; reason?: string }) => unassignJob(v.id, v.reason), { success: 'Delivery unassigned and re-dispatching', invalidate: [['admin', 'tms']] });
   const fail = useAdminMutation((v: { id: string; reason: string }) => failJob(v.id, v.reason), { success: 'Delivery marked failed', invalidate: [['admin', 'tms']] });
   const simulate = useAdminMutation((id: string) => simulateJob(id), { success: (d) => `Demo simulation started: ${d.steps} location updates`, invalidate: [['admin', 'tms']] });
 
+  const ov = overview.data;
+  const inProgress = ov ? ['ASSIGNED', 'AT_PICKUP', 'PICKED_UP', 'OUT_FOR_DELIVERY'].reduce((n, s) => n + (ov.jobsByStatus[s] ?? 0), 0) : 0;
+  const unassigned = unassignedCount(ov) ?? 0;
+  const kpi = { loading: overview.isPending, unavailable: overview.isError, onRetry: () => void overview.refetch() };
+
   const columns: Column<AdminJob>[] = [
-    { key: 'order', header: 'Pickup', cell: (j) => j.pickup.name, primary: true },
-    { key: 'drop', header: 'Drop-off', cell: (j) => j.drop.address, secondary: true },
-    { key: 'status', header: 'Status', cell: (j) => <StatusPill kind="delivery" status={j.status} /> },
+    { key: 'order', header: 'Order', cell: (j) => <span className="font-mono">{jobLabel(j)}</span>, primary: true },
+    { key: 'pickup', header: 'Pickup', cell: (j) => j.pickup.name, secondary: true },
+    { key: 'drop', header: 'Drop', cell: (j) => [j.drop.area, j.drop.label].filter(Boolean).join(' · ') || <span className="whitespace-normal">{j.drop.address}</span>, hideOnMobile: true },
+    { key: 'status', header: 'Status', cell: (j) => <StatusPill kind="delivery" status={j.status} density="dense" /> },
     {
-      key: 'exception',
+      key: 'attention',
       header: 'Attention',
-      cell: (j) => (j.exception ? <Badge tone="danger" icon="alert">{j.exceptionReason ?? 'Exception'}</Badge> : j.failureReason ? <span className="text-sm text-danger-700">{j.failureReason}</span> : '-'),
+      cell: (j) =>
+        j.exception ? (
+          <span className="whitespace-normal text-[12.5px] text-bad">{j.exceptionReason ?? 'Needs a decision'}</span>
+        ) : j.failureReason ? (
+          <span className="whitespace-normal text-[12.5px] text-bad">{j.failureReason}</span>
+        ) : (
+          <span className="text-fg-3">—</span>
+        ),
     },
-    { key: 'partner', header: 'Partner', cell: (j) => partnerName(j.partnerId) ?? 'Unassigned' },
+    { key: 'partner', header: 'Partner', cell: (j) => partnerName(j.partnerId) ?? <span className="text-fg-3">Unassigned</span> },
+    { key: 'rounds', header: 'Rounds', cell: (j) => <span className="font-mono">{j.dispatchRound}</span>, align: 'right', hideOnMobile: true },
     {
-      key: 'eta',
+      key: 'trip',
       header: 'Trip',
       cell: (j) => (
-        <span>
-          {formatDistanceKm(j.distanceKm)} · {formatMinutes(j.estimatedMinutes)} {j.estimateSource !== 'GOOGLE' ? <DemoBadge label="Estimate" /> : null}
+        <span className="inline-flex items-center gap-1.5">
+          {formatDistanceKm(j.distanceKm)} · {formatMinutes(j.estimatedMinutes)}
+          {j.estimateSource !== 'GOOGLE' ? <EstBadge /> : null}
         </span>
       ),
       hideOnMobile: true,
     },
-    { key: 'age', header: 'Created', cell: (j) => <RelativeTime value={j.createdAt} />, hideOnMobile: true },
+    { key: 'age', header: 'Age', cell: (j) => <span className="text-fg-3">{ageLabel(j.createdAt, now)}</span>, hideOnMobile: true },
   ];
 
-  const ov = overview.data;
-  const inProgress = ov ? ['ASSIGNED', 'AT_PICKUP', 'PICKED_UP', 'OUT_FOR_DELIVERY'].reduce((n, s) => n + (ov.jobsByStatus[s] ?? 0), 0) : 0;
+  const filterLabel = filter === 'status' ? statusLabel('delivery', status).toLowerCase() : filter;
 
   return (
     <>
       <PageHeader
         title="Deliveries"
-        description="Find deliveries without a partner, handle exceptions, and reassign by hand."
-        actions={
-          <span className="text-sm text-slate-600" aria-live="polite">
-            {jobs.dataUpdatedAt ? <RelativeTime value={jobs.dataUpdatedAt} prefix="Updated" /> : null}
+        meta={
+          <span aria-live="off">
+            {jobs.dataUpdatedAt ? `Updated ${agoLabel(jobs.dataUpdatedAt, now)}` : 'Loading…'} · refreshing every 15 s
           </span>
         }
+        description="Find deliveries without a partner, handle exceptions and reassign by hand."
       />
-      <section aria-label="Delivery overview" className="mb-6">
-        <QueryState query={overview} loading={<div className="h-24" />} errorTitle="Couldn't load the delivery overview">
-          {() => (
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-              <StatTile label="Needs a partner" value={ov?.jobsByStatus.PENDING_ASSIGNMENT ?? 0} tone={(ov?.jobsByStatus.PENDING_ASSIGNMENT ?? 0) > 0 ? 'warn' : undefined} />
-              <StatTile label="Offers out" value={ov?.liveOffers ?? 0} />
-              <StatTile label="In progress" value={inProgress} />
-              <StatTile label="Exceptions" value={ov?.exceptions ?? 0} tone={(ov?.exceptions ?? 0) > 0 ? 'danger' : undefined} />
-              <StatTile label="Partners online" value={ov?.partners.online ?? 0} />
-            </div>
-          )}
-        </QueryState>
-      </section>
+      <div className="flex flex-col gap-[18px]">
+        <KpiStrip label="Delivery overview">
+          <KpiTile label="Unassigned" {...kpi} value={ov ? unassigned : undefined} highlight={unassigned > 0} sub="Finding a partner or offered" />
+          <KpiTile label="Offers out" {...kpi} value={ov?.liveOffers} sub="Waiting on a partner" />
+          <KpiTile label="In progress" {...kpi} value={ov ? inProgress : undefined} sub="Assigned to on the way" />
+          <KpiTile label="Exceptions" {...kpi} value={ov ? <span className={ov.exceptions > 0 ? 'text-bad' : undefined}>{ov.exceptions}</span> : undefined} sub={ov && ov.exceptions > 0 ? 'Need a decision' : 'None open'} subTone={ov && ov.exceptions > 0 ? 'muted' : 'ok'} />
+          <KpiTile label="Partners online" {...kpi} value={ov?.partners.online} secondary={ov ? `/${ov.partners.approved ?? ov.partners.byStatus.APPROVED ?? 0}` : undefined} sub={ov ? `${ov.partners.onDelivery ?? 0} on a delivery` : undefined} />
+        </KpiStrip>
 
-      <div className="mb-4 grid grid-cols-1 items-end gap-3 sm:grid-cols-3">
-        <Field label="Delivery status">
-          <Select value={status} disabled={exceptionsOnly} onChange={(e) => { setStatus(e.target.value); pages.reset(); }} options={STATUSES.map((s) => ({ value: s, label: statusLabel('delivery', s) }))} />
-        </Field>
-        <Checkbox label="Exceptions only" description="Deliveries nobody accepted or that need a decision" checked={exceptionsOnly} onChange={(e) => { setExceptionsOnly(e.target.checked); pages.reset(); }} />
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <SegmentedTabs
+            label="Delivery queue"
+            value={filter}
+            onChange={(v) => setParam({ filter: v })}
+            options={[
+              { value: 'unassigned', label: 'Unassigned', count: ov?.jobsByStatus.PENDING_ASSIGNMENT },
+              { value: 'offered', label: 'Offered', count: ov?.jobsByStatus.OFFERED },
+              { value: 'exceptions', label: 'Exceptions', count: ov?.exceptions },
+              { value: 'status', label: 'By status' },
+            ]}
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            {filter === 'status' ? (
+              <Select
+                aria-label="Delivery status"
+                value={status}
+                onChange={(e) => setParam({ status: e.target.value })}
+                options={STATUSES.map((s) => ({ value: s, label: statusLabel('delivery', s) }))}
+                className="w-48"
+              />
+            ) : null}
+            <form
+              role="search"
+              onSubmit={(e) => {
+                e.preventDefault();
+                setParam({ q: draft.trim() || null });
+              }}
+              className="flex items-center gap-2"
+            >
+              <Input type="search" icon="search" aria-label="Search by order code or delivery id" placeholder="TH-… or delivery id" value={draft} onChange={(e) => setDraft(e.target.value)} className="w-56" />
+              <Button type="submit" variant="outline" size="sm">
+                Search
+              </Button>
+            </form>
+          </div>
+        </div>
+        {!canOps ? <RoleNote>You can view deliveries. Assigning, unassigning and failing need the Ops role.</RoleNote> : null}
+
+        <DataTable
+          caption="Deliveries"
+          columns={columns}
+          rows={jobs.data?.items}
+          getRowId={(j) => j.id}
+          loading={jobs.isPending}
+          error={jobs.isError ? jobs.error : undefined}
+          onRetry={() => jobs.refetch()}
+          empty={{
+            icon: 'bike',
+            title: q ? `No ${filterLabel} deliveries match “${q}”` : filter === 'exceptions' ? 'No exception deliveries' : `No ${filterLabel} deliveries`,
+            description: 'This list refreshes every 15 seconds.',
+          }}
+          rowActions={(j) => {
+            if (!canOps) return null;
+            const open = !['DELIVERED', 'FAILED', 'CANCELLED'].includes(j.status);
+            return (
+              <div className="flex flex-wrap justify-end gap-1.5">
+                {open ? (
+                  <Button size="xs" onClick={() => setPicking(j)}>
+                    {j.partnerId ? 'Reassign' : 'Assign'}
+                  </Button>
+                ) : null}
+                {j.partnerId && ['ASSIGNED', 'AT_PICKUP'].includes(j.status) ? (
+                  <Button size="xs" variant="outline" onClick={() => setUnassigning(j)}>
+                    Unassign
+                  </Button>
+                ) : null}
+                {open ? (
+                  <Button size="xs" variant="ghost" onClick={() => setFailing(j)}>
+                    Mark failed
+                  </Button>
+                ) : null}
+                {isDemo && SIMULATABLE.has(j.status) && j.partnerId ? (
+                  <Button size="xs" variant="outline" loading={simulate.isPending && simulate.variables === j.id} onClick={() => simulate.mutate(j.id)}>
+                    <DemoTag /> Simulate movement
+                  </Button>
+                ) : null}
+              </div>
+            );
+          }}
+          footer={<Pagination hasPrev={pages.hasPrev} hasNext={Boolean(jobs.data?.nextCursor)} onPrev={pages.prev} onNext={() => pages.next(jobs.data!.nextCursor!)} page={pages.page} loading={jobs.isFetching} />}
+        />
+        {jobs.data?.items.length ? <p className="text-[12.5px] text-fg-3">{plural(jobs.data.items.length, 'delivery', 'deliveries')} on this page.</p> : null}
       </div>
-      {!canOps ? <p role="note" className="mb-3 text-sm text-slate-600">You can view deliveries. Assigning needs the Ops admin role.</p> : null}
 
-      <DataTable
-        caption="Deliveries"
-        columns={columns}
-        rows={jobs.data?.items}
-        getRowId={(j) => j.id}
-        loading={jobs.isPending}
-        error={jobs.isError ? jobs.error : undefined}
-        onRetry={() => jobs.refetch()}
-        empty={{ icon: 'bike', title: exceptionsOnly ? 'No exception deliveries' : `No deliveries ${statusLabel('delivery', status).toLowerCase()}`, description: 'This list refreshes every 15 seconds.' }}
-        rowActions={(j) => {
-          if (!canOps) return null;
-          const open = !['DELIVERED', 'FAILED', 'CANCELLED'].includes(j.status);
-          return (
-            <div className="flex flex-wrap gap-2">
-              {open ? (
-                <Button size="sm" onClick={() => setPicking(j)}>
-                  {j.partnerId ? 'Reassign' : 'Assign'}
-                </Button>
-              ) : null}
-              {j.partnerId && ['ASSIGNED', 'AT_PICKUP'].includes(j.status) ? (
-                <Button size="sm" variant="secondary" onClick={() => setUnassigning(j)}>
-                  Unassign
-                </Button>
-              ) : null}
-              {open ? (
-                <Button size="sm" variant="ghost" onClick={() => setFailing(j)}>
-                  Mark failed
-                </Button>
-              ) : null}
-              {isDemo && canSimulate(j) ? (
-                <Button size="sm" variant="secondary" loading={simulate.isPending && simulate.variables === j.id} onClick={() => simulate.mutate(j.id)}>
-                  Simulate (demo)
-                </Button>
-              ) : null}
-            </div>
-          );
-        }}
-        footer={<Pagination hasPrev={pages.hasPrev} hasNext={Boolean(jobs.data?.nextCursor)} onPrev={pages.prev} onNext={() => pages.next(jobs.data!.nextCursor!)} page={pages.page} loading={jobs.isFetching} />}
-      />
-
-      <PartnerPicker job={picking} open={picking !== null} onClose={() => setPicking(null)} />
+      <PartnerPicker job={picking} onClose={() => setPicking(null)} />
       <ConfirmDialog
         open={unassigning !== null}
         onClose={() => setUnassigning(null)}
@@ -245,7 +228,7 @@ export default function TmsPage() {
         open={failing !== null}
         onClose={() => setFailing(null)}
         title="Mark this delivery as failed?"
-        description={failing ? <>The customer's order moves to delivery failed so you can cancel and refund it. Delivery <Mono>{failing.id}</Mono>.</> : undefined}
+        description={failing ? <>The customer's order moves to delivery failed so you can cancel and refund it. Delivery <Mono>{jobLabel(failing)}</Mono>.</> : undefined}
         confirmLabel="Mark failed"
         tone="danger"
         reason={{ label: 'Reason', minLength: 3, options: ['Customer unreachable', 'Partner vehicle breakdown', 'Address not found', 'No partner available'] }}
@@ -253,8 +236,4 @@ export default function TmsPage() {
       />
     </>
   );
-}
-
-function canSimulate(j: AdminJob): boolean {
-  return SIMULATABLE.has(j.status) && j.partnerId !== null;
 }
