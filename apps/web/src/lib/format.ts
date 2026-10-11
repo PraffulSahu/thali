@@ -2,8 +2,8 @@
  * Display formatting. All dates render in Asia/Kolkata with the en-IN locale, whatever the device timezone
  * (timestamps are UTC ISO strings from the API). Money is integer paise -> `formatINR` (contracts).
  *
- *   formatDateTime('2026-10-10T07:30:00Z')   -> "10 Oct 2026, 1:00 pm"
- *   formatTime(iso)                          -> "1:00 pm"
+ *   formatDateTime('2026-10-10T07:30:00Z')   -> "10 Oct 2026, 1:00 PM"
+ *   formatTime(iso)                          -> "1:00 PM"
  *   formatDate(iso)                          -> "10 Oct 2026"
  *   formatRelative(iso)                      -> "12s ago" / "5 min ago" / "in 3 min"
  *   formatDuration(299)                      -> "4:59"
@@ -39,15 +39,18 @@ export function formatDate(v: DateInput, options: Intl.DateTimeFormatOptions = {
   return d ? istFormatter(options).format(d) : '';
 }
 
+/** en-IN prints "1:30 pm"; the design system writes "1:30 PM" everywhere (cards, pills, banners). */
+const upperDayPeriod = (s: string) => s.replace(/\b(am|pm)\b/g, (m) => m.toUpperCase());
+
 export function formatTime(v: DateInput): string {
   const d = toDate(v);
-  return d ? istFormatter({ hour: 'numeric', minute: '2-digit', hour12: true }).format(d) : '';
+  return d ? upperDayPeriod(istFormatter({ hour: 'numeric', minute: '2-digit', hour12: true }).format(d)) : '';
 }
 
 export function formatDateTime(v: DateInput): string {
   const d = toDate(v);
   return d
-    ? istFormatter({ day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }).format(d)
+    ? upperDayPeriod(istFormatter({ day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }).format(d))
     : '';
 }
 

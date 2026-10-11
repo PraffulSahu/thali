@@ -11,7 +11,7 @@ describe('format', () => {
     // 20:00 UTC on the 9th is 01:30 IST on the 10th.
     const iso = '2026-10-09T20:00:00Z';
     expect(formatDate(iso)).toBe('10 Oct 2026');
-    expect(formatTime(iso).toLowerCase()).toBe('1:30 am');
+    expect(formatTime(iso)).toBe('1:30 AM');
     expect(formatDateTime(iso).toLowerCase()).toContain('10 oct 2026');
   });
 
