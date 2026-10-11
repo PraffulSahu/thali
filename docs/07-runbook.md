@@ -491,6 +491,8 @@ npm run seed:images -- --concurrency 4   # be gentler with the hosts
 - Symptom "images missing in the app": check the browser network tab. Mirrored keys resolve under
   `S3_PUBLIC_BASE_URL`; absolute URLs need their host in `EXTERNAL_IMAGE_HOSTS` on every service that serves
   the view, otherwise `imageUrl` is `null` and the SPA draws a placeholder.
+- Only `https` URLs on an `EXTERNAL_IMAGE_HOSTS` host (default allowlist when unset) are fetched or uploaded,
+  whatever the committed JSON says, and redirects are refused; anything else is skipped with a log line.
 - After the images are mirrored once, re-run `npm run seed` so the documents reference the mirrored keys.
 
 ### 14.3 Demo traffic (`npm run demo:traffic`)

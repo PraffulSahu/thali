@@ -27,6 +27,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSyn
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { isAllowedImageHost, parseExternalImageHosts } from '@thali/service-kit/providers/image-url';
 import { ROOT, assertDemoMode, mergedEnv } from './lib/dotenv.js';
 const DATA = resolve(ROOT, 'scripts/seed-data');
 const CACHE = resolve(ROOT, '.cache/seed-images');
@@ -39,6 +40,21 @@ interface Job { id: string; group: 'pool' | 'avatars'; file: string; key: string
 export interface ImageManifest { version: 1; bucket: string; generatedAt: string; pool: Record<string, string>; avatars: Record<string, string>; failed: string[] }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Defence in depth (final review Minor 3): only https URLs on an `EXTERNAL_IMAGE_HOSTS` host (default allowlist)
+ * are ever fetched, whatever the committed JSON says; redirects are refused (`redirect: 'error'`).
+ */
+export function allowedImageUrls(urls: readonly string[], allowHosts: readonly string[]): string[] {
+  return urls.filter((u) => {
+    try {
+      const url = new URL(u);
+      return url.protocol === 'https:' && !url.username && !url.password && !url.port && isAllowedImageHost(url.hostname, allowHosts);
+    } catch {
+      return false;
+    }
+  });
+}
 
 /** `avatar-male-07` → `images/avatars/male-7.jpg`. */
 export function avatarKeyOf(id: string, gender: string): string {
@@ -64,7 +80,7 @@ async function fetchOnce(url: string): Promise<{ ok: true; body: Buffer } | { ok
   const wait = (hostPausedUntil.get(host) ?? 0) - Date.now();
   if (wait > 0) await sleep(wait);
   try {
-    const r = await fetch(url, { headers: { 'user-agent': USER_AGENT, accept: 'image/*' }, signal: AbortSignal.timeout(30_000) });
+    const r = await fetch(url, { headers: { 'user-agent': USER_AGENT, accept: 'image/*' }, redirect: 'error', signal: AbortSignal.timeout(30_000) });
     if (!r.ok) {
       const ra = Number(r.headers.get('retry-after'));
       await r.body?.cancel();
@@ -73,8 +89,10 @@ async function fetchOnce(url: string): Promise<{ ok: true; body: Buffer } | { ok
     const body = Buffer.from(await r.arrayBuffer());
     if (!sniff(body)) return { ok: false, status: 415 };
     return { ok: true, body };
-  } catch {
-    return { ok: false, status: 0 }; // network error / timeout
+  } catch (e) {
+    // a redirect (refused) is final for this url; anything else is a network error / timeout (retried)
+    const why = String((e as { cause?: { message?: string } }).cause?.message ?? (e as Error).message ?? '');
+    return { ok: false, status: /redirect/i.test(why) ? 310 : 0 };
   }
 }
 
@@ -121,15 +139,21 @@ export async function mirrorSeedImages(opts: { upload?: boolean; offline?: boole
   const env = mergedEnv();
   assertDemoMode(env, 'mirror demo photos'); // writes the public bucket with the MinIO root credentials
   const bucket = env.S3_PUBLIC_BUCKET || 'thali-public';
+  const allowHosts = parseExternalImageHosts(env.EXTERNAL_IMAGE_HOSTS);
   const images = JSON.parse(readFileSync(resolve(DATA, 'images.json'), 'utf8')) as ImageRow[];
   const avatars = JSON.parse(readFileSync(resolve(DATA, 'avatars.json'), 'utf8')) as AvatarRow[];
-  const jobs: Job[] = [
-    ...images.map((i) => ({ id: i.id, group: 'pool' as const, file: resolve(CACHE, 'pool', `${i.id}.jpg`), key: poolKeyOf(i.id), urls: [i.url, ...(i.thumbUrl ? [i.thumbUrl] : [])] })),
+  const allJobs: Job[] = [
+    ...images.map((i) => ({ id: i.id, group: 'pool' as const, file: resolve(CACHE, 'pool', `${i.id}.jpg`), key: poolKeyOf(i.id), urls: allowedImageUrls([i.url, ...(i.thumbUrl ? [i.thumbUrl] : [])], allowHosts) })),
     ...avatars.map((a) => {
       const key = avatarKeyOf(a.id, a.gender);
-      return { id: a.id, group: 'avatars' as const, file: resolve(CACHE, key.replace('images/', '')), key, urls: [a.url, ...(a.thumbUrl ? [a.thumbUrl] : [])] };
+      return { id: a.id, group: 'avatars' as const, file: resolve(CACHE, key.replace('images/', '')), key, urls: allowedImageUrls([a.url, ...(a.thumbUrl ? [a.thumbUrl] : [])], allowHosts) };
     }),
   ];
+  // never fetched nor uploaded (not even from the cache); the seeds then fall back to the absolute URL, which
+  // resolveImageUrl refuses to render, so the UI shows placeholder art
+  const offHost = allJobs.filter((j) => !j.urls.length);
+  if (offHost.length) log(`[seed:images] skipping ${offHost.length} image(s) not on an EXTERNAL_IMAGE_HOSTS host: ${offHost.slice(0, 5).map((j) => j.id).join(', ')}\n`);
+  const jobs = allJobs.filter((j) => j.urls.length);
   const t0 = Date.now();
   const cached = (j: Job) => existsSync(j.file) && statSync(j.file).size > 0;
   const missing = jobs.filter((j) => !cached(j));
