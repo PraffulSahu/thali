@@ -394,7 +394,8 @@ export interface CartPreview {
   children: PricedChild[];
   problems: QuoteProblem[];
   canCheckout: boolean;
-  coupon: { code: string; valid: boolean; discountPaise: number; message?: string; restaurantIds?: string[] } | null;
+  /** `reason` (invalid only): why it isn't applied; NOT_APPLICABLE → `restaurantIds` is the coupon's scope (I-1). */
+  coupon: { code: string; valid: boolean; discountPaise: number; message?: string; restaurantIds?: string[]; reason?: string } | null;
   membership: { applied: boolean; membershipId: string | null } | null;
   deliveryExplanation: string | null;
 }
@@ -487,7 +488,8 @@ export interface CheckoutResponse {
 }
 export interface CreateCheckoutBody {
   address: DeliveryAddressInput;
-  couponCode?: string;
+  /** null = no coupon (the cart's coupon stays on the cart); absent = the cart's coupon. */
+  couponCode?: string | null;
   useMembership: boolean;
   expectedTotalPaise?: number;
   /** ORD-3 per-restaurant checkout. */

@@ -98,7 +98,7 @@ const CouponValidateBody = z
       .array(z.object({ restaurantId: z.string().min(1).max(64), subtotalPaise: Paise }))
       .max(50)
       .optional()
-      .describe('Per-restaurant item subtotals (MKT-8), unique restaurantIds (duplicates → 422 VALIDATION_FAILED). Required for restaurant-scoped coupons; none eligible → 422 COUPON_INVALID NOT_APPLICABLE. The eligible sum is capped at itemsSubtotalPaise.'),
+      .describe('Per-restaurant item subtotals (MKT-8), unique restaurantIds (duplicates → 422 VALIDATION_FAILED). Required for restaurant-scoped coupons; none eligible → 422 COUPON_INVALID NOT_APPLICABLE (details.restaurantIds = the coupon scope). The eligible sum is capped at itemsSubtotalPaise.'),
   })
   .meta({ id: 'CouponValidateRequest' });
 const CouponValidateResponse = z

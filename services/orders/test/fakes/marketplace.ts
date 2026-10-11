@@ -241,7 +241,7 @@ export class FakeMarketplace implements MarketplaceClient {
     if (scope.length && req.restaurantSubtotals) {
       eligible = req.restaurantSubtotals.filter((r) => scope.includes(r.restaurantId)).reduce((s, r) => s + r.subtotalPaise, 0);
       if (!req.restaurantSubtotals.some((r) => scope.includes(r.restaurantId))) {
-        throw new DomainError('COUPON_INVALID', 'This coupon does not apply to these restaurants', 422, { reason: 'NOT_APPLICABLE' });
+        throw new DomainError('COUPON_INVALID', 'This coupon does not apply to these restaurants', 422, { reason: 'NOT_APPLICABLE', restaurantIds: [...scope] });
       }
     }
     return { code: req.code.toUpperCase(), discountPaise: Math.min(c.discountPaise, eligible), restaurantIds: [...scope], badgeLabel: null };

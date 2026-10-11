@@ -161,6 +161,8 @@ describe('restaurant-scoped coupons (MKT-8)', () => {
     const na = await scopedValidate(c.code, [{ restaurantId: r2, subtotalPaise: 30000 }]);
     expect(na.status).toBe(422);
     expect(na.body.error).toMatchObject({ code: 'COUPON_INVALID', details: { reason: 'NOT_APPLICABLE' } });
+    // I-1: the scope travels with the error so checkout can say "Applies to <restaurant>"
+    expect(na.body.error.details.restaurantIds).toEqual([r1]);
     expect((await scopedValidate(c.code)).body.error.details.reason).toBe('NOT_APPLICABLE');
     const all = await seedCoupon(h, {});
     const ok = await scopedValidate(all.code, [{ restaurantId: r2, subtotalPaise: 30000 }]);

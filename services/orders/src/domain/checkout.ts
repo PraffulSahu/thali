@@ -92,7 +92,7 @@ export interface QuoteAndPrice {
   restaurants: QuotedRestaurant[];
   itemsSubtotalPaise: number;
   /** `restaurantIds`: the coupon's restaurant scope (empty = every restaurant), contract 1 / MKT-8. */
-  coupon: { code: string; valid: boolean; discountPaise: number; restaurantIds: string[]; message?: string } | null;
+  coupon: { code: string; valid: boolean; discountPaise: number; restaurantIds: string[]; message?: string; reason?: string } | null;
   membership: MembershipBenefitsResponse | null;
   priced: PricedCheckout;
 }
@@ -200,7 +200,7 @@ export async function quoteAndPrice(
     couponCode?: string | null;
     useMembership: boolean;
     strictCoupon: boolean;
-    /** Checkout with a cart-level coupon: a NOT_APPLICABLE coupon is dropped (as preview reports it) instead of failing. */
+    /** Subset checkout with the cart's coupon: a NOT_APPLICABLE coupon is dropped (as preview reports it) instead of failing. */
     dropInapplicableCoupon?: boolean;
   },
 ): Promise<QuoteAndPrice> {
@@ -233,7 +233,17 @@ export async function quoteAndPrice(
         e instanceof DomainError && e.code === 'COUPON_INVALID' && (e.details as { reason?: string } | undefined)?.reason === 'NOT_APPLICABLE';
       const lenient = !opts.strictCoupon || (opts.dropInapplicableCoupon === true && inapplicable);
       if (!lenient || !(e instanceof DomainError) || e.httpStatus >= 500) throw e;
-      coupon = { code, valid: false, discountPaise: 0, restaurantIds: [], message: e.message };
+      // I-1: keep the reason + the coupon's scope (NOT_APPLICABLE) so the client can say "Applies to <restaurant>"
+      const details = (e.details ?? {}) as { reason?: unknown; restaurantIds?: unknown };
+      const scopeIds = inapplicable && Array.isArray(details.restaurantIds) ? details.restaurantIds.filter((x): x is string => typeof x === 'string') : [];
+      coupon = {
+        code,
+        valid: false,
+        discountPaise: 0,
+        restaurantIds: scopeIds,
+        message: e.message,
+        ...(typeof details.reason === 'string' ? { reason: details.reason } : {}),
+      };
     }
   }
 
@@ -600,6 +610,10 @@ async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult
   // body `couponCode: null` = no coupon (like preview); absent = the cart's coupon
   const fromCart = body.couponCode === undefined;
   const couponCode = fromCart ? (cart.couponCode ?? null) : body.couponCode;
+  // I-1: the cart's coupon — absent, or echoed in the body (the web sends what the cart holds) — is dropped on a
+  // subset checkout it does not apply to, as the subset preview reports; it stays on the cart for the other restaurant.
+  // A different coupon typed for this checkout still fails loudly.
+  const isCartCoupon = fromCart || (!!couponCode && !!cart.couponCode && couponCode.trim().toUpperCase() === cart.couponCode.toUpperCase());
 
   // payment safety: other payable checkouts sharing a restaurant (re-checked inside the step-7 transaction)
   const selectedRestaurantIds = [...new Set(selection.lines.map((l) => l.restaurantId))];
@@ -614,7 +628,7 @@ async function runSaga(ctx: OrdersContext, s: SagaInput): Promise<CheckoutResult
       couponCode,
       useMembership: body.useMembership,
       strictCoupon: true,
-      dropInapplicableCoupon: fromCart && selection.setKey !== '*',
+      dropInapplicableCoupon: isCartCoupon && selection.setKey !== '*',
     }),
     ctx.clients.identity.getUser(userId),
   ]);

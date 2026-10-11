@@ -2,6 +2,7 @@ import { DomainError } from '@thali/contracts';
 import { describe, expect, it } from 'vitest';
 import {
   COUPON_NOT_APPLICABLE,
+  couponNotApplicableError,
   couponScope,
   priceCheckout,
   type LineInput,
@@ -81,5 +82,19 @@ describe('scoped coupons (MKT-8)', () => {
     expect(couponScope(groups, ['rB', 'rX'])).toEqual({ ok: true, eligibleRestaurantIds: ['rB'], eligibleSubtotalPaise: 15000 });
     expect(couponScope(groups, ['rX'])).toEqual({ ok: false, reason: 'NOT_APPLICABLE' });
     expect(couponScope([], ['rX'])).toEqual({ ok: false, reason: 'NOT_APPLICABLE' });
+  });
+});
+
+describe('couponNotApplicableError', () => {
+  it('carries the coupon scope when given, so clients can say which restaurant it applies to', () => {
+    const e = couponNotApplicableError(['r-b', 'r-c']);
+    expect(e).toBeInstanceOf(DomainError);
+    expect(e.code).toBe('COUPON_INVALID');
+    expect(e.details).toEqual({ reason: 'NOT_APPLICABLE', restaurantIds: ['r-b', 'r-c'] });
+  });
+
+  it('omits restaurantIds without a scope (unchanged envelope)', () => {
+    expect(couponNotApplicableError().details).toEqual({ reason: 'NOT_APPLICABLE' });
+    expect(couponNotApplicableError([]).details).toEqual({ reason: 'NOT_APPLICABLE' });
   });
 });

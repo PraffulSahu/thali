@@ -116,7 +116,7 @@ export async function validateCoupon(ctx: AppContext, input: ValidateCouponInput
   if (scope.length) {
     const groups = subtotals.map((g) => ({ restaurantId: g.restaurantId, itemsSubtotalPaise: g.subtotalPaise }));
     const s = couponScope(groups, scope);
-    if (!s.ok) throw couponNotApplicableError();
+    if (!s.ok) throw couponNotApplicableError(scope);
     // never exceed the checkout's own Σ itemsSubtotal (priceCheckout would otherwise throw downstream)
     subtotal = Math.min(s.eligibleSubtotalPaise, input.itemsSubtotalPaise);
   }

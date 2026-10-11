@@ -237,16 +237,33 @@ describe('checkout couponCode', () => {
     expect(r.body.checkout.couponCode).toBeNull();
   });
 
-  it('subset checkout drops a cart coupon that does not apply to the selection (like preview); a body coupon still fails', async () => {
+  it('subset checkout drops a cart coupon that does not apply to the selection (like preview); a different body coupon still fails', async () => {
     const { u, s } = await newUser();
     h.marketplace.coupons.set('DOSAONLY50', { discountPaise: 5000, restaurantIds: [s.b.id] });
+    h.marketplace.coupons.set('DOSAONLY60', { discountPaise: 6000, restaurantIds: [s.b.id] });
     expect((await u.put('/api/v1/cart/coupon', { couponCode: 'DOSAONLY50' })).status).toBe(200);
-    const strict = await checkout(u, { restaurantIds: [s.a.id], couponCode: 'DOSAONLY50' });
+    const strict = await checkout(u, { restaurantIds: [s.a.id], couponCode: 'DOSAONLY60' });
     expect(strict.status).toBe(422);
     expect(strict.body.error.details).toMatchObject({ reason: 'NOT_APPLICABLE' });
     const preview = await u.post('/api/v1/cart/preview', { address: DROP_ADDRESS, restaurantIds: [s.a.id] });
     const r = await checkout(u, { restaurantIds: [s.a.id], expectedTotalPaise: preview.body.pricing.totalPaise });
     expect(r.status).toBe(201);
     expect(r.body.checkout.pricing.couponDiscountPaise).toBe(0);
+  });
+
+  it('I-1: subset checkout echoing the cart coupon in the body (what the web sends) is dropped like the cart coupon; it stays on the cart', async () => {
+    const { u, s } = await newUser();
+    h.marketplace.coupons.set('DUMPLING20', { discountPaise: 4000, restaurantIds: [s.b.id] });
+    expect((await u.put('/api/v1/cart/coupon', { couponCode: 'DUMPLING20' })).status).toBe(200);
+    const preview = await u.post('/api/v1/cart/preview', { address: DROP_ADDRESS, couponCode: 'DUMPLING20', restaurantIds: [s.a.id] });
+    expect(preview.status).toBe(200);
+    expect(preview.body.canCheckout).toBe(true);
+    expect(preview.body.coupon).toMatchObject({ code: 'DUMPLING20', valid: false, reason: 'NOT_APPLICABLE', restaurantIds: [s.b.id] });
+    const r = await checkout(u, { restaurantIds: [s.a.id], couponCode: 'dumpling20', expectedTotalPaise: preview.body.pricing.totalPaise });
+    expect(r.status).toBe(201);
+    expect(r.body.checkout.couponCode).toBeNull();
+    expect(r.body.checkout.pricing.couponDiscountPaise).toBe(0);
+    expect(h.marketplace.reserveCalls.at(-1)!.couponCode).toBeUndefined();
+    expect((await u.get('/api/v1/cart')).body.couponCode).toBe('DUMPLING20');
   });
 });

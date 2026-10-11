@@ -66,6 +66,69 @@ describe('Checkout extras (ORD-3)', () => {
     expect(screen.getByRole('button', { name: /^remove$/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /get thali plus/i })).toHaveAttribute('href', '/membership');
   });
+
+  it('I-1: per-restaurant checkout with a cart coupon scoped to the other restaurant says why and pays without it (coupon stays on the cart)', async () => {
+    const one = preview();
+    const cart = { ...twoRestaurantCart(), couponCode: 'DUMPLING20' };
+    const subset = {
+      ...one,
+      children: [one.children[0]!],
+      pricing: one.children[0]!.breakdown,
+      coupon: { code: 'DUMPLING20', valid: false, discountPaise: 0, restaurantIds: [IDS.R2], reason: 'NOT_APPLICABLE', message: 'This coupon is not valid for the restaurants in your cart' },
+    };
+    const m = mockApi({
+      'GET /cart': cart,
+      'GET /me/addresses': { items: [address] },
+      'POST /cart/preview': subset,
+      'GET /coupons/available': { items: [] },
+      'GET /memberships/me': { current: null, history: [] },
+      'POST /checkouts': [409, errorBody('CONFLICT', 'Already paid', { reason: 'CHECKOUT_ALREADY_PAID', checkoutId: 'ckPaid' })],
+    });
+    renderWithProviders(<CheckoutPage />, { route: `/checkout?restaurant=${IDS.R1}`, path: '/checkout', auth: makeAuth({ roles: ['CONSUMER'] }) });
+    expect(await screen.findByText(/applies to dosa corner/i)).toBeInTheDocument();
+    expect(screen.getByText(/not used on this checkout/i)).toBeInTheDocument();
+    const pay = await screen.findByRole('button', { name: /pay ₹565\.30/i });
+    expect(pay).toBeEnabled();
+    await userEvent.click(pay);
+    await waitFor(() => expect(m.callsTo('POST', '/checkouts')).toHaveLength(1));
+    const body = m.callsTo('POST', '/checkouts')[0]!.body as Record<string, unknown>;
+    expect(body).toMatchObject({ restaurantIds: [IDS.R1], expectedTotalPaise: 56530, couponCode: null });
+    expect(m.callsTo('PUT', '/cart/coupon')).toHaveLength(0);
+  });
+
+  it('I-1: an invalid coupon (e.g. MIN_ORDER) is never sent with Pay, so Pay cannot hit a guaranteed 422', async () => {
+    const p = { ...preview(), coupon: { code: 'BIG500', valid: false, discountPaise: 0, restaurantIds: [], reason: 'MIN_ORDER', message: 'Add items worth ₹999.00 or more to use this coupon' } };
+    const m = mockApi({
+      'GET /cart': { ...twoRestaurantCart(), couponCode: 'BIG500' },
+      'GET /me/addresses': { items: [address] },
+      'POST /cart/preview': p,
+      'GET /coupons/available': { items: [] },
+      'GET /memberships/me': { current: null, history: [] },
+      'POST /checkouts': [409, errorBody('CONFLICT', 'Already paid', { reason: 'CHECKOUT_ALREADY_PAID', checkoutId: 'ckPaid' })],
+    });
+    renderWithProviders(<CheckoutPage />, { route: '/checkout', path: '/checkout', auth: makeAuth({ roles: ['CONSUMER'] }) });
+    expect(await screen.findByText(/add items worth ₹999\.00/i)).toBeInTheDocument();
+    expect(screen.getByText(/not applied — you pay the total shown/i)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: /pay ₹812\.40/i }));
+    await waitFor(() => expect(m.callsTo('POST', '/checkouts')).toHaveLength(1));
+    expect(m.callsTo('POST', '/checkouts')[0]!.body).toMatchObject({ couponCode: null, expectedTotalPaise: 81240 });
+  });
+
+  it('I-1: a valid coupon is sent with Pay', async () => {
+    const p = { ...preview(), coupon: { code: 'WELCOME45', valid: true, discountPaise: 4500, restaurantIds: [] } };
+    const m = mockApi({
+      'GET /cart': { ...twoRestaurantCart(), couponCode: 'WELCOME45' },
+      'GET /me/addresses': { items: [address] },
+      'POST /cart/preview': p,
+      'GET /coupons/available': { items: [] },
+      'GET /memberships/me': { current: null, history: [] },
+      'POST /checkouts': [409, errorBody('CONFLICT', 'Already paid', { reason: 'CHECKOUT_ALREADY_PAID', checkoutId: 'ckPaid' })],
+    });
+    renderWithProviders(<CheckoutPage />, { route: '/checkout', path: '/checkout', auth: makeAuth({ roles: ['CONSUMER'] }) });
+    await userEvent.click(await screen.findByRole('button', { name: /pay ₹812\.40/i }));
+    await waitFor(() => expect(m.callsTo('POST', '/checkouts')).toHaveLength(1));
+    expect(m.callsTo('POST', '/checkouts')[0]!.body).toMatchObject({ couponCode: 'WELCOME45' });
+  });
 });
 
 describe('Tracking extras', () => {

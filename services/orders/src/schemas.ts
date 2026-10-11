@@ -23,12 +23,13 @@ export const CartItemInput = CartItemInputSchema.meta({ id: 'CartItemInput' });
 export const CartItemUpdate = CartItemUpdateSchema.meta({ id: 'CartItemUpdate' });
 /**
  * Contracts body + `couponCode: null` (= no coupon, like the cart preview). Absent = the cart's coupon;
- * on a subset checkout a cart coupon that does not apply to the selected restaurants is dropped.
+ * on a subset checkout the cart coupon (absent, or echoed in the body) that does not apply to the selected
+ * restaurants is dropped and stays on the cart.
  */
 export const CreateCheckoutBody = z
   .object({
     ...CreateCheckoutBodySchema.shape,
-    couponCode: z.string().trim().min(1).max(40).nullable().optional().meta({ description: 'null = no coupon; absent = the cart coupon' }),
+    couponCode: z.string().trim().min(1).max(40).nullable().optional().meta({ description: 'null = no coupon; absent = the cart coupon. Subset checkout: the cart coupon (absent or echoed) is dropped when NOT_APPLICABLE to the selection.' }),
   })
   .refine((v) => (v.addressId === undefined) !== (v.address === undefined), {
     message: 'Provide exactly one of addressId or address',
@@ -159,6 +160,10 @@ export const PreviewResponse = z
         discountPaise: z.number().int(),
         restaurantIds: z.array(z.string()).meta({ description: 'Restaurants the coupon applies to; empty = every restaurant in the order' }),
         message: z.string().optional(),
+        reason: z
+          .string()
+          .optional()
+          .meta({ description: 'Why an invalid coupon is not applied (marketplace reason, e.g. NOT_APPLICABLE, MIN_ORDER, PER_USER_LIMIT). For NOT_APPLICABLE `restaurantIds` is the coupon scope.' }),
       })
       .nullable(),
     membership: z.object({ applied: z.boolean(), membershipId: z.string().nullable() }).nullable(),

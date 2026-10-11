@@ -196,9 +196,12 @@ function CheckoutContent() {
     setSubmitError(null);
     setSubmitProblems([]);
     setConflict(null);
+    // I-1: send the coupon only when the preview applied it; otherwise `null` (= no coupon) so Pay charges exactly the
+    // previewed total instead of failing on a coupon the preview already reported unusable. The cart keeps its coupon.
+    const appliedCoupon = coupon && preview.data?.coupon?.valid && preview.data.coupon.code === coupon ? coupon : null;
     const body: CreateCheckoutBody = {
       address: addressToInput(address),
-      ...(coupon ? { couponCode: coupon } : {}),
+      couponCode: appliedCoupon,
       useMembership,
       expectedTotalPaise,
       ...(restaurantIds ? { restaurantIds } : {}),
@@ -259,6 +262,13 @@ function CheckoutContent() {
   const subsetName = restaurantIds ? groups.find((g) => g.restaurantId === restaurantIds[0])?.restaurantName : null;
   const couponOk = p?.coupon?.valid ? p.coupon : null;
   const couponBad = p?.coupon && !p.coupon.valid ? p.coupon : null;
+  // I-1: say why an unusable coupon isn't applied; Pay then charges the shown total without it (never a sure 422)
+  const scopeNames = couponBad?.reason === 'NOT_APPLICABLE' ? (couponBad.restaurantIds ?? []).map((id) => groups.find((g) => g.restaurantId === id)?.restaurantName).filter(Boolean) : [];
+  const couponProblem = couponBad
+    ? couponBad.reason === 'NOT_APPLICABLE' && restaurantIds
+      ? `${scopeNames.length ? `Applies to ${scopeNames.join(', ')}` : 'Applies to other restaurants'} — not used on this checkout. It stays on your cart for that order.`
+      : `${couponBad.message ?? `${couponBad.code} can't be used on this order.`} Not applied — you pay the total shown.`
+    : null;
   const recalculating = preview.isFetching && !!p;
   const payLabel = submitting || opening ? 'Opening secure payment…' : total !== undefined ? `Pay ${formatINR(total)}` : 'Pay';
 
@@ -393,7 +403,7 @@ function CheckoutContent() {
                         {kitchens > 1 && couponOk.discountPaise > 0 ? (couponOk.restaurantIds?.length && couponOk.restaurantIds.length < kitchens ? ', on eligible restaurants only' : `, split across ${kitchens === 2 ? 'both' : 'all'} restaurants`) : ''}
                       </span>
                     ) : (
-                      <span className="text-[13px] text-warn">{couponBad!.message ?? `${couponBad!.code} can't be used on this order.`}</span>
+                      <span className="text-[13px] text-warn">{couponProblem}</span>
                     )}
                   </span>
                   <Button variant="ghost" onClick={() => applyCoupon(null)}>

@@ -123,7 +123,7 @@ export async function reserve(ctx: AppContext, input: ReserveInput): Promise<Res
         assertCouponLive(c, now);
         // MKT-8: a scoped coupon needs at least one of its restaurants in the reserved lines
         const scope = new Set((c.restaurantIds ?? []).map((id) => String(id).toLowerCase()));
-        if (scope.size && !input.lines.some((l) => scope.has(l.restaurantId.toLowerCase()))) throw couponNotApplicableError();
+        if (scope.size && !input.lines.some((l) => scope.has(l.restaurantId.toLowerCase()))) throw couponNotApplicableError((c.restaurantIds ?? []).map((id) => String(id)));
         if (c.firstOrderOnly && (await firstOrderUsed(ctx, input.userId, session))) throw couponInvalid('FIRST_ORDER_ONLY', 'This coupon is valid on your first order only');
         if (c.perUserLimit != null && (await userRedemptionCount(ctx, c._id, input.userId, session)) >= c.perUserLimit) {
           throw couponLimit('PER_USER_LIMIT', 'You have already used this coupon');

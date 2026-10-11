@@ -386,8 +386,10 @@ turns out to be already paid, the new request fails with 409 `CONFLICT {reason:'
 nothing new is created. The cart write that marks `checkedOutVersion` is conditional on `cartVersion` and
 increments `checkoutSeq` on every creation: when the cart changed meanwhile (or another creation committed), the
 request fails with 409 `{reason:'CART_CHANGED'}` and its hold is released. A cart-level coupon that does not
-apply to the subset is dropped (preview shows the same); a coupon sent in the body that does not apply is 422
-`COUPON_INVALID {reason:'NOT_APPLICABLE'}`.
+apply to the subset (absent from the body, or echoed in it as the web does) is dropped and stays on the cart; the
+preview reports it `valid:false, reason:'NOT_APPLICABLE', restaurantIds:<scope>` so the web can say "Applies to
+<restaurant>". A different coupon sent in the body that does not apply is 422 `COUPON_INVALID {reason:'NOT_APPLICABLE'}`.
+The web sends `couponCode` only when the preview applied it (else `null`), so Pay never hits a guaranteed 422.
 Consequence: while a rolling deploy runs, old instances do not supersede (those overlaps resolve at checkout TTL,
 15 min). Overlapping unpaid checkouts are released before the new reserve, so a stock-limited item is not blocked by
 the superseded hold; a concurrent overlap that appears mid-request is superseded again inside the transaction.
