@@ -1,25 +1,29 @@
 /**
- * Checkout status (PRD C-9, M-5 "customer leaves the payment page"): polls `GET /checkouts/:id` every 3 s while
- * AWAITING_PAYMENT (plus `order.updated` SSE) and shows "Confirming payment…" until the SERVER reports the
- * order placed — the browser's payment callback is never trusted. Leaving and coming back resumes here.
- * A failed attempt (paymentStatus FAILED while still AWAITING_PAYMENT) can be retried on the same intent;
- * PAYMENT_FAILED / EXPIRED are terminal (the cart is kept).
+ * Checkout status (design-spec §7.2; PRD C-9, M-5): polls `GET /checkouts/:id` every 3 s while AWAITING_PAYMENT
+ * (plus `order.updated` SSE) and shows "Confirming your payment…" until the SERVER reports the order placed — the
+ * browser's payment callback is never trusted. Leaving and coming back resumes here.
+ *   placed → "Order placed." + per-restaurant rows with chips + "Track order"
+ *   failed attempt (still AWAITING_PAYMENT) → --bad box + "Try payment again" (same intent)
+ *   PAYMENT_FAILED / EXPIRED → neutral box, cart kept, "Back to cart" · CANCELLED → neutral box
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { useParams } from 'react-router';
-import { Badge, ButtonLink, Card, Countdown, Icon, PageHeader, Price, QueryState, Skeleton, Spinner } from '../../components/ui';
+import { ButtonLink, Countdown, ErrorState, Icon, Price, Skeleton, SkeletonList, Spinner, StatusPill } from '../../components/ui';
 import { RequireAuth } from '../../components/layout/RequireRole';
 import { usePolling } from '../../hooks/usePolling';
 import { useRealtime } from '../../hooks/useRealtime';
 import { CART_KEY, fetchCheckout, type CheckoutResponse } from './api';
-import { DemoBadge, SeparateDeliveryNote } from './parts';
+import { Accent, DemoBadge } from './parts';
 import { PayButton } from './PaymentStep';
 
 export const checkoutKey = (id: string) => ['checkout', id] as const;
 const PLACED = new Set(['PAID_PLACED', 'IN_PROGRESS', 'COMPLETED', 'PARTIALLY_COMPLETED']);
-/** Paid, then every part was cancelled/rejected (refunds follow) — not "placed" copy. */
 const SETTLED = new Set(['PAID_PLACED', 'IN_PROGRESS', 'COMPLETED', 'PARTIALLY_COMPLETED', 'CANCELLED']);
+
+function Frame({ children }: { children: React.ReactNode }) {
+  return <div className="mx-auto flex w-full max-w-[560px] flex-col gap-5 rounded-card-lg border border-line bg-card p-7 shadow-card max-sm:p-5">{children}</div>;
+}
 
 function StatusBody({ data }: { data: CheckoutResponse }) {
   const { checkout: c, payment } = data;
@@ -27,84 +31,86 @@ function StatusBody({ data }: { data: CheckoutResponse }) {
 
   if (PLACED.has(c.status)) {
     return (
-      <Card className="mx-auto max-w-xl" padding="lg">
-        <div className="mb-3 flex items-center gap-3">
-          <span className="grid size-12 place-items-center rounded-full bg-success-50 text-success-700">
-            <Icon name="check" size={28} />
-          </span>
-          <div>
-            <h2 className="text-xl font-bold text-slate-900">Order placed</h2>
-            <p className="text-sm text-slate-600">
-              Payment confirmed · <Price paise={c.pricing.totalPaise} size="sm" /> <DemoBadge show={c.isDemo} label="Demo payment" />
-            </p>
-          </div>
+      <Frame>
+        <span className="grid size-12 place-items-center rounded-full bg-ok-bg text-ok">
+          <Icon name="check" size={26} />
+        </span>
+        <div className="flex flex-col gap-1.5">
+          <h1 className="text-[34px] leading-[1.05]">
+            Order <Accent>placed.</Accent>
+          </h1>
+          <p className="flex flex-wrap items-center gap-2 text-sm text-fg-3">
+            <span className="font-mono">{c.code}</span> · Payment confirmed · <Price paise={c.pricing.totalPaise} size="sm" /> <DemoBadge show={c.isDemo} label="Demo payment" />
+          </p>
         </div>
-        <ul className="mb-4 space-y-2">
-          {c.children.map((ch) => (
-            <li key={ch.id} className="rounded-control border border-slate-200 px-3 py-2">
-              <p className="font-medium text-slate-900">{ch.restaurantName}</p>
-              <SeparateDeliveryNote note={ch.delivery?.note} />
+        <ul className="flex flex-col divide-y divide-line rounded-field border border-line">
+          {c.children.map((ch, i) => (
+            <li key={ch.id} className="flex items-center justify-between gap-3 px-4 py-3">
+              <span className="flex flex-col">
+                <span className="text-[14.5px] font-medium">{ch.restaurantName}</span>
+                <span className="font-mono text-[11px] uppercase text-fg-3">Delivery {i + 1} · delivered separately</span>
+              </span>
+              <StatusPill kind="childOrder" status={ch.status} />
             </li>
           ))}
         </ul>
-        {c.children.length > 1 ? <p className="mb-4 text-sm text-slate-600">Each restaurant confirms and delivers its part separately — track them on the order page.</p> : null}
-        <ButtonLink to={`/orders/${c.id}`} fullWidth size="lg" iconRight="chevron-right">
-          Track your order
+        {c.children.length > 1 ? <p className="text-[13.5px] text-fg-3">Each restaurant confirms and delivers its part separately — track them on the order page.</p> : null}
+        <ButtonLink to={`/orders/${c.id}`} fullWidth size="lg" iconRight="arrow-right">
+          Track order
         </ButtonLink>
-      </Card>
+      </Frame>
     );
   }
 
   if (c.status === 'CANCELLED') {
     return (
-      <Card className="mx-auto max-w-xl text-center" padding="lg">
-        <Icon name="info" size={32} className="mx-auto mb-2 text-slate-500" />
-        <h2 className="text-xl font-bold text-slate-900">This order was cancelled</h2>
-        <p className="my-3 text-sm text-slate-700">Your payment was received, but the order didn&rsquo;t go ahead. Any refund and the reason are shown on the order page.</p>
-        <ButtonLink to={`/orders/${c.id}`} size="lg">
+      <Frame>
+        <h1 className="text-[28px]">This order was cancelled</h1>
+        <div className="rounded-field border border-line bg-bg-2 p-4 text-sm text-fg-2">
+          Your payment was received, but the order didn&rsquo;t go ahead. Any refund and the reason are shown on the order page.
+        </div>
+        <ButtonLink to={`/orders/${c.id}`} size="lg" fullWidth>
           View order and refund
         </ButtonLink>
-      </Card>
+      </Frame>
     );
   }
 
   if (c.status === 'PAYMENT_FAILED' || c.status === 'EXPIRED') {
     return (
-      <Card className="mx-auto max-w-xl text-center" padding="lg" tone="warn">
-        <Icon name="alert" size={32} className="mx-auto mb-2 text-warn-700" />
-        <h2 className="text-xl font-bold text-slate-900">{c.status === 'EXPIRED' ? 'This checkout expired — your cart is still saved' : 'Payment failed — your cart is still saved'}</h2>
-        <p className="my-3 text-sm text-slate-700">You weren&rsquo;t charged for this attempt. Any reserved items were released; check the cart and try again.</p>
-        <ButtonLink to="/cart" size="lg">
+      <Frame>
+        <h1 className="text-[28px]">{c.status === 'EXPIRED' ? 'This checkout expired' : 'Payment didn’t go through'}</h1>
+        <div className="rounded-field border border-line bg-bg-2 p-4 text-sm text-fg-2">
+          {c.status === 'EXPIRED' ? 'This checkout expired — your cart is still saved.' : 'Payment failed — your cart is still saved.'} You weren&rsquo;t charged for this attempt, and any reserved items were released.
+        </div>
+        <ButtonLink to="/cart" size="lg" fullWidth>
           Back to cart
         </ButtonLink>
-      </Card>
+      </Frame>
     );
   }
 
-  // AWAITING_PAYMENT
   const attemptFailed = c.paymentStatus === 'FAILED';
   return (
-    <Card className="mx-auto max-w-xl text-center" padding="lg">
+    <Frame>
       {attemptFailed ? (
         <>
-          <Icon name="alert" size={32} className="mx-auto mb-2 text-danger-700" />
-          <h2 className="text-xl font-bold text-slate-900" role="status">
+          <h1 className="text-[28px]" role="status">
             Payment failed — try again
-          </h2>
-          <p className="my-3 text-sm text-slate-700">The payment didn&rsquo;t go through. Your items are held until the timer runs out.</p>
+          </h1>
+          <div className="rounded-field bg-bad-bg p-4 text-sm text-bad">The payment didn&rsquo;t go through. Your items are held until the timer runs out.</div>
         </>
       ) : (
         <>
-          <Spinner className="mx-auto mb-3" />
-          <h2 className="text-xl font-bold text-slate-900" role="status" aria-live="polite">
-            Confirming payment…
-          </h2>
-          <p className="my-3 text-sm text-slate-700">
-            We&rsquo;re waiting for the payment provider to confirm. This page updates automatically — it&rsquo;s safe to leave and come back.
-          </p>
+          <Spinner size={28} label={null} />
+          <h1 className="text-[28px]" role="status" aria-live="polite">
+            Confirming your payment…
+          </h1>
+          <p className="text-sm text-fg-2">We&rsquo;re waiting for the payment provider to confirm. This page updates automatically — it&rsquo;s safe to leave and come back.</p>
+          <SkeletonList count={Math.min(3, c.children.length || 1)} />
         </>
       )}
-      <p className="mb-4 flex items-center justify-center gap-2 text-sm text-slate-600">
+      <p className="flex flex-wrap items-center gap-2 text-sm text-fg-3">
         Amount <Price paise={c.pricing.totalPaise} size="sm" />
         {c.expiresAt ? (
           <>
@@ -113,17 +119,13 @@ function StatusBody({ data }: { data: CheckoutResponse }) {
         ) : null}
       </p>
       {payment ? (
-        <div className="flex flex-col items-center gap-2">
-          {!attemptFailed ? <p className="text-sm text-slate-600">Haven&rsquo;t paid yet, or closed the payment window?</p> : null}
-          <PayButton payment={payment} context={ctx} variant={attemptFailed ? 'primary' : 'secondary'} label={attemptFailed ? 'Try again' : undefined} />
+        <div className="flex flex-col gap-2">
+          {!attemptFailed ? <p className="text-sm text-fg-3">Haven&rsquo;t paid yet, or closed the payment window?</p> : null}
+          <PayButton payment={payment} context={ctx} variant={attemptFailed ? 'primary' : 'secondary'} label={attemptFailed ? 'Try payment again' : undefined} />
         </div>
       ) : null}
-      {c.isDemo ? (
-        <Badge tone="info" className="mt-4">
-          Demo mode — simulated payment
-        </Badge>
-      ) : null}
-    </Card>
+      {c.isDemo ? <DemoBadge show label="Demo mode — simulated payment" /> : null}
+    </Frame>
   );
 }
 
@@ -147,24 +149,18 @@ function StatusView({ checkoutId }: { checkoutId: string }) {
     }
   }, [placed, qc]);
 
-  return (
-    <>
-      <PageHeader
-        title={q.data ? `Order ${q.data.checkout.code}` : 'Order status'}
-        back={{ to: '/orders', label: 'Orders' }}
-      />
-      <QueryState query={q} loading={<Skeleton className="mx-auto h-64 w-full max-w-xl" />} errorTitle="Couldn't load the payment status">
-        {(data) => <StatusBody data={data} />}
-      </QueryState>
-    </>
-  );
+  if (q.isPending) return <Skeleton className="mx-auto h-72 w-full max-w-[560px] rounded-card-lg" />;
+  if (q.isError) return <ErrorState error={q.error} title="Couldn't load the payment status" onRetry={() => void q.refetch()} retrying={q.isFetching} />;
+  return <StatusBody data={q.data} />;
 }
 
 export default function CheckoutStatusPage() {
   const { checkoutId = '' } = useParams();
   return (
-    <RequireAuth signInMessage="Sign in to see your payment status.">
-      <StatusView checkoutId={checkoutId} />
-    </RequireAuth>
+    <div className="pt-6">
+      <RequireAuth signInMessage="Sign in to see your payment status.">
+        <StatusView checkoutId={checkoutId} />
+      </RequireAuth>
+    </div>
   );
 }

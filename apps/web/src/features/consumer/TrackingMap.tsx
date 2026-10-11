@@ -1,18 +1,16 @@
 /**
- * Live delivery tracking for one child order (PRD C-10): `GET /deliveries/tracking/:childOrderId` plus
- * `delivery.location` SSE updates (merged into the query cache by OrderDetailPage). Shows partner first name +
- * vehicle, a partner marker, "updated Xs ago", a stale warning after 60 s and the SIMULATED label.
+ * Live delivery tracking for one child order (13-14, 13-16; PRD C-10): `GET /deliveries/tracking/:childOrderId`
+ * (DLV-3 `remaining` ETA) plus `delivery.location` SSE updates merged into the query cache by OrderDetailPage.
+ * Map = framed Leaflet map with the restaurant point (ORD-4), the rider and the drop pin; SIMULATED LOCATION only
+ * when the payload says so; stale warning after 60 s.
  */
 import { useQuery } from '@tanstack/react-query';
 import { lazy, Suspense } from 'react';
 import type { GeoPoint } from '@thali/contracts';
-import { Badge, Icon, RelativeTime, Skeleton } from '../../components/ui';
+import { Icon, MapFrame, MapPlaceholder, Skeleton } from '../../components/ui';
 import type { MapMarker } from '../../components/ui/Map';
 import { useNow } from '../../hooks/useNow';
-import { isNotFound } from '../../lib/errors';
-import { humanize } from '../../components/ui/StatusPill';
 import { fetchTracking, type TrackingView } from './api';
-import { EtaText } from './parts';
 
 const MapView = lazy(() => import('../../components/ui/Map').then((m) => ({ default: m.MapView })));
 
@@ -24,66 +22,43 @@ export function useTracking(childId: string, enabled: boolean) {
     queryKey: trackingKey(childId),
     queryFn: () => fetchTracking(childId),
     enabled,
-    refetchInterval: 30_000,
+    refetchInterval: enabled ? 30_000 : false,
     retry: false,
   });
 }
 
-export function TrackingMap({ childId, drop, enabled = true }: { childId: string; drop?: GeoPoint | null; enabled?: boolean }) {
-  const tracking = useTracking(childId, enabled);
-  const now = useNow(1000);
+export function isStale(t: TrackingView | undefined, now: number): boolean {
+  if (!t) return false;
+  const last = t.lastLocationAt ? Date.parse(t.lastLocationAt) : null;
+  return t.stale || (last !== null && now - last > STALE_AFTER_SEC * 1000);
+}
 
-  if (tracking.isPending) return <Skeleton className="h-48 w-full" />;
-  if (tracking.isError) {
-    return (
-      <p className="flex items-center gap-2 text-sm text-slate-600">
-        <Icon name="bike" size={16} />
-        {isNotFound(tracking.error) ? 'Finding a delivery partner…' : "Live tracking isn't available right now. We'll keep trying."}
-      </p>
-    );
-  }
-  const t: TrackingView = tracking.data;
-  const lastAt = t.lastLocationAt ? Date.parse(t.lastLocationAt) : null;
-  const stale = t.stale || (lastAt !== null && now - lastAt > STALE_AFTER_SEC * 1000);
+export function TrackingMap({ tracking, restaurant, drop, restaurantName }: { tracking: TrackingView | undefined; restaurant: GeoPoint | null; drop: GeoPoint | null; restaurantName: string }) {
+  const now = useNow(5000);
   const markers: MapMarker[] = [];
-  if (t.location) markers.push({ id: 'partner', position: t.location, kind: 'partner', label: t.partner ? `${t.partner.firstName} (delivery partner)` : 'Delivery partner' });
+  if (restaurant) markers.push({ id: 'restaurant', position: restaurant, kind: 'restaurant', label: restaurantName });
+  if (tracking?.location) markers.push({ id: 'partner', position: tracking.location, kind: 'partner', label: tracking.partner ? `${tracking.partner.firstName} (delivery partner)` : 'Delivery partner' });
   if (drop) markers.push({ id: 'home', position: drop, kind: 'home', label: 'Your address' });
-
+  const center = tracking?.location ?? drop ?? restaurant;
+  const simulated = !!tracking?.simulated;
+  const aria = `Map showing ${tracking?.location ? 'the rider' : 'the route'} between ${restaurantName} and your address.${simulated ? ' Location is simulated.' : ''}`;
+  const stale = isStale(tracking, now);
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center gap-2 text-sm text-slate-700">
-        <Icon name="bike" size={16} />
-        {t.partner ? (
-          <span>
-            {t.partner.firstName} · {humanize(t.partner.vehicleType)}
-          </span>
-        ) : (
-          <span>Finding a delivery partner…</span>
-        )}
-        {t.simulated ? (
-          <Badge tone="info" icon="info">
-            SIMULATED
-          </Badge>
-        ) : null}
-        <EtaText minutes={t.estimatedMinutes} source={t.estimateSource} />
-      </div>
-      {t.location ? (
-        <>
-          <Suspense fallback={<Skeleton className="h-56 w-full" />}>
-            <MapView center={t.location} markers={markers} ariaLabel="Delivery partner location" className="h-56" />
+    <div className="relative">
+      <MapFrame simulated={simulated} ariaLabel={aria}>
+        {center ? (
+          <Suspense fallback={<Skeleton className="h-full w-full rounded-none" />}>
+            <MapView center={center} markers={markers} fitToMarkers={markers.length > 1} ariaLabel={aria} className="h-full" />
           </Suspense>
-          <p className="flex flex-wrap items-center gap-2 text-xs text-slate-600" aria-live="polite">
-            <RelativeTime value={t.lastLocationAt} prefix="updated" />
-            {stale ? (
-              <span className="inline-flex items-center gap-1 font-medium text-warn-800">
-                <Icon name="alert" size={14} /> Location may be out of date
-              </span>
-            ) : null}
-          </p>
-        </>
-      ) : (
-        <p className="text-sm text-slate-600">The partner&rsquo;s live location appears once they pick up your order.</p>
-      )}
+        ) : (
+          <MapPlaceholder animate={false} />
+        )}
+      </MapFrame>
+      {stale ? (
+        <p role="status" className="absolute bottom-3 left-3.5 z-[400] inline-flex items-center gap-1.5 rounded-pill bg-warn-bg px-3 py-1.5 text-[12.5px] font-medium text-warn">
+          <Icon name="alert" size={14} /> Location may be out of date
+        </p>
+      ) : null}
     </div>
   );
 }

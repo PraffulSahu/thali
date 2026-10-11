@@ -1,203 +1,292 @@
 /**
- * Order detail (PRD C-10/C-11/C-12, §4.5, context §7): one card per restaurant (child order) with its own
- * status timeline, delivery tracking ("Delivered separately"), refund state ("Refund initiated" while
- * REQUESTED/PROCESSING vs "Refunded" once SUCCEEDED), explanations for rejected/cancelled parts, adjusted
- * totals, cancel (only while PLACED), reorder and a support link. Live via `order.updated` /
- * `delivery.location` SSE with polling fallback.
+ * Order tracking (board 13, design-spec §5.13; PRD C-10/C-11/C-12): `GET /orders/:checkoutId`, one card per
+ * restaurant (child order):
+ *   headline by status ("On the way — about 9 min" from DLV-3 `remaining`, else the static child ETA; source line)
+ *   · status pill · map (restaurant point ORD-4, rider, drop; SIMULATED tag) · 7-step timeline with IST times ·
+ *   rider row ("Ravi · Scooter", "Location updated 3s ago") · delivery code boxes · Cancel (only `canCancel`) ·
+ *   rejected/cancelled explanation + refund progress (Initiated → Processing → Refunded) + struck items.
+ * Aside: payment card (Paid / Refunded / Refund pending / Net paid / Net after pending refund), delivering to,
+ * Get help (→ support ticket prefilled), Reorder (changes dialog → Go to cart), rate each delivered part once
+ * (MKT-14 `ratings/mine` decides "Rate" vs "You rated 4 ★"). Live via `order.updated` / `delivery.location` SSE
+ * with 10 s polling fallback.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import {
-  Badge,
+  Avatar,
   Button,
   ButtonLink,
-  Card,
+  CodeDigits,
   ConfirmDialog,
   Dialog,
-  FoodMarker,
-  Icon,
-  PageHeader,
-  Price,
-  QueryState,
-  RealtimeStatus,
-  SkeletonList,
+  ErrorState,
+  ExplanationBox,
+  InfoNotice,
+  Lbl,
+  LiveIndicator,
+  ORDER_STEPS,
+  REFUND_STEPS,
+  RelativeTime,
+  Skeleton,
+  SkeletonCard,
   StatusPill,
+  Stepper,
   useToast,
+  VegMark,
 } from '../../components/ui';
 import { RequireAuth } from '../../components/layout/RequireRole';
-import { statusLabel } from '../../components/ui/StatusPill';
+import { humanize } from '../../components/ui/StatusPill';
 import { useRealtime } from '../../hooks/useRealtime';
-import { errorMessage } from '../../lib/errors';
-import { formatDateTime, formatINR, formatTime, plural } from '../../lib/format';
+import { useNow } from '../../hooks/useNow';
+import { errorMessage, isApiError } from '../../lib/errors';
+import { formatINR, plural } from '../../lib/format';
 import { cn } from '../../lib/cn';
 import {
   cancelChild,
   CART_KEY,
+  fetchMyRatings,
   fetchOrder,
-  refundLabel,
+  isDemoEstimate,
+  rateRestaurant,
   reorder,
   type AdjustedTotals,
   type CheckoutView,
   type ChildOrder,
+  type MyRating,
   type OrderExplanation,
   type ReorderChange,
   type TrackingView,
 } from './api';
-import { BreakdownRows, DemoBadge, EtaText, Row, SeparateDeliveryNote } from './parts';
-import { TrackingMap, trackingKey } from './TrackingMap';
-
-const STEPS: { status: string; label: string }[] = [
-  { status: 'PLACED', label: 'Placed' },
-  { status: 'ACCEPTED', label: 'Accepted' },
-  { status: 'PREPARING', label: 'Preparing' },
-  { status: 'READY_FOR_PICKUP', label: 'Ready' },
-  { status: 'PICKED_UP', label: 'Picked up' },
-  { status: 'OUT_FOR_DELIVERY', label: 'On the way' },
-  { status: 'DELIVERED', label: 'Delivered' },
-];
-const TRACKABLE = new Set(['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKED_UP', 'OUT_FOR_DELIVERY']);
-const REFUND_PENDING = new Set<string>(['REQUESTED', 'PROCESSING']);
+import { PageContainer } from './ConsumerLayout';
+import { Accent, BillList, istTime, relativeDay } from './parts';
+import { TrackingMap, trackingKey, useTracking } from './TrackingMap';
 
 export const orderKey = (checkoutId: string) => ['order', checkoutId] as const;
+const ACTIVE = new Set(['PLACED', 'ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKED_UP', 'OUT_FOR_DELIVERY']);
+const TERMINAL_BAD = new Set(['REJECTED', 'CANCELLED', 'DELIVERY_FAILED', 'EXPIRED', 'PAYMENT_FAILED']);
+const RIDER_STATUSES = new Set(['ASSIGNED', 'AT_PICKUP', 'PICKED_UP', 'OUT_FOR_DELIVERY']);
+const STEP_STATUS = ['PLACED', 'ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKED_UP', 'OUT_FOR_DELIVERY', 'DELIVERED'];
+const rupees = (p: number) => formatINR(p);
 
 /** Amount of this part's refund: the explanation's `refundPaise` (server), else the child's `refundRequestedPaise`. */
 export function childRefundAmount(c: ChildOrder, explanation?: OrderExplanation): number {
   const requested = explanation?.refundPaise ?? c.refundRequestedPaise ?? 0;
   if (c.refundStatus === 'SUCCEEDED') return c.refundedPaise || requested;
-  return Math.max(0, requested - (c.refundedPaise ?? 0)) || requested;
+  return requested || Math.max(0, c.refundedPaise ?? 0);
 }
 
-/** Local explanation only for states the server doesn't explain (it explains REJECTED/CANCELLED/DELIVERY_FAILED). */
-function localExplanation(c: ChildOrder): string | null {
-  switch (c.status) {
+function riderAssigned(c: ChildOrder): boolean {
+  return (c.deliveryStatus != null && RIDER_STATUSES.has(c.deliveryStatus)) || c.status === 'PICKED_UP' || c.status === 'OUT_FOR_DELIVERY';
+}
+
+/** Step times from the status history (first time each status was reached). */
+function stepTimes(c: ChildOrder): (string | undefined)[] {
+  const at = new Map<string, string>();
+  for (const h of c.statusHistory ?? []) if (h.at && !at.has(h.to)) at.set(h.to, h.at);
+  if (c.placedAt && !at.has('PLACED')) at.set('PLACED', c.placedAt);
+  return STEP_STATUS.map((s) => (at.get(s) ? istTime(at.get(s)!).replace(/ (AM|PM)$/, '') : undefined));
+}
+
+function Headline({ child, tracking, now }: { child: ChildOrder; tracking?: TrackingView; now: number }) {
+  const R = child.restaurantName;
+  const h = (text: React.ReactNode, accent?: React.ReactNode) => (
+    <p className="text-[26px] font-semibold leading-[1.1] tracking-[-0.03em] max-sm:text-[22px]">
+      {text}
+      {accent ? <Accent>{accent}</Accent> : null}
+    </p>
+  );
+  switch (child.status) {
+    case 'AWAITING_PAYMENT':
+      return h('Waiting for payment');
+    case 'PLACED':
+      return h(`Waiting for ${R} to accept`);
+    case 'ACCEPTED':
+    case 'PREPARING': {
+      const mins = child.readyEta ? Math.max(1, Math.round((Date.parse(child.readyEta) - now) / 60000)) : child.prepMinutes;
+      return mins ? h('Being prepared — ', `ready in about ${mins} min`) : h('Being prepared');
+    }
+    case 'READY_FOR_PICKUP':
+      return h('Ready — waiting for pickup');
+    case 'PICKED_UP':
+    case 'OUT_FOR_DELIVERY': {
+      const mins = tracking?.remaining?.minutes ?? child.eta.etaMinutes;
+      return mins != null ? h('On the way — ', `about ${mins} min`) : h('On the way');
+    }
+    case 'DELIVERED': {
+      const at = child.deliveredAt ?? child.statusHistory?.find((x) => x.to === 'DELIVERED')?.at;
+      return h(at ? `Delivered at ${istTime(at)}` : 'Delivered');
+    }
+    case 'REJECTED':
+      return <p className="text-[22px] font-semibold leading-[1.15] tracking-[-0.025em]">Couldn&rsquo;t be prepared</p>;
+    case 'CANCELLED':
+      return <p className="text-[22px] font-semibold leading-[1.15] tracking-[-0.025em]">Cancelled</p>;
+    case 'DELIVERY_FAILED':
+      return <p className="text-[22px] font-semibold leading-[1.15] tracking-[-0.025em]">Delivery failed</p>;
     case 'EXPIRED':
-      return 'Payment was not completed in time, so this order was not placed. You were not charged.';
-    case 'PAYMENT_FAILED':
-      return 'Payment failed, so this order was not placed.';
+      return <p className="text-[22px] font-semibold leading-[1.15] tracking-[-0.025em]">Expired</p>;
     default:
-      return null;
+      return h(humanize(child.status));
   }
 }
 
-function Timeline({ child }: { child: ChildOrder }) {
-  if (child.statusHistory?.length) {
-    return (
-      <ol className="space-y-1 border-l-2 border-slate-200 pl-3 text-sm" aria-label="Status history">
-        {child.statusHistory.map((h, i) => (
-          <li key={`${h.to}-${h.at}-${i}`} className="relative">
-            <span className="absolute -left-[1.05rem] top-1.5 size-2 rounded-full bg-brand-500" aria-hidden />
-            <span className="font-medium text-slate-900">{statusLabel('childOrder', h.to)}</span>{' '}
-            {h.at ? (
-              <time className="text-slate-600" dateTime={h.at}>
-                {formatTime(h.at)}
-              </time>
-            ) : null}
-            {h.reason ? <span className="block text-slate-600">{h.reason}</span> : null}
-          </li>
-        ))}
-      </ol>
-    );
+function etaSourceLine(child: ChildOrder, tracking?: TrackingView): string | null {
+  if (child.status === 'PICKED_UP' || child.status === 'OUT_FOR_DELIVERY') {
+    const src = tracking?.remaining?.source ?? tracking?.estimateSource ?? child.eta.etaSource;
+    return isDemoEstimate(src) ? 'Arrival time is a demo estimate' : 'Arrival time is an estimate';
   }
-  const idx = STEPS.findIndex((s) => s.status === child.status);
-  if (idx < 0) return null;
+  if (child.status === 'ACCEPTED' || child.status === 'PREPARING') return 'Ready time is the restaurant’s estimate';
+  if (child.deliveryStatus === 'AT_PICKUP') return 'Your rider is at the restaurant';
+  return null;
+}
+
+function RefundProgress({ child, amount }: { child: ChildOrder; amount: number }) {
+  const failed = child.refundStatus === 'FAILED';
+  const current = child.refundStatus === 'SUCCEEDED' ? 3 : 1;
   return (
-    <ol className="flex flex-wrap gap-x-1 gap-y-2 text-xs" aria-label="Order progress">
-      {STEPS.map((s, i) => (
-        <li key={s.status} className="flex items-center gap-1" aria-current={i === idx ? 'step' : undefined}>
-          <span
-            className={cn(
-              'inline-flex items-center gap-1 rounded-pill px-2 py-0.5',
-              i < idx && 'bg-success-50 text-success-800',
-              i === idx && 'bg-brand-600 font-semibold text-white',
-              i > idx && 'bg-slate-100 text-slate-600',
-            )}
-          >
-            {i < idx ? <Icon name="check" size={12} /> : null}
-            {s.label}
-          </span>
-          {i < STEPS.length - 1 ? <span className="text-slate-300" aria-hidden>›</span> : null}
-        </li>
-      ))}
-    </ol>
+    <div className="flex min-w-0 flex-[1_1_300px] flex-col gap-2.5">
+      <span className="text-[13px] font-medium">Refund {rupees(amount)}</span>
+      <Stepper
+        label={`Refund ${rupees(amount)}`}
+        tone="refund"
+        steps={REFUND_STEPS}
+        current={current}
+        responsive={false}
+        terminal={failed ? { label: 'Refund failed — we’re retrying', tone: 'bad' } : undefined}
+      />
+      {child.refundStatus === 'REQUESTED' || child.refundStatus === 'PROCESSING' ? <p className="text-xs text-fg-3">Refunds usually reach your account in 5–7 working days.</p> : null}
+    </div>
   );
 }
 
-function ChildCard({ order, child, explanation }: { order: CheckoutView; child: ChildOrder; explanation: OrderExplanation | undefined }) {
+function ChildCard({ order, child, n, explanation, otherActive }: { order: CheckoutView; child: ChildOrder; n: number; explanation: OrderExplanation | undefined; otherActive: string | null }) {
   const qc = useQueryClient();
+  const now = useNow(30_000);
   const [confirm, setConfirm] = useState(false);
-  const refund = refundLabel(child.refundStatus);
-  const trackable = TRACKABLE.has(child.status) && (child.deliveryStatus !== null || ['PICKED_UP', 'OUT_FOR_DELIVERY'].includes(child.status));
-  const showCode = ['ACCEPTED', 'PREPARING', 'READY_FOR_PICKUP', 'PICKED_UP', 'OUT_FOR_DELIVERY'].includes(child.status);
-  const supportHref = `/support?checkoutId=${order.id}&childOrderId=${child.id}`;
+  const withRider = riderAssigned(child) && child.status !== 'DELIVERED' && !TERMINAL_BAD.has(child.status);
+  const tracking = useTracking(child.id, withRider);
+  const t = tracking.data;
+  const terminal = TERMINAL_BAD.has(child.status);
+  const refunding = child.refundStatus && child.refundStatus !== 'NONE';
+  const riderName = t?.partner?.firstName ?? child.partner?.name ?? null;
+  const vehicle = t?.partner?.vehicleType ?? child.partner?.vehicleType ?? null;
+  const sourceLine = etaSourceLine(child, t);
+  const showMap = withRider && (child.status === 'PICKED_UP' || child.status === 'OUT_FOR_DELIVERY' || !!t?.location);
+  const showCode = withRider;
+  const times = stepTimes(child);
+  const stepIdx = child.status === 'DELIVERED' ? STEP_STATUS.length : Math.max(0, STEP_STATUS.indexOf(child.status));
+  const explanationText =
+    explanation?.message ??
+    (child.status === 'EXPIRED' ? 'Payment was not completed in time, so this part was not placed. You were not charged.' : child.status === 'PAYMENT_FAILED' ? 'Payment failed, so this part was not placed.' : null);
+
   return (
-    <Card as="section" aria-label={child.restaurantName}>
-      <div className="flex flex-wrap items-start justify-between gap-2">
-        <div>
-          <h2 className="text-lg font-semibold text-slate-900">{child.restaurantName}</h2>
-          <p className="text-xs text-slate-600">Order {child.code}</p>
+    <article aria-label={`Delivery ${n} · ${child.restaurantName}`} className="animate-rise overflow-hidden rounded-card border border-line bg-card" style={{ animationDelay: `${(n - 1) * 0.1}s` }}>
+      <div className="flex flex-wrap items-start justify-between gap-3 px-5 py-[18px]">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Lbl>
+            Delivery {n} · {child.restaurantName}
+          </Lbl>
+          <Headline child={child} tracking={t} now={now} />
+          {sourceLine ? <span className="text-[13px] text-fg-3">{sourceLine}</span> : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {child.canCancel ? (
+            <Button variant="danger-outline" size="xs" onClick={() => setConfirm(true)} aria-label={`Cancel ${child.restaurantName} order`}>
+              Cancel order
+            </Button>
+          ) : null}
           <StatusPill kind="childOrder" status={child.status} />
-          {child.deliveryStatus ? <StatusPill kind="delivery" status={child.deliveryStatus} /> : null}
+          {child.deliveryStatus === 'AT_PICKUP' && !terminal ? <StatusPill kind="delivery" status="AT_PICKUP" /> : null}
         </div>
       </div>
-      <SeparateDeliveryNote note={child.delivery?.note} className="mt-1" />
 
-      <div className="mt-3 space-y-3">
-        <Timeline child={child} />
-        {explanation || localExplanation(child) ? (
-          <p className="rounded-control bg-warn-50 px-3 py-2 text-sm text-warn-800">{explanation?.message ?? localExplanation(child)}</p>
-        ) : null}
-        {refund ? (
-          <p className={cn('flex items-center gap-1.5 text-sm font-semibold', child.refundStatus === 'SUCCEEDED' ? 'text-success-800' : child.refundStatus === 'FAILED' ? 'text-danger-700' : 'text-info-800')}>
-            {refund} <Price paise={childRefundAmount(child, explanation)} size="sm" tone={child.refundStatus === 'SUCCEEDED' ? 'success' : 'default'} />
-          </p>
-        ) : null}
-        {child.refundStatus === 'FAILED' ? <p className="text-sm text-slate-600">The refund attempt failed and is being retried. Contact support if it doesn&rsquo;t arrive.</p> : null}
-        {REFUND_PENDING.has(child.refundStatus) ? <p className="text-xs text-slate-600">Refunds usually reach your account in 5–7 working days.</p> : null}
+      {showMap ? (
+        <TrackingMap tracking={t} restaurant={child.restaurant?.location ?? null} drop={order.deliveryAddress?.location ?? null} restaurantName={child.restaurantName} />
+      ) : null}
 
-        {showCode ? (
-          <p className="text-sm text-slate-700">
-            Delivery code <span className="ml-1 rounded-control bg-slate-900 px-2 py-0.5 font-mono text-base font-bold tracking-[0.3em] text-white">{child.deliveryCode}</span>
-            <span className="block text-xs text-slate-600">Share it with the delivery partner only when you receive this order.</span>
-          </p>
-        ) : null}
-        {TRACKABLE.has(child.status) && child.eta.etaMinutes != null && !trackable ? (
-          <EtaText minutes={child.eta.etaMinutes} distanceKm={child.eta.distanceKm} source={child.eta.etaSource} />
-        ) : null}
-        {trackable ? <TrackingMap childId={child.id} drop={order.deliveryAddress?.location ?? null} /> : null}
+      {!terminal ? (
+        <div className={cn('px-5 py-[18px]', (showMap || withRider) && 'border-b border-line', !showMap && 'border-t border-line')}>
+          <Stepper label={`${child.restaurantName} order progress`} steps={ORDER_STEPS.map((label, i) => ({ label, time: times[i] }))} current={stepIdx} showTimes />
+        </div>
+      ) : null}
 
-        <details className="text-sm">
-          <summary className="min-h-touch cursor-pointer py-2 font-medium text-slate-800">Items and bill ({child.lines.length})</summary>
-          <ul className="mb-2 space-y-1">
-            {child.lines.map((l, i) => (
-              <li key={`${l.itemId}-${i}`} className="flex items-start justify-between gap-2">
-                <span className="flex items-start gap-2">
-                  <FoodMarker veg={l.isVeg} size={12} className="mt-1" />
-                  <span>
-                    {l.quantity} × {l.name}
-                    {l.addOns.length ? <span className="block text-xs text-slate-600">{l.addOns.map((a) => a.name).join(', ')}</span> : null}
-                  </span>
+      {withRider ? (
+        <div className="flex flex-wrap items-center justify-between gap-5 px-5 py-4 max-sm:flex-col max-sm:items-stretch">
+          <div className="flex items-center gap-3">
+            <Avatar name={riderName ?? '?'} size={40} />
+            <span className="flex flex-col gap-0.5">
+              <span className="text-[15px] font-medium">{riderName ? `${riderName}${vehicle ? ` · ${humanize(vehicle)}` : ''}` : 'Rider assigned'}</span>
+              <span className="text-[13px] text-fg-3" aria-live="polite">
+                {t?.lastLocationAt ? (
+                  <>
+                    Location <RelativeTime value={t.lastLocationAt} prefix="updated" />
+                  </>
+                ) : child.deliveryStatus === 'AT_PICKUP' ? (
+                  'At the restaurant'
+                ) : tracking.isError ? (
+                  'Live location isn’t available right now'
+                ) : (
+                  'Live location appears once they start moving'
+                )}
+              </span>
+            </span>
+          </div>
+          {showCode ? (
+            <div className="flex items-center gap-3.5 max-sm:justify-between">
+              <span className="flex flex-col gap-0.5 text-right max-sm:text-left">
+                <span className="text-sm font-medium">Delivery code</span>
+                <span className="text-[12.5px] text-fg-3">Tell {riderName ?? 'your rider'} at the door</span>
+              </span>
+              <CodeDigits code={child.deliveryCode} label="Delivery code" />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {terminal ? (
+        <>
+          {explanationText ? (
+            <ExplanationBox className="mx-5" title={explanationText}>
+              {otherActive ? `Your ${otherActive} order isn’t affected and is still on its way.` : undefined}
+            </ExplanationBox>
+          ) : null}
+          <div className="flex flex-wrap items-center justify-between gap-6 px-5 py-[18px]">
+            {refunding ? <RefundProgress child={child} amount={childRefundAmount(child, explanation)} /> : null}
+            <ul className="flex flex-col gap-1.5" aria-label="Items not delivered">
+              {child.lines.map((l, i) => (
+                <li key={`${l.itemId}-${i}`} className="flex items-center gap-2.5 text-sm text-fg-3">
+                  <VegMark veg={l.isVeg} size={13} />
+                  <s>
+                    {l.quantity} × {l.name} · {formatINR(l.lineTotalPaise).replace(/\.00$/, '')}
+                  </s>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
+      ) : null}
+
+      <details className="border-t border-line px-5 text-sm">
+        <summary className="flex min-h-11 cursor-pointer items-center text-[13.5px] font-medium text-fg-2">
+          Items and bill · {plural(child.lines.reduce((s, l) => s + l.quantity, 0), 'item')} · <span className="ml-1 font-mono text-xs text-fg-3">{child.code}</span>
+        </summary>
+        <ul className="mb-3 flex flex-col gap-1.5">
+          {child.lines.map((l, i) => (
+            <li key={`${l.itemId}-${i}`} className="flex items-start justify-between gap-2">
+              <span className="flex items-start gap-2">
+                <VegMark veg={l.isVeg} size={12} className="mt-1" />
+                <span>
+                  {l.quantity} × {l.name}
+                  {l.addOns.length ? <span className="block text-xs text-fg-3">{l.addOns.map((a) => a.name).join(', ')}</span> : null}
                 </span>
-                <Price paise={l.lineTotalPaise} size="sm" />
-              </li>
-            ))}
-          </ul>
-          <BreakdownRows b={child.breakdown} totalLabel="Restaurant total" />
-        </details>
-      </div>
+              </span>
+              <span className="tabular-nums">{formatINR(l.lineTotalPaise)}</span>
+            </li>
+          ))}
+        </ul>
+        <BillList b={child.breakdown} totalLabel="Restaurant total" className="mb-4" />
+      </details>
 
-      <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
-        {(child.canCancel ?? child.status === 'PLACED') ? (
-          <Button size="sm" variant="danger" onClick={() => setConfirm(true)} aria-label={`Cancel ${child.restaurantName} order`}>
-            Cancel this order
-          </Button>
-        ) : null}
-        <ButtonLink to={supportHref} size="sm" variant="ghost" icon="ticket">
-          Get help
-        </ButtonLink>
-      </div>
       <ConfirmDialog
         open={confirm}
         onClose={() => setConfirm(false)}
@@ -212,7 +301,7 @@ function ChildCard({ order, child, explanation }: { order: CheckoutView; child: 
           void qc.invalidateQueries({ queryKey: ['orders'] });
         }}
       />
-    </Card>
+    </article>
   );
 }
 
@@ -224,7 +313,7 @@ function changeText(c: ReorderChange): string {
   return `${c.name} (${c.restaurantName}): ${c.added ? 'added with changes' : 'not added'}`;
 }
 
-export function ReorderButton({ checkoutId, size = 'sm' }: { checkoutId: string; size?: 'sm' | 'md' }) {
+export function ReorderButton({ checkoutId, size = 'sm', className, block }: { checkoutId: string; size?: 'sm' | 'md'; className?: string; block?: boolean }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -243,7 +332,7 @@ export function ReorderButton({ checkoutId, size = 'sm' }: { checkoutId: string;
   });
   return (
     <>
-      <Button size={size} variant="secondary" icon="refresh" loading={m.isPending} onClick={() => m.mutate()}>
+      <Button size={block ? 'md' : size} variant="outline" icon={block ? undefined : 'refresh'} loading={m.isPending} onClick={() => m.mutate()} className={cn(block && 'h-11 w-full', className)}>
         Reorder
       </Button>
       <Dialog
@@ -257,7 +346,7 @@ export function ReorderButton({ checkoutId, size = 'sm' }: { checkoutId: string;
         }
         footer={
           <div className="flex w-full justify-end gap-2">
-            <Button variant="secondary" onClick={() => setResult(null)}>
+            <Button variant="outline" onClick={() => setResult(null)}>
               Close
             </Button>
             <ButtonLink to="/cart" onClick={() => setResult(null)}>
@@ -266,7 +355,7 @@ export function ReorderButton({ checkoutId, size = 'sm' }: { checkoutId: string;
           </div>
         }
       >
-        <ul className="list-disc space-y-1 pl-5 text-sm text-slate-700">
+        <ul className="flex list-disc flex-col gap-1.5 pl-5 text-sm text-fg-2">
           {(result?.changes ?? []).map((c, i) => (
             <li key={`${c.restaurantId}-${c.itemId}-${i}`}>{changeText(c)}</li>
           ))}
@@ -276,54 +365,143 @@ export function ReorderButton({ checkoutId, size = 'sm' }: { checkoutId: string;
   );
 }
 
-function TotalsCard({ order, totals: t }: { order: CheckoutView; totals: AdjustedTotals }) {
+function PaymentCard({ order, totals: t }: { order: CheckoutView; totals: AdjustedTotals }) {
   const pending = t.refundPendingPaise > 0;
+  const row = (label: string, value: React.ReactNode, cls?: string) => (
+    <div className="flex justify-between gap-3 text-[14px]">
+      <dt className="text-fg-3">{label}</dt>
+      <dd className={cn('tabular-nums', cls)}>{value}</dd>
+    </div>
+  );
   return (
-    <Card as="section" aria-label="Payment summary">
-      <h2 className="mb-2 text-lg font-semibold text-slate-900">Payment summary</h2>
-      <BreakdownRows b={order.pricing} totalLabel="Order total" />
-      <dl className="mt-3 border-t border-slate-200 pt-2">
-        <Row label="Paid">
-          <Price paise={t.paidPaise} />
-        </Row>
-        {t.refundedPaise > 0 ? (
-          <Row label="Refunded" tone="success">
-            −{formatINR(t.refundedPaise)}
-          </Row>
-        ) : null}
-        {t.refundedPaise > 0 || pending ? (
-          <Row label="Net paid" strong={!pending}>
-            <Price paise={t.netPaise} />
-          </Row>
-        ) : null}
+    <section aria-label="Payment" className="flex flex-col gap-3 rounded-card border border-line bg-card px-5 py-[18px]">
+      <h2 className="font-sans text-[15px] font-semibold tracking-normal">Payment</h2>
+      <dl className="flex flex-col gap-3">
+        {row('Paid', rupees(t.paidPaise))}
+        {row('Refunded', t.refundedPaise > 0 ? `−${rupees(t.refundedPaise)}` : rupees(0), t.refundedPaise > 0 ? 'text-ok' : undefined)}
+        {pending ? row('Refund pending', `−${rupees(t.refundPendingPaise)}`, 'text-info') : null}
+        <div className="h-px bg-line" />
         {pending ? (
           <>
-            <Row label="Refund pending">−{formatINR(t.refundPendingPaise)}</Row>
-            <Row label="Net after pending refund" strong>
-              <Price paise={t.netPaise - t.refundPendingPaise} />
-            </Row>
+            {row('Net paid', rupees(t.netPaise))}
+            <div className="flex items-baseline justify-between gap-3">
+              <dt className="font-medium">Net after pending refund</dt>
+              <dd className="text-[22px] font-semibold tracking-[-0.02em] tabular-nums">{rupees(t.netPaise - t.refundPendingPaise)}</dd>
+            </div>
           </>
-        ) : null}
+        ) : (
+          <div className="flex items-baseline justify-between gap-3">
+            <dt className="font-medium">Net paid</dt>
+            <dd className="text-[22px] font-semibold tracking-[-0.02em] tabular-nums">{rupees(t.netPaise)}</dd>
+          </div>
+        )}
       </dl>
-      {order.isDemo ? <p className="mt-2 text-xs text-info-800">Demo order — paid with simulated money.</p> : null}
-    </Card>
+      {order.isDemo ? <p className="text-xs text-info">Demo order — paid with simulated money.</p> : null}
+    </section>
+  );
+}
+
+function RateChild({ child, rated, onRated }: { child: ChildOrder; rated: MyRating | undefined; onRated: (stars: number) => void }) {
+  const { toast } = useToast();
+  const [hover, setHover] = useState(0);
+  const rate = useMutation({
+    mutationFn: (stars: number) => rateRestaurant(child.restaurantId, child.id, stars),
+    onSuccess: (_r, stars) => {
+      onRated(stars);
+      toast({ title: `Thanks — you rated ${child.restaurantName} ${stars} ★`, tone: 'success' });
+    },
+    onError: (e) => {
+      if (isApiError(e) && e.status === 409) onRated(0);
+      else toast({ title: "Couldn't save your rating", description: errorMessage(e), tone: 'danger' });
+    },
+  });
+  if (rated) {
+    return (
+      <p className="text-[13px] text-fg-2">
+        You rated {child.restaurantName} {rated.stars > 0 ? `${rated.stars} ★` : 'already'}
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[13px] font-medium">Rate {child.restaurantName}</span>
+      <div role="group" aria-label={`Rate ${child.restaurantName}`} className="flex gap-1" onMouseLeave={() => setHover(0)}>
+        {[1, 2, 3, 4, 5].map((s) => (
+          <button
+            key={s}
+            type="button"
+            aria-label={`Rate ${s} of 5`}
+            disabled={rate.isPending}
+            onMouseEnter={() => setHover(s)}
+            onFocus={() => setHover(s)}
+            onClick={() => rate.mutate(s)}
+            className={cn('grid size-9 place-items-center rounded-item text-2xl leading-none transition-colors hover:bg-fill [@media(pointer:coarse)]:size-touch', s <= hover ? 'text-sun-ink' : 'text-line-2')}
+          >
+            ★
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RatingsAside({ order }: { order: CheckoutView }) {
+  const delivered = order.children.filter((c) => c.status === 'DELIVERED');
+  const pendingDelivery = order.children.filter((c) => ACTIVE.has(c.status));
+  const ids = delivered.map((c) => c.id);
+  const [local, setLocal] = useState<Record<string, number>>({});
+  const mine = useQuery({ queryKey: ['ratings', 'mine', ids.join(',')], queryFn: () => fetchMyRatings(ids), enabled: ids.length > 0, retry: false });
+  const byChild = new Map((mine.data ?? []).map((r) => [r.childOrderId, r]));
+  return (
+    <div className="flex flex-col gap-3">
+      {delivered.map((c) =>
+        mine.isPending ? (
+          <Skeleton key={c.id} className="h-12 w-full" />
+        ) : (
+          <RateChild
+            key={c.id}
+            child={c}
+            rated={local[c.id] !== undefined ? { childOrderId: c.id, restaurantId: c.restaurantId, stars: local[c.id]!, createdAt: null } : byChild.get(c.id)}
+            onRated={(stars) => setLocal((m) => ({ ...m, [c.id]: stars }))}
+          />
+        ),
+      )}
+      {pendingDelivery.map((c) => (
+        <p key={c.id} className="text-[12.5px] leading-normal text-fg-3">
+          You can rate {c.restaurantName} once it&rsquo;s delivered.
+        </p>
+      ))}
+    </div>
   );
 }
 
 function OrderView({ checkoutId }: { checkoutId: string }) {
   const qc = useQueryClient();
+  const [lastEventAt, setLastEventAt] = useState<number | null>(null);
   const order = useQuery({ queryKey: orderKey(checkoutId), queryFn: () => fetchOrder(checkoutId) });
-  const { status } = useRealtime<{ checkoutId?: string; childOrderId?: string; lat?: number; lng?: number; at?: string; simulated?: boolean }>(
+  const { status } = useRealtime<{ checkoutId?: string; childOrderId?: string; lat?: number; lng?: number; at?: string; simulated?: boolean; remainingMinutes?: number | null }>(
     ['order.updated', 'delivery.location'],
     (e) => {
       if (e.type === 'delivery.location' && e.data.childOrderId && typeof e.data.lat === 'number' && typeof e.data.lng === 'number') {
         const loc = { lat: e.data.lat, lng: e.data.lng };
+        const rm = e.data.remainingMinutes;
         qc.setQueryData<TrackingView>(trackingKey(e.data.childOrderId), (prev) =>
-          prev ? { ...prev, location: loc, lastLocationAt: e.data.at ?? new Date().toISOString(), stale: false, simulated: !!e.data.simulated } : prev,
+          prev
+            ? {
+                ...prev,
+                location: loc,
+                lastLocationAt: e.data.at ?? new Date().toISOString(),
+                stale: false,
+                simulated: !!e.data.simulated,
+                remaining: typeof rm === 'number' ? { minutes: rm, distanceKm: prev.remaining?.distanceKm ?? 0, source: prev.remaining?.source ?? prev.estimateSource, computedAt: new Date().toISOString() } : prev.remaining,
+              }
+            : prev,
         );
+        setLastEventAt(Date.now());
         return;
       }
       if (e.data.checkoutId === checkoutId || order.data?.checkout.children.some((c) => c.id === e.data.childOrderId)) {
+        setLastEventAt(Date.now());
         void order.refetch();
         if (e.data.childOrderId) void qc.invalidateQueries({ queryKey: trackingKey(e.data.childOrderId) });
       }
@@ -331,76 +509,104 @@ function OrderView({ checkoutId }: { checkoutId: string }) {
     { fallbackRefetch: order.refetch },
   );
 
+  if (order.isPending) {
+    return (
+      <div role="status" aria-busy="true" className="flex flex-col gap-6">
+        <span className="sr-only">Loading your order…</span>
+        <Skeleton className="h-9 w-64" />
+        <div className="flex flex-wrap gap-5">
+          <div className="flex flex-[999_1_560px] flex-col gap-4">
+            <SkeletonCard />
+            <SkeletonCard />
+          </div>
+          <div className="flex-[1_1_320px]">
+            <SkeletonCard />
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (order.isError) return <ErrorState error={order.error} title="Couldn't load this order" onRetry={() => void order.refetch()} retrying={order.isFetching} />;
+
+  const detail = order.data;
+  const o = detail.checkout;
+  const byChild = new Map(detail.explanations.map((x) => [x.childOrderId, x]));
+  const a = o.deliveryAddress;
+  const when = o.placedAt ?? o.createdAt;
+  const meta = [when ? `Placed ${relativeDay(when)}` : null, plural(o.children.length, 'restaurant'), a ? [a.label, a.locality ?? a.line2 ?? a.city].filter(Boolean).join(', ') : null].filter(Boolean).join(' · ');
+  const activeName = (exclude: string) => o.children.find((c) => c.id !== exclude && ACTIVE.has(c.status))?.restaurantName ?? null;
+
   return (
-    <QueryState query={order} loading={<SkeletonList count={2} />} errorTitle="Couldn't load this order">
-      {(detail) => {
-        const o = detail.checkout;
-        const byChild = new Map(detail.explanations.map((x) => [x.childOrderId, x]));
-        return (
-          <>
-            <PageHeader
-              title={`Order ${o.code}`}
-              back={{ to: '/orders', label: 'Orders' }}
-              status={
-                <span className="flex flex-wrap items-center gap-2">
-                  <StatusPill kind="checkout" status={o.status} />
-                  <DemoBadge show={o.isDemo} label="Demo order" />
-                </span>
-              }
-              description={o.placedAt ? `Placed ${formatDateTime(o.placedAt)}` : o.createdAt ? `Created ${formatDateTime(o.createdAt)}` : undefined}
-              actions={<ReorderButton checkoutId={o.id} />}
-            />
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              {o.children.length > 1 ? (
-                <p className="text-sm text-slate-700">
-                  <Badge tone="info">{o.children.length} restaurants</Badge> {o.deliveryExplanation ?? 'Each restaurant delivers its part separately.'}
-                </p>
-              ) : (
-                <span />
-              )}
-              <RealtimeStatus status={status} />
-            </div>
-            {o.status === 'AWAITING_PAYMENT' ? (
-              <Card tone="warn" className="mb-4">
-                <p className="text-sm text-warn-800">
-                  We&rsquo;re still waiting for payment confirmation.{' '}
-                  <Link className="font-semibold underline" to={`/checkout/status/${o.id}`}>
-                    View payment status
-                  </Link>
-                </p>
-              </Card>
-            ) : null}
-            <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
-              <div className="space-y-4">
-                {o.children.map((c) => (
-                  <ChildCard key={c.id} order={o} child={c} explanation={byChild.get(c.id)} />
-                ))}
-              </div>
-              <aside className="space-y-4 lg:sticky lg:top-20 lg:self-start">
-                <TotalsCard order={o} totals={detail.adjustedTotals} />
-                {o.deliveryAddress ? (
-                  <Card>
-                    <h2 className="mb-1 text-sm font-semibold text-slate-900">Delivering to</h2>
-                    <p className="text-sm text-slate-700">{[o.deliveryAddress.line1, o.deliveryAddress.line2, o.deliveryAddress.city, o.deliveryAddress.pincode].filter(Boolean).join(', ')}</p>
-                  </Card>
-                ) : null}
-                <ButtonLink to={`/support?checkoutId=${o.id}`} variant="secondary" fullWidth icon="ticket">
-                  Help with this order
-                </ButtonLink>
-              </aside>
-            </div>
-          </>
-        );
-      }}
-    </QueryState>
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="flex flex-col gap-2.5">
+          <nav aria-label="Breadcrumb" className="flex gap-1.5 text-[13px] text-fg-3">
+            <Link to="/orders" className="hover:text-fg">
+              Orders
+            </Link>
+            <span aria-hidden="true">/</span>
+            <span aria-current="page" className="font-mono">
+              {o.code}
+            </span>
+          </nav>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="font-mono text-[30px] font-medium tracking-[-0.02em] max-sm:text-2xl">{o.code}</h1>
+            <StatusPill kind="checkout" status={o.status} />
+          </div>
+          <span className="text-sm text-fg-3">{meta}</span>
+        </div>
+        <LiveIndicator status={status} updatedAt={lastEventAt ?? order.dataUpdatedAt} />
+      </div>
+
+      {o.status === 'AWAITING_PAYMENT' ? (
+        <InfoNotice tone="warn" icon="clock">
+          <span>
+            We&rsquo;re still waiting for payment confirmation.{' '}
+            <Link className="font-semibold underline" to={`/checkout/status/${o.id}`}>
+              View payment status
+            </Link>
+          </span>
+        </InfoNotice>
+      ) : null}
+
+      <div className="flex flex-wrap items-start gap-5">
+        <div className="flex min-w-0 flex-[999_1_560px] flex-col gap-4">
+          {o.children.map((c, i) => (
+            <ChildCard key={c.id} order={o} child={c} n={i + 1} explanation={byChild.get(c.id)} otherActive={activeName(c.id)} />
+          ))}
+        </div>
+        <aside className="flex w-full max-w-[380px] flex-[1_1_320px] flex-col gap-4 max-lg:max-w-none">
+          <PaymentCard order={o} totals={detail.adjustedTotals} />
+          {a ? (
+            <section aria-label="Delivering to" className="flex flex-col gap-2 rounded-card border border-line bg-card px-5 py-[18px]">
+              <Lbl>Delivering to</Lbl>
+              <span className="text-[14.5px] font-medium">{a.label || 'Delivery address'}</span>
+              <span className="text-[13.5px] leading-normal text-fg-3">
+                {[a.line1, a.line2, a.locality, a.city].filter(Boolean).join(', ')} {a.pincode}
+                {a.landmark ? ` · near ${a.landmark}` : ''}
+              </span>
+            </section>
+          ) : null}
+          <div className="grid grid-cols-2 gap-2">
+            <ButtonLink to={`/support?new=1&orderId=${o.id}`} variant="outline" className="h-11 w-full">
+              Get help
+            </ButtonLink>
+            <ReorderButton checkoutId={o.id} block />
+          </div>
+          <RatingsAside order={o} />
+        </aside>
+      </div>
+    </div>
   );
 }
 
 export default function OrderDetailPage() {
   const { checkoutId = '' } = useParams();
   return (
-    <RequireAuth signInMessage="Sign in to see your order.">
-      <OrderView checkoutId={checkoutId} />
-    </RequireAuth>
+    <PageContainer>
+      <RequireAuth signInMessage="Sign in to see your order.">
+        <OrderView checkoutId={checkoutId} />
+      </RequireAuth>
+    </PageContainer>
   );
 }

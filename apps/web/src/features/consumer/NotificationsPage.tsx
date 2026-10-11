@@ -1,21 +1,22 @@
-/** In-app notifications: `GET /notifications` (cursor pages, unreadCount), `POST /notifications/:id/read`; live via SSE `notification`. */
+/**
+ * Notifications (design-spec §7.2): rows with an unread --acc dot, title, body, relative time; row → its target
+ * (and marks it read); "Mark as read" per row; "Mark all as read" marks every loaded unread row (the API has no
+ * bulk endpoint). `GET /notifications` (cursor pages, unreadCount), `POST /notifications/:id/read`; live via SSE.
+ */
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router';
-import { Badge, Button, Card, EmptyState, ErrorState, Icon, LoadMore, PageHeader, RealtimeStatus, SkeletonList } from '../../components/ui';
+import { Button, EmptyState, ErrorState, LiveIndicator, LoadMore, PageHeader, SkeletonList, useToast } from '../../components/ui';
 import { RequireAuth } from '../../components/layout/RequireRole';
 import { useRealtime } from '../../hooks/useRealtime';
-import { api } from '../../lib/api';
+import { errorMessage } from '../../lib/errors';
 import { formatRelative } from '../../lib/format';
 import { cn } from '../../lib/cn';
-import { fetchNotifications, type InAppNotification } from './api';
+import { fetchNotifications, markNotificationRead, UNREAD_KEY, type InAppNotification } from './api';
+import { PageContainer } from './ConsumerLayout';
 
-export const NOTIFICATIONS_KEY = ['notifications'] as const;
+export const NOTIFICATIONS_KEY = ['notifications', 'list'] as const;
 
-/**
- * Deep link for a notification. Customer order templates currently carry no ids (notifications handlers send
- * `{code, totalPaise}` etc.), so: checkoutId → order; childOrderId → orders list resolves the child; any
- * other order_* template → orders list.
- */
+/** Deep link for a notification: checkoutId → order; childOrderId → orders list resolves it; ticket; membership. */
 export function targetOf(n: InAppNotification): string | null {
   const d = n.data ?? {};
   if (typeof d.checkoutId === 'string') return `/orders/${d.checkoutId}`;
@@ -29,66 +30,76 @@ export function targetOf(n: InAppNotification): string | null {
 function NotificationsList() {
   const qc = useQueryClient();
   const navigate = useNavigate();
+  const { toast } = useToast();
   const q = useInfiniteQuery({
     queryKey: NOTIFICATIONS_KEY,
     queryFn: ({ pageParam }) => fetchNotifications(pageParam),
     initialPageParam: null as string | null,
     getNextPageParam: (last) => last.nextCursor,
   });
-  const { status } = useRealtime(['notification'], () => void q.refetch(), { fallbackRefetch: q.refetch });
-  const read = useMutation({
-    mutationFn: (id: string) => api(`/notifications/${id}/read`, { method: 'POST' }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: NOTIFICATIONS_KEY }),
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: NOTIFICATIONS_KEY });
+    void qc.invalidateQueries({ queryKey: UNREAD_KEY });
+  };
+  const { status } = useRealtime(['notification'], () => refresh(), { fallbackRefetch: q.refetch });
+  const read = useMutation({ mutationFn: markNotificationRead, onSuccess: refresh });
+  const readAll = useMutation({
+    mutationFn: async (ids: string[]) => {
+      for (const id of ids) await markNotificationRead(id);
+    },
+    onSettled: refresh,
+    onError: (e) => toast({ title: "Couldn't mark everything as read", description: errorMessage(e), tone: 'danger' }),
   });
 
   if (q.isPending) return <SkeletonList count={4} />;
   if (q.isError && !q.data) return <ErrorState error={q.error} title="Couldn't load notifications" onRetry={() => void q.refetch()} />;
   const items = q.data.pages.flatMap((p) => p.items);
   const unread = q.data.pages[0]?.unreadCount ?? 0;
+  const unreadIds = items.filter((n) => !n.readAt).map((n) => n.id);
   return (
     <>
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <p className="text-sm text-slate-700">{unread ? <Badge tone="brand">{unread} unread</Badge> : 'All caught up'}</p>
-        <RealtimeStatus status={status} />
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-fg-2" aria-live="polite">
+          {unread ? `${unread} unread` : 'All caught up'}
+        </p>
+        <div className="flex items-center gap-3">
+          <LiveIndicator status={status} variant="inline" />
+          {unreadIds.length ? (
+            <Button variant="ghost" size="sm" loading={readAll.isPending} onClick={() => readAll.mutate(unreadIds)}>
+              Mark all as read
+            </Button>
+          ) : null}
+        </div>
       </div>
       {items.length === 0 ? (
         <EmptyState icon="bell" title="No notifications yet" description="Order updates, refunds and support replies appear here." />
       ) : (
-        <ul className="space-y-2">
+        <ul className="divide-y divide-line overflow-hidden rounded-card border border-line bg-card">
           {items.map((n) => {
             const to = targetOf(n);
+            const open = () => {
+              if (!n.readAt) read.mutate(n.id);
+              if (to) navigate(to);
+            };
             return (
-              <Card as="li" key={n.id} padding="sm" className={cn('list-none', !n.readAt && 'border-brand-200 bg-brand-50/40')}>
-                <div className="flex items-start gap-3">
-                  <Icon name="bell" size={18} className={cn('mt-0.5', n.readAt ? 'text-slate-400' : 'text-brand-600')} />
-                  <div className="min-w-0 flex-1">
-                    <p className={cn('text-slate-900', !n.readAt && 'font-semibold')}>{n.title || 'Update'}</p>
-                    {n.body ? <p className="text-sm text-slate-700">{n.body}</p> : null}
-                    <p className="text-xs text-slate-500">
-                      <time dateTime={n.createdAt}>{formatRelative(n.createdAt)}</time>
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1">
-                    {to ? (
-                      <Button
-                        size="sm"
-                        variant="link"
-                        onClick={() => {
-                          if (!n.readAt) read.mutate(n.id);
-                          navigate(to);
-                        }}
-                      >
-                        View
-                      </Button>
-                    ) : null}
-                    {!n.readAt ? (
-                      <Button size="sm" variant="ghost" onClick={() => read.mutate(n.id)} disabled={read.isPending && read.variables === n.id}>
-                        Mark read
-                      </Button>
-                    ) : null}
-                  </div>
-                </div>
-              </Card>
+              <li key={n.id} className={cn('flex items-start gap-3 px-4 py-3.5', !n.readAt && 'bg-acc-soft/40')}>
+                <span aria-hidden="true" className={cn('mt-1.5 size-2 shrink-0 rounded-full', n.readAt ? 'bg-transparent' : 'bg-acc')} />
+                <button type="button" onClick={open} disabled={!to && !!n.readAt} className="flex min-w-0 flex-1 flex-col gap-0.5 text-left disabled:cursor-default">
+                  <span className={cn('text-[14.5px] text-fg', !n.readAt ? 'font-semibold' : 'font-medium')}>
+                    {n.title || 'Update'}
+                    {!n.readAt ? <span className="sr-only"> (unread)</span> : null}
+                  </span>
+                  {n.body ? <span className="text-[13px] text-fg-2">{n.body}</span> : null}
+                  <time dateTime={n.createdAt} className="text-xs text-fg-3">
+                    {formatRelative(n.createdAt)}
+                  </time>
+                </button>
+                {!n.readAt ? (
+                  <Button size="xs" variant="ghost" onClick={() => read.mutate(n.id)} disabled={read.isPending && read.variables === n.id}>
+                    Mark as read
+                  </Button>
+                ) : null}
+              </li>
             );
           })}
         </ul>
@@ -100,11 +111,11 @@ function NotificationsList() {
 
 export default function NotificationsPage() {
   return (
-    <>
-      <PageHeader title="Notifications" back={{ to: '/account', label: 'Account' }} />
+    <PageContainer width="narrow">
+      <PageHeader size="page" title="Notifications" back={{ to: '/account', label: 'Account' }} />
       <RequireAuth signInMessage="Sign in to see your notifications.">
         <NotificationsList />
       </RequireAuth>
-    </>
+    </PageContainer>
   );
 }
