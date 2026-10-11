@@ -26,7 +26,9 @@
     "dev": "bash scripts/dev.sh",
     "seed": "tsx scripts/seed.ts",
     "smoke": "tsx scripts/smoke.ts",
-    "e2e": "npm run stack:up && npm run seed && npm run test -w @thali/e2e"
+    "e2e": "npm run stack:up && npm run seed && npm run test -w @thali/e2e",
+    "seed:images": "tsx scripts/seed-images.ts",
+    "demo:traffic": "tsx scripts/demo-traffic.ts"
   },
   "devDependencies": {
     "@types/cookie-parser": "1.4.10",

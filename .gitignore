@@ -9,3 +9,4 @@ test-results
 .DS_Store
 scripts/mongo-keyfile
 .playwright-mcp/
+.cache/
