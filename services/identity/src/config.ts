@@ -12,7 +12,11 @@ const intEnv = (def: number, min = 0) => z.coerce.number().int().min(min).defaul
 const isLocalHost = (h: string) =>
   h === 'localhost' || h.endsWith('.localhost') || h === '0.0.0.0' || h === '[::1]' || h === '::1' || /^127\./.test(h);
 
-export const DEFAULT_DEMO_PHONE_PREFIXES = '+91900,+91910,+91920,+91930';
+/**
+ * Demo-OTP prefixes in demo mode: only the generated Bengaluru ranges (consumers +9191010…, owners +9192020…,
+ * partners +9193030…), not whole mobile series; the named demo accounts are in DEMO_PHONES.
+ */
+export const DEFAULT_DEMO_PHONE_PREFIXES = '+9191010,+9192020,+9193030';
 
 export const identityConfigShape = {
   SERVICE_NAME: z.literal('identity').default('identity'),

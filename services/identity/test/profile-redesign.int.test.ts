@@ -148,7 +148,7 @@ describe('demo phone prefixes (contract 8)', () => {
   const env = (over: Record<string, string>) => ({ ...baseEnv('x:'), ...over });
 
   it('default prefixes in demo mode; none elsewhere; invalid prefixes rejected', () => {
-    expect(loadIdentityConfig(env({ APP_MODE: 'demo' })).DEMO_PHONE_PREFIXES).toEqual(['+91900', '+91910', '+91920', '+91930']);
+    expect(loadIdentityConfig(env({ APP_MODE: 'demo' })).DEMO_PHONE_PREFIXES).toEqual(['+9191010', '+9192020', '+9193030']);
     expect(loadIdentityConfig(env({ APP_MODE: 'sandbox' })).DEMO_PHONE_PREFIXES).toEqual([]);
     expect(loadIdentityConfig(env({ APP_MODE: 'demo', DEMO_PHONE_PREFIXES: '+91955' })).DEMO_PHONE_PREFIXES).toEqual(['+91955']);
     expect(() => loadIdentityConfig(env({ DEMO_PHONE_PREFIXES: '91910' }))).toThrow(/DEMO_PHONE_PREFIXES/);
@@ -156,17 +156,18 @@ describe('demo phone prefixes (contract 8)', () => {
 
   it('demoOtpAllowed: prefix match only in demo mode with DEMO_OTP_ENABLED', () => {
     const demo = loadIdentityConfig(env({ APP_MODE: 'demo', DEMO_OTP_ENABLED: 'true' }));
-    expect(demoOtpAllowed(demo, '+919101234567')).toBe(true);
-    expect(demoOtpAllowed(demo, '+919301234567')).toBe(true);
+    expect(demoOtpAllowed(demo, '+919101012345')).toBe(true);
+    expect(demoOtpAllowed(demo, '+919303034567')).toBe(true);
+    expect(demoOtpAllowed(demo, '+919101234567')).toBe(false); // same series, outside the generated range
     expect(demoOtpAllowed(demo, '+919876543210')).toBe(false);
-    expect(demoOtpAllowed({ ...demo, DEMO_OTP_ENABLED: false }, '+919101234567')).toBe(false);
+    expect(demoOtpAllowed({ ...demo, DEMO_OTP_ENABLED: false }, '+919101012345')).toBe(false);
     const sandbox = loadIdentityConfig(env({ APP_MODE: 'sandbox', DEMO_OTP_ENABLED: 'true', DEMO_PHONE_PREFIXES: '+91910' }));
     expect(demoOtpAllowed(sandbox, '+919101234567')).toBe(false);
   });
 
-  it('a generated Bengaluru consumer (+91910…) signs in with 123456 and no SMS', async () => {
+  it('a generated Bengaluru consumer (+9191010…) signs in with 123456 and no SMS', async () => {
     const app = h.appWith({ APP_MODE: 'demo', DEMO_OTP_ENABLED: 'true', OTP_RESEND_COOLDOWN_SEC: '0' });
-    const phone = `+91910${String(Date.now()).slice(-7)}`;
+    const phone = `+9191010${String(Date.now()).slice(-5)}`;
     const before = h.notifications.sent.length;
     const r1 = await request(app).post('/api/v1/auth/otp/request').send({ phone });
     expect(r1.status).toBe(200);

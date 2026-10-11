@@ -355,8 +355,8 @@ redemptions, ledger and payout totals follow `priceCheckout` output). Randomness
 only timestamps move with an `anchor` that `scripts/seed.ts` passes to every service, so a re-run on another
 day inserts nothing new. Writes go through `ensureDocsBulk` (service-kit `/seed`): find-missing by `_id`, validate
 the chunk once, `insertMany({ordered:false})`; a unique clash with a non-seed document throws `SeedConflictError`.
-Generated phones use `+91910` (consumers), `+91920` (owners) and `+91930` (partners), all covered by
-`DEMO_PHONE_PREFIXES`, so every generated account signs in with the demo OTP in demo mode. The seed must write the
+Generated phones use `+9191010…` (consumers), `+9192020…` (owners) and `+9193030…` (partners), exactly the
+default `DEMO_PHONE_PREFIXES`, so every generated account signs in with the demo OTP in demo mode. The seed must write the
 denormalised fields the new services read: `pureVeg`, `address.locality`, `searchTokens`, `menuStats` (marketplace
 `recomputeMenuStats`/`recomputeSearchTokens`), `customerContact.phoneLast4` and `restaurantSetKey:'*'` (orders),
 delivery job codes, `drop.area`, `drop.label` and `pickup.phone`. The seed-owned service area (`blr-koramangala`)

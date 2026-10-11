@@ -12,7 +12,7 @@
  *
  * The CLI then adds the Bengaluru dataset (`./seed-blr.ts`; skip with SEED_BLR=0): 1,000 consumers (+91910…),
  * ~450 owners (+91920…) and 250 partners (+91930…). Demo OTP 123456 works for DEMO_PHONES and every number
- * under DEMO_PHONE_PREFIXES (default +91900,+91910,+91920,+91930 in demo mode).
+ * under DEMO_PHONE_PREFIXES (default +9191010,+9192020,+9193030 in demo mode: the generated ranges only).
  */
 import { authenticator } from 'otplib';
 import type { Connection } from 'mongoose';
