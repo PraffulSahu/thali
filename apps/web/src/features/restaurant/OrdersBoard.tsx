@@ -71,6 +71,7 @@ export default function OrdersBoard() {
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: keys.orders(restaurant.id) });
     void qc.invalidateQueries({ queryKey: keys.dashboard(restaurant.id) });
+    void qc.invalidateQueries({ queryKey: keys.placedAll });
   };
 
   const active = stream.active;
@@ -81,6 +82,12 @@ export default function OrdersBoard() {
   const kitchen = active.filter((o) => o.status === 'ACCEPTED' || o.status === 'PREPARING');
   const ready = active.filter((o) => o.status === 'READY_FOR_PICKUP');
   const endedShown = [...ended.values()].filter((e) => !activeIds.has(e.order.id));
+
+  // a new order moves "Orders today": refresh the KPIs when one arrives
+  const arrivedTotal = stream.newIds.size;
+  useEffect(() => {
+    if (arrivedTotal > 0) void qc.invalidateQueries({ queryKey: keys.dashboard(restaurant.id) });
+  }, [arrivedTotal, qc, restaurant.id]);
 
   // the New tab takes over on phones when an order arrives
   const arrivals = newOrders.filter((o) => stream.newIds.has(o.id)).length;

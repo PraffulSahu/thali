@@ -70,6 +70,8 @@ export const keys = {
   items: (id: string) => ['owner', 'menu', id, 'items'] as const,
   ordersPrefix: (id: string) => ['owner', 'orders', id] as const,
   orders: (id: string) => ['owner', 'orders', id, 'active'] as const,
+  /** PLACED orders across every restaurant of the owner (no restaurantId filter). */
+  placedAll: ['owner', 'orders-all', 'placed'] as const,
   history: (id: string, filters: unknown, cursor?: string) => ['owner', 'orders', id, 'history', filters, cursor ?? null] as const,
   dashboard: (id: string) => ['owner', 'dashboard', id] as const,
   fin: (id: string, part: string, cursor?: string) => ['owner', 'finance', id, part, cursor ?? null] as const,
@@ -312,6 +314,8 @@ export const ordersApi = {
   /** Orders waiting on the restaurant (new, in the kitchen, ready), newest first. */
   active: (restaurantId: string) =>
     api<Paginated<OwnerOrder>>('/owner/orders', { query: { restaurantId, status: ACTIVE_STATUSES.join(','), limit: 100 } }),
+  /** New (PLACED) orders across all of the owner's restaurants — the API scopes to the owner when restaurantId is omitted. */
+  placedAll: () => api<Paginated<OwnerOrder>>('/owner/orders', { query: { status: 'PLACED', limit: 100 } }),
   page: (q: { restaurantId: string; status?: string; cursor?: string; limit?: number }) =>
     api<Paginated<OwnerOrder>>('/owner/orders', { query: { limit: 20, ...q } }),
   get: (childId: string) => api<OwnerOrder>(`/owner/orders/${encodeURIComponent(childId)}`),
@@ -326,7 +330,8 @@ export const ordersApi = {
     api<OwnerOrder>(`/owner/orders/${encodeURIComponent(childId)}/prep-time`, { method: 'PATCH', body: { prepMinutes } }),
 };
 
-export const PREP_TIME_OPTIONS = [10, 15, 20, 25, 30, 40, 45, 60, 90];
+/** Server accepts 5–120 minutes (accept and prep-time). */
+export const PREP_TIME_OPTIONS = [10, 15, 20, 25, 30, 40, 45, 60, 90, 120];
 
 /* ------------------------------------------------------------------ dashboard (marketplace owner-dashboard.ts) */
 

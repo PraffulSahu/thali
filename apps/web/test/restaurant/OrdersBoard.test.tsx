@@ -172,7 +172,7 @@ describe('OrdersBoard (board 20)', () => {
     expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
   });
 
-  it('preparing card: progress from acceptedAt + readyEta, "Finding partner", Mark ready / Mark as preparing', async () => {
+  it('preparing card (ACCEPTED): progress from acceptedAt + readyEta, "Finding partner", primary Start preparing, Skip to ready', async () => {
     const acceptedAt = new Date(Date.now() - 13 * 60_000 - 30_000).toISOString();
     const api = mockApi([
       ['GET', ORDERS, list(makeOrder({ status: 'ACCEPTED', acceptBy: null, acceptedAt, prepMinutes: 20, readyEta: new Date(Date.parse(acceptedAt) + 20 * 60_000).toISOString() }))],
@@ -187,13 +187,39 @@ describe('OrdersBoard (board 20)', () => {
     expect(within(card).getByText('13 of 20 min')).toBeInTheDocument();
     expect(within(card).getByText('Finding partner')).toBeInTheDocument();
     expect(within(card).getByText('2× Chicken Biryani · 1× Paneer Tikka')).toBeInTheDocument();
-    await user.click(within(card).getByRole('button', { name: 'Mark as preparing' }));
+    expect(within(card).queryByRole('button', { name: 'Mark ready' })).not.toBeInTheDocument();
+    await user.click(within(card).getByRole('button', { name: 'Start preparing' }));
     await waitFor(() => expect(api.find('POST', /preparing$/)).toHaveLength(1));
+    await user.click(within(card).getByRole('button', { name: 'Skip to ready' }));
+    await waitFor(() => expect(api.find('POST', /ready$/)).toHaveLength(1));
+  });
+
+  it('PREPARING: the primary action is Mark ready', async () => {
+    const api = mockApi([
+      ['GET', ORDERS, list(makeOrder({ status: 'PREPARING', acceptBy: null }))],
+      DASH,
+      ['POST', /\/owner\/orders\/o1\/ready$/, () => json(makeOrder({ status: 'READY_FOR_PICKUP' }))],
+    ]);
+    const user = userEvent.setup();
+    board();
+    const card = await screen.findByRole('listitem', { name: 'Order TH-8K2M4Q7A' });
+    expect(within(card).queryByRole('button', { name: 'Start preparing' })).not.toBeInTheDocument();
     await user.click(within(card).getByRole('button', { name: 'Mark ready' }));
     await waitFor(() => expect(api.find('POST', /ready$/)).toHaveLength(1));
   });
 
-  it('shows "Start preparing" when the server only allows PREPARING, and the partner name once assigned', async () => {
+  it('the New card has the accent border and other cards the hairline (no class-order reliance)', async () => {
+    mockApi([['GET', ORDERS, list(makeOrder(), makeOrder({ id: 'o2', code: 'TH-PREPARIN', status: 'PREPARING' }))], DASH]);
+    board();
+    const fresh = await screen.findByRole('listitem', { name: /New order/ });
+    expect(fresh.className).toContain('border-acc');
+    expect(fresh.className).not.toContain('border-line');
+    const prep = screen.getByRole('listitem', { name: 'Order TH-PREPARIN' });
+    expect(prep.className).toContain('border-line');
+    expect(prep.className).not.toContain('border-acc');
+  });
+
+  it('shows only "Start preparing" when the server only allows PREPARING, and the partner name once assigned', async () => {
     mockApi([
       ['GET', ORDERS, list(makeOrder({ status: 'ACCEPTED', acceptBy: null, allowedTransitions: ['PREPARING'], deliveryStatus: 'ASSIGNED', partner: { name: 'Imran Khan', vehicleType: 'BIKE' } }))],
       DASH,
@@ -360,7 +386,7 @@ describe('OrdersBoard (board 20)', () => {
   });
 
   it('phones: the kanban becomes segmented tabs', async () => {
-    vi.stubGlobal('matchMedia', (q: string) => ({ matches: !q.includes('min-width: 641px') && false, media: q, addEventListener: () => {}, removeEventListener: () => {} }));
+    vi.stubGlobal('matchMedia', (q: string) => ({ matches: false, media: q, addEventListener: () => {}, removeEventListener: () => {} }));
     mockApi([['GET', ORDERS, list(makeOrder(), makeOrder({ id: 'o4', code: 'TH-READYYYY', status: 'READY_FOR_PICKUP' }))], DASH]);
     const user = userEvent.setup();
     board();

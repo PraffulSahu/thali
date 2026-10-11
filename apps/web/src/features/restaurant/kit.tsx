@@ -23,6 +23,7 @@ export interface PopoverProps {
   align?: 'start' | 'end';
   placement?: 'down' | 'up';
   className?: string;
+  /** Size / padding of the panel. REPLACES the default `min-w-56 p-2` (no class-order overrides). */
   panelClassName?: string;
   role?: 'dialog' | 'menu';
 }
@@ -31,7 +32,7 @@ export interface PopoverProps {
  * Anchored panel: opens under (or above) its trigger, closes on outside click / Escape (focus returns to the
  * trigger) and after an action calls `close()`. The first focusable element is focused when it opens.
  */
-export function Popover({ trigger, children, label, align = 'end', placement = 'down', className, panelClassName, role = 'dialog' }: PopoverProps) {
+export function Popover({ trigger, children, label, align = 'end', placement = 'down', className, panelClassName = 'min-w-56 p-2', role = 'dialog' }: PopoverProps) {
   const [open, setOpen] = useState(false);
   const id = useId();
   const wrap = useRef<HTMLDivElement>(null);
@@ -71,7 +72,7 @@ export function Popover({ trigger, children, label, align = 'end', placement = '
           role={role}
           aria-label={label}
           className={cn(
-            'absolute z-40 min-w-56 animate-pop-in rounded-card border border-line bg-card p-2 shadow-modal',
+            'absolute z-40 animate-pop-in rounded-card border border-line bg-card shadow-modal',
             align === 'end' ? 'right-0' : 'left-0',
             placement === 'up' ? 'bottom-full mb-2' : 'top-full mt-2',
             panelClassName,

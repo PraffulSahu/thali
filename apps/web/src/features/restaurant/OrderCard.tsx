@@ -33,13 +33,13 @@ interface CommonProps {
 }
 
 /** Card frame: whole-card click opens details (clicks on controls are ignored), the code is a real button. */
-function CardFrame({ order, onOpen, className, children, label }: { order: OwnerOrder; onOpen: (o: OwnerOrder) => void; className?: string; children: ReactNode; label?: string }) {
+function CardFrame({ order, onOpen, className, children, label, accent }: { order: OwnerOrder; onOpen: (o: OwnerOrder) => void; className?: string; children: ReactNode; label?: string; /** New card: accent border (board 20) */ accent?: boolean }) {
   const click = (e: MouseEvent<HTMLElement>) => {
     if ((e.target as HTMLElement).closest('button,a,input,select,textarea,label')) return;
     onOpen(order);
   };
   return (
-    <li aria-label={label ?? `Order ${order.code}`} onClick={click} className={cn('flex cursor-pointer list-none flex-col rounded-card border border-line bg-card p-4', className)}>
+    <li aria-label={label ?? `Order ${order.code}`} onClick={click} className={cn('flex cursor-pointer list-none flex-col rounded-card border bg-card p-4', accent ? 'border-acc' : 'border-line', className)}>
       {children}
     </li>
   );
@@ -99,7 +99,11 @@ export function NewOrderCard({ order, isNew, defaultPrep, onChanged, onOpen, onE
   const windowClosed = expired || (order.acceptBy ? Date.parse(order.acceptBy) <= Date.now() : false);
   const actions = windowClosed ? [] : allowedActions(order);
   if (windowClosed || (actions.length === 0 && order.allowedTransitions)) {
-    return <KanbanEmpty title="Auto-rejected — the accept window passed" sub={`${order.code} · the customer is being refunded`} />;
+    return (
+      <li className="list-none">
+        <KanbanEmpty title="Auto-rejected — the accept window passed" sub={`${order.code} · the customer is being refunded`} />
+      </li>
+    );
   }
 
   const placed = order.placedAt ? Date.parse(order.placedAt) : NaN;
@@ -115,7 +119,8 @@ export function NewOrderCard({ order, isNew, defaultPrep, onChanged, onOpen, onE
       order={order}
       onOpen={onOpen}
       label={`New order ${order.code}`}
-      className={cn('gap-3.5 border-acc', isNew && 'motion-safe:animate-arrive', className)}
+      accent
+      className={cn('gap-3.5', isNew && 'motion-safe:animate-arrive', className)}
     >
       <div className="flex justify-between gap-3">
         <div className="flex min-w-0 flex-col gap-1">
@@ -301,7 +306,9 @@ function ChangeTime({ order, onChanged }: { order: OwnerOrder; onChanged: () => 
             columns={3}
             value={m}
             onChange={setM}
-            options={PREP_TIME_OPTIONS.filter((x) => x <= 60).map((x) => ({ value: String(x), label: `${x} min` }))}
+            options={[...new Set([...PREP_TIME_OPTIONS, ...(order.prepMinutes && order.prepMinutes <= 120 ? [order.prepMinutes] : [])])]
+              .sort((a, b) => a - b)
+              .map((x) => ({ value: String(x), label: `${x} min` }))}
           />
           <Button shape="block" fullWidth loading={save.isPending} onClick={() => save.mutate(Number(m), { onSuccess: close })}>
             Update · {m} min
@@ -332,6 +339,8 @@ export function PreparingCard({ order, onChanged, onOpen, className }: CommonPro
   const progress = prepProgress(order, now);
   const canReady = actions.includes('ready');
   const canPrep = actions.includes('preparing');
+  // row 20-36: the first allowed transition is the primary action (ACCEPTED → Start preparing, PREPARING → Mark ready)
+  const primary: 'preparing' | 'ready' | null = canPrep ? 'preparing' : canReady ? 'ready' : null;
 
   return (
     <CardFrame order={order} onOpen={onOpen} className={cn('gap-3', className)}>
@@ -355,19 +364,19 @@ export function PreparingCard({ order, onChanged, onOpen, className }: CommonPro
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-fg-3">
         {order.readyEta ? <span>Ready by {time(order.readyEta)}</span> : null}
         <ChangeTime order={order} onChanged={onChanged} />
-        {canPrep && canReady ? (
-          <button type="button" onClick={() => preparing.mutate()} disabled={preparing.isPending} className="font-medium text-fg-2 underline underline-offset-2 hover:text-fg disabled:opacity-45">
-            {preparing.isPending ? 'Updating…' : 'Mark as preparing'}
+        {primary === 'preparing' && canReady ? (
+          <button type="button" onClick={() => ready.mutate()} disabled={ready.isPending} className="font-medium text-fg-2 underline underline-offset-2 hover:text-fg disabled:opacity-45">
+            {ready.isPending ? 'Updating…' : 'Skip to ready'}
           </button>
         ) : null}
       </div>
-      {canReady ? (
-        <Button shape="block" size="lg" className="h-11" fullWidth loading={ready.isPending} onClick={() => ready.mutate()}>
-          Mark ready
-        </Button>
-      ) : canPrep ? (
+      {primary === 'preparing' ? (
         <Button shape="block" size="lg" className="h-11" fullWidth loading={preparing.isPending} onClick={() => preparing.mutate()}>
           Start preparing
+        </Button>
+      ) : primary === 'ready' ? (
+        <Button shape="block" size="lg" className="h-11" fullWidth loading={ready.isPending} onClick={() => ready.mutate()}>
+          Mark ready
         </Button>
       ) : null}
     </CardFrame>
