@@ -8,7 +8,7 @@ import { expect, test } from '@playwright/test';
 import { call, getChild, login, placeOrder, type Json } from '../fixtures/api.js';
 import { PHONES, RESTAURANTS, SIMPLE_ITEMS } from '../fixtures/env.js';
 import { signInViaPage } from '../fixtures/otp.js';
-import { newRoleContext } from '../fixtures/ui.js';
+import { newRoleContext, selectRestaurant } from '../fixtures/ui.js';
 
 test('restaurants see and manage only their own child order', async ({ browser }) => {
   const consumer = await login('consumer3');
@@ -47,29 +47,31 @@ test('restaurants see and manage only their own child order', async ({ browser }
   const o2 = await newRoleContext(browser);
   try {
     await signInViaPage(o1.page, PHONES.owner1, '/restaurant/orders');
-    await o1.page.getByRole('combobox', { name: 'Restaurant' }).selectOption({ label: RESTAURANTS.spiceRoute.name });
-    await expect(o1.page.getByRole('heading', { name: 'Orders', level: 1 })).toBeVisible();
-    await expect(o1.page.getByText(`Live orders for ${RESTAURANTS.spiceRoute.name}`)).toBeVisible();
+    await selectRestaurant(o1.page, RESTAURANTS.spiceRoute.id);
+    await expect(o1.page.getByRole('heading', { name: 'Live orders', level: 1 })).toBeVisible();
+    await expect(o1.page.getByRole('button', { name: new RegExp(`^Switch restaurant\\. Current: ${RESTAURANTS.spiceRoute.name}`) }).first()).toBeVisible();
     const card = o1.page.getByRole('listitem', { name: `Order ${spice.code}` });
     await expect(card).toBeVisible();
     await expect(card).toContainText(SIMPLE_ITEMS.paneerTikka.name);
     await expect(o1.page.getByText(green.code)).toHaveCount(0);
     await expect(o1.page.getByRole('main')).not.toContainText(SIMPLE_ITEMS.dalMakhani.name);
 
-    await card.getByRole('button', { name: 'Accept' }).click();
-    const dialog = o1.page.getByRole('alertdialog', { name: `Accept order ${spice.code}?` });
-    await dialog.getByRole('button', { name: 'Accept order' }).click();
-    await expect(card.getByText('Accepted', { exact: true })).toBeVisible();
-    await expect(card.getByRole('group', { name: 'Pickup code' })).toBeVisible();
+    // board 20: pick a prep time pill, then "Accept · N min" (no confirm dialog)
+    await card.getByRole('group', { name: 'Prep time' }).getByRole('button', { name: '10 min' }).click();
+    await card.getByRole('button', { name: 'Accept · 10 min' }).click();
+    // the card moves to Preparing with the chosen prep time (the pickup code shows once it is ready, 20-38)
+    const accepted = o1.page.getByRole('listitem', { name: `Order ${spice.code}` });
+    await expect(accepted.getByRole('button', { name: 'Start preparing' })).toBeVisible();
+    await expect(accepted).toContainText(/of 10 min/);
 
     // ---- owner 2 UI: Green Leaf board shows only the Green Leaf part (still waiting)
     await signInViaPage(o2.page, PHONES.owner2, '/restaurant/orders');
-    await o2.page.getByRole('combobox', { name: 'Restaurant' }).selectOption({ label: RESTAURANTS.greenLeaf.name });
-    await expect(o2.page.getByText(`Live orders for ${RESTAURANTS.greenLeaf.name}`)).toBeVisible();
+    await selectRestaurant(o2.page, RESTAURANTS.greenLeaf.id);
+    await expect(o2.page.getByRole('button', { name: new RegExp(`^Switch restaurant\\. Current: ${RESTAURANTS.greenLeaf.name}`) }).first()).toBeVisible();
     const card2 = o2.page.getByRole('listitem', { name: `Order ${green.code}` });
     await expect(card2).toBeVisible();
-    await expect(card2.getByText('Placed', { exact: true })).toBeVisible();
-    await expect(card2.getByRole('button', { name: 'Accept' })).toBeVisible();
+    await expect(card2.getByRole('button', { name: /^Accept · / })).toBeVisible();
+    await expect(card2.getByRole('button', { name: 'Reject' })).toBeVisible();
     await expect(o2.page.getByText(spice.code)).toHaveCount(0);
 
     // ---- API: owner 1's action changed only the Spice Route part

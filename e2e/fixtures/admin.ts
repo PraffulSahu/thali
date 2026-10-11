@@ -44,23 +44,25 @@ export async function adminToken(): Promise<string> {
   throw new Error('admin MFA: no fresh TOTP step accepted');
 }
 
-/** UI: /admin/login -> email + password -> authenticator code -> lands on `next` (default /admin). */
+/** UI: /admin/login (→ /signin?role=admin) -> work email + password -> authenticator code -> lands on /admin, then `next`. */
 export async function adminUiLogin(page: Page, next = '/admin'): Promise<void> {
   await resetAuthRateLimits();
   await page.goto('/admin/login');
-  await page.getByLabel('Email').fill(ADMIN_EMAIL);
-  await page.getByLabel('Password').fill(ADMIN_PASSWORD);
+  await page.waitForURL(/\/signin\?role=admin/);
+  await page.getByLabel('Work email').fill(ADMIN_EMAIL);
+  await page.getByLabel(/^Password/).fill(ADMIN_PASSWORD);
   await page.getByRole('button', { name: 'Continue' }).click();
   const codeField = page.getByLabel('Authenticator code');
   await expect(codeField).toBeVisible();
   for (let attempt = 0; attempt < 4; attempt++) {
     const offset = attempt % 2; // current step, next step, (wait) current, next
     if (attempt === 2) await sleep(STEP_MS - (Date.now() % STEP_MS) + 500);
-    await codeField.fill(totp(offset));
-    await page.getByRole('button', { name: 'Verify and sign in' }).click();
+    await codeField.fill(totp(offset)); // the 6th digit submits the code (OtpInput onComplete)
+    const verify = page.getByRole('button', { name: 'Verify & continue' });
+    if (await verify.isEnabled().catch(() => false)) await verify.click().catch(() => undefined);
     const outcome = await Promise.race([
-      page.waitForURL((u) => !u.pathname.startsWith('/admin/login'), { timeout: 15_000 }).then(() => 'in' as const),
-      page.getByText(/already used|Incorrect authenticator code/i).waitFor({ timeout: 15_000 }).then(() => 'retry' as const),
+      page.waitForURL((u) => u.pathname === '/admin', { timeout: 15_000 }).then(() => 'in' as const),
+      page.getByText(/already used|Incorrect|Wait for the next code/i).first().waitFor({ timeout: 15_000 }).then(() => 'retry' as const),
     ]).catch(() => 'unknown' as const);
     if (outcome === 'in') {
       if (next !== '/admin') await page.goto(next);

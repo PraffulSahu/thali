@@ -22,7 +22,7 @@ export async function fillOtpForm(scope: Page | Locator, phone: string): Promise
 /** `/signin?next=...` then the OTP form; waits until the app navigated to `next`. */
 export async function signInViaPage(page: Page, phone: string, next = '/'): Promise<void> {
   await page.goto(`/signin?next=${encodeURIComponent(next)}`);
-  await expect(page.getByRole('heading', { name: 'Sign in to Thali' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Welcome back' })).toBeVisible();
   await fillOtpForm(page, phone);
   await page.waitForURL((u) => u.pathname === next.split('?')[0]);
 }

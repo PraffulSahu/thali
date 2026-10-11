@@ -80,14 +80,16 @@ test('server-side totals, demo payment, child orders placed exactly once', async
   const { context, page } = await newRoleContext(browser);
   try {
     await signInViaPage(page, PHONES.consumer2, '/checkout');
-    await expect(page.getByRole('heading', { name: 'Checkout', level: 1 })).toBeVisible();
-    const bill = page.getByRole('region', { name: 'Total to pay' });
+    await expect(page.getByRole('heading', { name: /Two kitchens, one payment/, level: 1 })).toBeVisible();
+    const bill = page.getByRole('complementary', { name: 'Bill, per restaurant' });
     await expect(bill).toContainText(formatINR(total));
-    await expect(bill).toContainText(formatINR(preview.pricing.itemsSubtotalPaise));
-    await expect(bill).toContainText(formatINR(preview.pricing.deliveryFeePaise));
     for (const child of preview.children as Json[]) {
-      await expect(page.getByRole('region', { name: 'Order breakdown by restaurant' }).getByRole('region', { name: child.restaurantName })).toContainText(formatINR(child.breakdown.totalPaise));
+      // one collapsible row per restaurant with its own total; the first one starts expanded with its rows
+      await expect(bill.getByRole('button', { name: new RegExp(child.restaurantName) })).toContainText(formatINR(child.breakdown.totalPaise));
     }
+    const first = (preview.children as Json[])[0];
+    await expect(bill).toContainText(formatINR(first.breakdown.itemsSubtotalPaise));
+    await expect(bill).toContainText(formatINR(first.breakdown.deliveryFeePaise));
     const pay = page.getByRole('button', { name: `Pay ${formatINR(total)}` });
     await expect(pay).toBeEnabled();
     await pay.click();
@@ -158,10 +160,10 @@ test('server-side totals, demo payment, child orders placed exactly once', async
     // cart emptied by the placement, order visible once in "Orders"
     const cart = ok(await call('GET', '/cart', { token: consumer.token }), 'GET cart');
     expect(cart.groups).toHaveLength(0);
-    await page.getByRole('link', { name: 'Track your order' }).click();
-    await expect(page.getByRole('heading', { name: `Order ${placed.checkout.code}` })).toBeVisible();
+    await page.getByRole('link', { name: 'Track order' }).click();
+    await expect(page.getByRole('heading', { name: placed.checkout.code, level: 1 })).toBeVisible();
     await page.goto('/orders');
-    await expect(page.getByText(`Order ${placed.checkout.code}`, { exact: true })).toHaveCount(1);
+    await expect(page.getByRole('link', { name: new RegExp(placed.checkout.code) })).toHaveCount(1);
   } finally {
     await context.close();
   }

@@ -10,7 +10,7 @@ import { adminToken, adminUiLogin } from '../fixtures/admin.js';
 import { PHONES, runTag } from '../fixtures/env.js';
 import { signInViaPage } from '../fixtures/otp.js';
 import { waitForEmail } from '../fixtures/stack.js';
-import { newRoleContext } from '../fixtures/ui.js';
+import { newRoleContext, selectRestaurant } from '../fixtures/ui.js';
 
 test.setTimeout(300_000);
 
@@ -77,8 +77,8 @@ test('restaurant goes live only after email verification and admin approval', as
   try {
     // owner dashboard: "verify your business email"
     await signInViaPage(o.page, PHONES.owner2, '/restaurant');
-    await o.page.getByRole('combobox', { name: 'Restaurant' }).selectOption({ label: name });
-    await expect(o.page.getByRole('heading', { name: 'Verify your business email' })).toBeVisible();
+    await selectRestaurant(o.page, id);
+    await expect(o.page.getByText('Verify your business email')).toBeVisible();
     await expect(o.page.getByRole('main')).toContainText(businessEmail);
 
     // ---- the verification email (Mailpit) -> link -> back in the web app
@@ -94,13 +94,12 @@ test('restaurant goes live only after email verification and admin approval', as
     expect(await discoNames()).not.toContain(name); // still needs approval
 
     await o.page.goto('/restaurant');
-    await o.page.getByRole('combobox', { name: 'Restaurant' }).selectOption({ label: name });
-    await expect(o.page.getByRole('heading', { name: 'Awaiting approval' })).toBeVisible();
+    await expect(o.page.getByText('Our team is reviewing your restaurant')).toBeVisible();
 
     // ---- gate 2: admin approves in the console
     await adminUiLogin(a.page, `/admin/restaurants?status=APPROVAL_PENDING&q=${encodeURIComponent(name)}`);
     await expect(a.page.getByRole('heading', { name: 'Restaurants', level: 1 })).toBeVisible();
-    await expect(a.page.getByRole('table', { name: 'Restaurants' })).toContainText(name);
+    await expect(a.page.getByRole('region', { name: 'Restaurants' })).toContainText(name);
     await a.page.goto(`/admin/restaurants/${id}`);
     await expect(a.page.getByRole('heading', { name, level: 1 })).toBeVisible();
     // the "Business email" detail shows this restaurant's address with the Verified badge
@@ -117,9 +116,9 @@ test('restaurant goes live only after email verification and admin approval', as
     expect(live.status).toBe('APPROVED');
     await expect.poll(discoNames, { timeout: 30_000 }).toContain(name);
     await o.page.reload();
-    await o.page.getByRole('combobox', { name: 'Restaurant' }).selectOption({ label: name });
-    await expect(o.page.getByRole('heading', { name: 'Awaiting approval' })).toBeHidden();
-    await expect(o.page.getByRole('heading', { name: 'Verify your business email' })).toBeHidden();
+    await expect(o.page.getByRole('button', { name: new RegExp(`^Switch restaurant\\. Current: ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }).first()).toBeVisible();
+    await expect(o.page.getByText('Our team is reviewing your restaurant')).toBeHidden();
+    await expect(o.page.getByText('Verify your business email')).toBeHidden();
   } finally {
     // keep the demo discovery list clean: take the test restaurant offline again
     await call('POST', `/admin/marketplace/restaurants/${id}/suspend`, { token: admin, body: { reason: 'e2e cleanup: test restaurant' } }).catch(() => undefined);

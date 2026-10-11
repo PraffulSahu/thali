@@ -3,8 +3,9 @@
  * Flow 7: the consumer sees accurate order and delivery progress.
  *
  * The partner works in the real partner UI with browser geolocation (Playwright permission + setGeolocation):
- * go online -> offer for this order -> accept -> arrived -> pickup code (from the restaurant) -> start ->
- * delivery code (shown to the customer). The customer's order page is open the whole time and must follow
+ * go online -> offer for this order (drop area only, DLV-2) -> Accept offer -> Call (demo note, DLV-1) -> I’ve
+ * arrived -> inline pickup code (from the restaurant) -> Start delivery -> inline delivery code (shown to the
+ * customer once a rider is assigned) -> Mark delivered. The customer's order page is open the whole time and must follow
  * every step; the API state is checked alongside.
  */
 import { expect, test, type Page } from '@playwright/test';
@@ -12,7 +13,7 @@ import { call, defaultAddress, getOrder, login, ok, owner, partner, placeOrder, 
 import { adminToken } from '../fixtures/admin.js';
 import { GEO, PHONES, RESTAURANTS, SIMPLE_ITEMS, runTag } from '../fixtures/env.js';
 import { signInViaPage } from '../fixtures/otp.js';
-import { childSection, newRoleContext } from '../fixtures/ui.js';
+import { childPill, childSection, newRoleContext } from '../fixtures/ui.js';
 
 test.setTimeout(420_000);
 
@@ -28,7 +29,7 @@ async function resetPartner(token: string): Promise<void> {
   for (const o of await partner.offers(token)) if (o.status === 'OFFERED') await partner.rejectOffer(token, o.id);
 }
 
-const pill = (page: Page, restaurant: string, text: string) => childSection(page, restaurant).getByText(text, { exact: true }).first();
+const pill = (page: Page, restaurant: string, text: string) => childPill(page, restaurant, text);
 
 test('partner delivers the order; the customer follows every step', async ({ browser }) => {
   const consumer = await login('consumer1');
@@ -49,11 +50,11 @@ test('partner delivers the order; the customer follows every step', async ({ bro
   try {
     // ---- partner goes online in the UI (shares the browser location)
     await signInViaPage(p.page, PHONES.partner1, '/partner');
-    await expect(p.page.getByRole('heading', { name: 'Partner home', level: 1 })).toBeVisible();
-    const toggle = p.page.getByRole('switch');
+    const toggle = p.page.getByRole('switch', { name: 'Online' });
     await expect(toggle).toBeVisible();
     if (!(await toggle.isChecked())) await toggle.click(); // controlled switch: flips after POST /partner/online
-    await expect(p.page.getByRole('switch', { name: 'You are online' })).toBeChecked();
+    await expect(toggle).toBeChecked();
+    await expect(p.page.getByRole('heading', { name: 'You’re online', level: 1 })).toBeVisible();
     await expect(p.page.getByTestId('tracking-status')).toContainText('Location sharing active');
     await waitFor('partner location fresh on the server', async () => {
       const prof = await partner.profile(partnerSession.token);
@@ -62,7 +63,7 @@ test('partner delivers the order; the customer follows every step', async ({ bro
 
     // ---- customer opens the order
     await signInViaPage(c.page, PHONES.consumer1, `/orders/${order.checkoutId}`);
-    await expect(c.page.getByRole('heading', { name: `Order ${order.code}` })).toBeVisible();
+    await expect(c.page.getByRole('heading', { name: order.code, level: 1 })).toBeVisible();
     await expect(pill(c.page, R, 'Placed')).toBeVisible();
 
     // ---- restaurant: accept -> preparing -> ready (API; the board UI is flow 5/8)
@@ -70,10 +71,8 @@ test('partner delivers the order; the customer follows every step', async ({ bro
     const pickupCode: string = accepted.pickupCode;
     expect(pickupCode).toMatch(/^\d{4,6}$/);
     await expect(pill(c.page, R, 'Accepted')).toBeVisible();
-    const codeBox = childSection(c.page, R).getByText(/^Delivery code/);
-    await expect(codeBox).toBeVisible();
-    const deliveryCode = (await childSection(c.page, R).locator('span.font-mono').first().innerText()).trim();
-    expect(deliveryCode).toBe((await getOrder(consumer.token, order.checkoutId)).checkout.children[0].deliveryCode);
+    const deliveryCode: string = (await getOrder(consumer.token, order.checkoutId)).checkout.children[0].deliveryCode;
+    expect(deliveryCode).toMatch(/^\d{4}$/);
 
     await owner.preparing(owner1.token, child.id);
     await expect(pill(c.page, R, 'Preparing')).toBeVisible();
@@ -94,30 +93,38 @@ test('partner delivers the order; the customer follows every step', async ({ bro
     }, { timeoutMs: 150_000, intervalMs: 3000 });
     expect(offer.job.pickup.name).toBe(R);
 
-    const card = p.page.getByRole('article', { name: `Offer from ${R}` }).filter({ hasText: tag });
+    // DLV-2: the offer shows the pickup and only the drop area (no customer name / street) until pickup
+    const card = p.page.getByRole('region', { name: new RegExp(`^Delivery offer from ${R}`) });
     await expect(card).toBeVisible();
-    await card.getByRole('button', { name: 'Accept delivery' }).click();
+    await expect(card).not.toContainText(tag);
+    await expect(card).toContainText('Full address after pickup');
+    await card.getByRole('button', { name: 'Accept offer' }).click();
 
-    const job = p.page.getByRole('article', { name: `Delivery ${child.id}` });
+    const job = p.page.getByTestId('active-delivery').filter({ hasText: child.code });
     await expect(job).toBeVisible();
-    await expect(job.getByText('Partner assigned', { exact: true })).toBeVisible();
-    await expect(pill(c.page, R, 'Partner assigned')).toBeVisible();
+    await expect(job.getByRole('button', { name: 'I’ve arrived' })).toBeVisible();
     await expect(childSection(c.page, R)).toContainText('Arjun');
+    // the customer sees the delivery code once a rider is assigned (13-17)
+    await expect(childSection(c.page, R).getByRole('group', { name: `Delivery code ${deliveryCode.split('').join(' ')}` })).toBeVisible();
 
-    // ---- collect: arrived -> pickup code
-    await job.getByRole('button', { name: "I've arrived at the restaurant" }).click();
-    await expect(job.getByText('At restaurant', { exact: true })).toBeVisible();
-    await job.getByRole('button', { name: 'Enter pickup code' }).click();
-    const pickupDialog = p.page.getByRole('dialog', { name: 'Enter pickup code' });
-    await pickupDialog.getByLabel('Pickup code').fill(pickupCode);
-    await pickupDialog.getByRole('button', { name: 'Confirm pickup' }).click();
-    await expect(job.getByText('Picked up', { exact: true })).toBeVisible();
+    // ---- call the restaurant: demo mode never dials, it says so (DLV-1)
+    await job.getByRole('button', { name: /^Call/ }).first().click();
+    await expect(job.getByTestId('contact-note')).toContainText('Calling is simulated in demo');
+
+    // ---- collect: arrived -> inline pickup code -> Confirm pickup
+    await job.getByRole('button', { name: 'I’ve arrived' }).click();
+    const pickupCodeBoxes = job.getByRole('group', { name: 'Restaurant’s pickup code' });
+    await expect(pickupCodeBoxes).toBeVisible();
+    await pickupCodeBoxes.getByLabel('Digit 1').pressSequentially(pickupCode);
+    const confirmPickup = job.getByRole('button', { name: 'Confirm pickup' });
+    if (await confirmPickup.isEnabled().catch(() => false)) await confirmPickup.click().catch(() => undefined);
+    await expect(job.getByRole('button', { name: 'Start delivery' })).toBeVisible();
     await expect(pill(c.page, R, 'Picked up')).toBeVisible();
 
     // ---- on the way: the partner moves, the customer sees live tracking
     const mid = { latitude: (GEO.nearSpiceRoute.latitude + order.address.location.lat) / 2, longitude: (GEO.nearSpiceRoute.longitude + order.address.location.lng) / 2 };
     await job.getByRole('button', { name: 'Start delivery' }).click();
-    await expect(job.getByText('On the way', { exact: true })).toBeVisible();
+    await expect(job.getByRole('group', { name: 'Customer’s delivery code' })).toBeVisible();
     await p.context.setGeolocation({ ...mid, accuracy: 10 });
     await expect(pill(c.page, R, 'Out for delivery')).toBeVisible();
     // the tracking hook throttles to one send per 5 s and drops fixes in between: keep producing fixes like a
@@ -134,13 +141,12 @@ test('partner delivers the order; the customer follows every step', async ({ bro
       throw new Error(`${e.message}; last tracking view: ${JSON.stringify(lastSeen)}`);
     });
     expect(tracking.simulated ?? false).toBe(false);
-    await expect(childSection(c.page, R).getByRole('region', { name: 'Delivery partner location' }).or(childSection(c.page, R).getByLabel('Delivery partner location'))).toBeVisible();
+    await expect(childSection(c.page, R).getByText(/Location updated/)).toBeVisible();
 
-    // ---- complete with the customer's code
-    await job.getByRole('button', { name: 'Enter delivery code' }).click();
-    const dropDialog = p.page.getByRole('dialog', { name: 'Enter delivery code' });
-    await dropDialog.getByLabel('Delivery code').fill(deliveryCode);
-    await dropDialog.getByRole('button', { name: 'Confirm delivery' }).click();
+    // ---- complete with the customer's code (inline boxes) -> Mark delivered
+    await job.getByRole('group', { name: 'Customer’s delivery code' }).getByLabel('Digit 1').pressSequentially(deliveryCode);
+    const markDelivered = job.getByRole('button', { name: 'Mark delivered' });
+    if (await markDelivered.isEnabled().catch(() => false)) await markDelivered.click().catch(() => undefined);
     await expect(job).toBeHidden();
     await expect(pill(c.page, R, 'Delivered')).toBeVisible();
 
