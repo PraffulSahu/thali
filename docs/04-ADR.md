@@ -475,5 +475,5 @@ estimates, `SIMULATED LOCATION`, payouts "Paid" only with a UTR. Screens the boa
 information architecture and are rebuilt in the same system.
 Consequence: every colour must come from a token (no hard-coded light colours) and meet the contrast targets in
 the design spec for both themes. Known polish backlog (sub-role tag slot, tab-bar order per role, shared table
-primitives) is tracked in the task reports, not in this ADR. Design sources: `.superpowers/sdd/2026-10-11-ui-redesign/`
-(design spec, overrides, boards, fonts; git-ignored working directory).
+primitives) is tracked in the task reports, not in this ADR. Design sources: [docs/design/redesign/](design/redesign/README.md)
+(design spec, overrides, gap analysis, board screenshots, illustrations).

@@ -5,8 +5,8 @@
 > app, [LLD section 10.1](03-LLD.md) and ADR-034 to ADR-041 in [04-ADR.md](04-ADR.md) are authoritative.
 > Where to look now:
 > - Design sources (Claude Design export, per-board element tables, overrides) and the backend gap analysis:
->   `.superpowers/sdd/2026-10-11-ui-redesign/` (`design-spec.md`, `design-spec-overrides.md`, `gap-analysis.md`,
->   `design/` boards, screenshots and fonts). This directory is a git-ignored working directory on the build machine.
+>   [docs/design/redesign/](design/redesign/README.md) (`design-spec.md`, `design-spec-overrides.md`, `gap-analysis.md`,
+>   board screenshots and illustrations).
 > - Implementation plan: [docs/superpowers/plans/2026-10-11-ui-redesign.md](superpowers/plans/2026-10-11-ui-redesign.md).
 > - Component library, shells, tokens and theme: `apps/web/src/README-DESIGN-SYSTEM.md`.
 > - New and changed APIs: [09-api.md](09-api.md) section 11; operations for the demo dataset: [07-runbook.md](07-runbook.md) section 14.
