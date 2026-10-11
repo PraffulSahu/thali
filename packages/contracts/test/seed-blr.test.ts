@@ -161,14 +161,14 @@ describe('seed-blr generator: distributions', () => {
     expect(w.restaurants.some((r) => r.hoursKind.includes('+off-'))).toBe(true);
   });
 
-  it('people: Indian names, phone ranges that never collide with the demo accounts, avatars, addresses', () => {
+  it('people: Indian names, phone ranges (= identity DEMO_PHONE_PREFIXES defaults) that never collide with the demo accounts, avatars, addresses', () => {
     const demoPhones = ['+919000000001', '+919000000002', '+919000000003', '+919100000001', '+919100000002', '+919200000001', '+919200000002', '+919200000003', '+919200000004'];
     const phones = [...w.consumers, ...w.owners, ...w.partners].map((u) => u.phone);
     expect(new Set(phones).size).toBe(phones.length);
     expect(phones.some((p) => demoPhones.includes(p))).toBe(false);
-    expect(w.consumers.every((c) => /^\+91910\d{7}$/.test(c.phone))).toBe(true);
-    expect(w.owners.every((c) => /^\+91920\d{7}$/.test(c.phone))).toBe(true);
-    expect(w.partners.every((c) => /^\+91930\d{7}$/.test(c.phone))).toBe(true);
+    expect(w.consumers.every((c) => /^\+9191010\d{5}$/.test(c.phone))).toBe(true);
+    expect(w.owners.every((c) => /^\+9192020\d{5}$/.test(c.phone))).toBe(true);
+    expect(w.partners.every((c) => /^\+9193030\d{5}$/.test(c.phone))).toBe(true);
     expect(w.consumers).toHaveLength(1000);
     for (const c of w.consumers) {
       expect(c.addresses.length).toBeGreaterThanOrEqual(1);

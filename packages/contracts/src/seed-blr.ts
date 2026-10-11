@@ -90,7 +90,10 @@ export const BLR_CITY_POLYGON = {
 /** The original demo polygon of `service-area:blr-koramangala` (upgraded in place to the city polygon). */
 export const BLR_LEGACY_DEMO_POLYGON = [[[77.58, 12.9], [77.68, 12.9], [77.68, 12.99], [77.58, 12.99], [77.58, 12.9]]];
 
-/** Phones: consumers +91910 1xxxxxx, owners +91920 2xxxxxx, partners +91930 3xxxxxx (demo numbers end in 000000x). */
+/**
+ * Phones: consumers +9191010xxxxx, owners +9192020xxxxx, partners +9193030xxxxx (demo numbers end in 000000x).
+ * These ranges are exactly identity's default DEMO_PHONE_PREFIXES (demo OTP in demo mode).
+ */
 export const blrPhone = {
   consumer: (j: number) => `+91910${1000001 + j}`,
   owner: (k: number) => `+91920${2000001 + k}`,
@@ -870,8 +873,11 @@ function pickCover(data: BlrData, manifest: ImageManifest, r: Rng, primary: stri
   const allow = COVER_ALLOW[primary === 'ice-cream' ? 'desserts' : primary];
   const imgs = imageById(data);
   if (allow && r.chance(0.4)) {
-    const id = r.pick(allow.filter((x) => imgs.has(x)));
-    if (id) return { ref: imageRef(data, manifest, id), id };
+    const present = allow.filter((x) => imgs.has(x));
+    if (present.length) {
+      const id = r.pick(present);
+      return { ref: imageRef(data, manifest, id), id };
+    } // none of the curated covers in images.json: fall through to the dish photo
   }
   // food-forward: a photo of a signature dish (first featured bestseller)
   const sig = items.find((it) => it.featured && it.tags.includes('bestseller')) ?? items.find((it) => it.featured) ?? items[0];

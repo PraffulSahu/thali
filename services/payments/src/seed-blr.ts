@@ -18,6 +18,8 @@ import { createMockProvider } from './providers/mock-provider.js';
 import type { PaymentsSeedConfig } from './seed.js';
 
 const ADMIN = seedId('user:admin');
+/** Calendar date in Asia/Kolkata (period bounds are IST midnights, i.e. 18:30Z of the previous UTC day). */
+const istDate = (d: Date) => new Date(d.getTime() + 330 * 60_000).toISOString().slice(0, 10);
 
 function intentDoc(co: BlrCheckout) {
   const t0 = co.placedAt;
@@ -195,7 +197,7 @@ export async function seedPaymentsBlr(conn: Connection, w: BlrWorld, cfg: Paymen
       requestedBy: ADMIN,
       confirmedBy: ADMIN,
       confirmedAt: p.paidAt,
-      notes: `Weekly settlement ${p.periodFrom.toISOString().slice(0, 10)} – ${new Date(p.periodTo.getTime() - 1).toISOString().slice(0, 10)}`,
+      notes: `Weekly settlement ${istDate(p.periodFrom)} – ${istDate(new Date(p.periodTo.getTime() - 1))}`,
       isDemo: true,
       statusHistory: [
         { from: null, to: 'REQUESTED', at: p.requestedAt, source: `admin:${ADMIN}` },
