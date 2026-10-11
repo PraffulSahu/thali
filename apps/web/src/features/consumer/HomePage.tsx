@@ -148,7 +148,7 @@ export default function HomePage() {
     );
   } else if (list.isPending) {
     body = (
-      <div role="status" aria-busy="true" className="grid grid-cols-[repeat(auto-fill,minmax(min(260px,100%),1fr))] gap-4">
+      <div role="status" aria-busy="true" className="grid grid-cols-[repeat(auto-fill,minmax(min(248px,100%),1fr))] gap-4">
         <span className="sr-only">Finding restaurants that deliver to you…</span>
         {Array.from({ length: 6 }, (_, i) => (
           <SkeletonCard key={i} />
@@ -186,7 +186,7 @@ export default function HomePage() {
   } else {
     body = (
       <>
-        <ul aria-label="Restaurants" aria-busy={list.isFetching} className="grid grid-cols-[repeat(auto-fill,minmax(min(260px,100%),1fr))] gap-4">
+        <ul aria-label="Restaurants" aria-busy={list.isFetching} className="grid grid-cols-[repeat(auto-fill,minmax(min(248px,100%),1fr))] gap-4">
           {items.map((r, i) => (
             <DiscoveryCard key={r.id} r={r} cuisines={cuisines.data} index={i % 12} />
           ))}

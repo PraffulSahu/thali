@@ -109,7 +109,14 @@ export function RestaurantCard(props: RestaurantCardProps) {
   const cover = (h: string) => (
     <div className={cn('relative overflow-hidden', h)} style={{ background: `color-mix(in srgb, ${hue} 16%, var(--card))` }}>
       {imageUrl ? (
-        <img src={imageUrl} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" />
+        <img
+          src={imageUrl}
+          alt=""
+          loading="lazy"
+          // Generated banner art (demo covers are 2:1 SVGs with the name at bottom-left) keeps its text when the
+          // card is narrower than 2:1; photos stay centred.
+          className={cn('absolute inset-0 size-full object-cover', /\.svg(\?|$)/i.test(imageUrl) && 'object-left-bottom')}
+        />
       ) : (
         <RestaurantCoverArt className="absolute inset-0 size-full" style={{ color: hue }} />
       )}
