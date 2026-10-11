@@ -149,6 +149,12 @@ async function verify(db: (name: string) => Db, prefix: string): Promise<Report>
 }
 
 // ------------------------------------------------------------------------------------- live discover --
+class DiscoveryHttpError extends Error {
+  constructor(readonly status: number) {
+    super(`discovery ${status}`);
+  }
+}
+
 /** Indiranagar / Koramangala / HSR: the first two Discover pages (gateway) repeat no cover and no restaurant name. */
 async function discoverRealism(base: string): Promise<Report['checks']> {
   const SPOTS: [string, number, number][] = [
@@ -165,7 +171,7 @@ async function discoverRealism(base: string): Promise<Report['checks']> {
       for (let page = 0; page < 2; page++) {
         const q = new URLSearchParams({ lat: String(lat), lng: String(lng), ...(cursor ? { cursor } : {}) });
         const res = await fetch(`${base}/api/v1/discovery/restaurants?${q}`, { signal: AbortSignal.timeout(10_000) });
-        if (!res.ok) throw new Error(`discovery ${res.status}`);
+        if (!res.ok) throw new DiscoveryHttpError(res.status);
         const body = (await res.json()) as { items: { name: string; imageUrl: string | null }[]; nextCursor: string | null };
         items.push(...body.items);
         cursor = body.nextCursor;
@@ -176,6 +182,8 @@ async function discoverRealism(base: string): Promise<Report['checks']> {
       for (const n of twice(items.map((i) => i.name))) nameBad.push(`${name}: ${n}`);
     }
   } catch (e) {
+    // Only an unreachable gateway is a skip; a reachable gateway answering 429/5xx is a failure.
+    if (e instanceof DiscoveryHttpError) return [{ name: 'realism: live Discover pages', ok: false, detail: `discovery answered ${e.status}` }];
     return [{ name: 'realism: live Discover pages', ok: true, detail: `skipped (${base} unreachable: ${(e as Error).message})` }];
   }
   const row = (n: string, bad: string[]) => ({ name: n, ok: bad.length === 0, detail: bad.length ? `${bad.length} repeats, e.g. ${bad.slice(0, 3).join('; ')}` : `${SPOTS.length} localities ok` });
