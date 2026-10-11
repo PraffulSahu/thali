@@ -1,6 +1,7 @@
 /**
  * Live demo traffic through the public API (`npm run demo:traffic -- --orders 6`). Requires `npm run seed`
- * (Bengaluru dataset) on a running stack in demo mode.
+ * (Bengaluru dataset) on a running stack in demo mode; refuses unless APP_MODE=demo (`.env` merged under the
+ * environment) and the stack's `/meta` reports demo mode.
  *
  * Places N real orders from generated consumers living around one area (default Indiranagar), as a customer
  * would: discovery → cart → preview → checkout (Idempotency-Key per run) → demo-pay success. Then the generated
@@ -22,6 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as pricing from '@thali/pricing';
 import { buildBlrWorld, haversineKm, type BlrConsumer, type BlrPartner, type BlrWorld } from '@thali/contracts/seed-blr';
+import { assertDemoMode, mergedEnv } from './lib/dotenv.js';
 
 const BASE = (process.env.DEMO_BASE_URL ?? 'http://localhost:5173').replace(/\/+$/, '');
 const ORIGIN = process.env.DEMO_ORIGIN ?? 'http://localhost:5173';
@@ -139,6 +141,8 @@ function pickItems(restaurantId: string, page: Json, n: number): Pick[] {
 }
 
 async function main() {
+  // like every seed script: refuse unless the local config says APP_MODE=demo (the stack's /meta is checked below too)
+  assertDemoMode(mergedEnv(), 'generate demo traffic');
   const args = process.argv.slice(2);
   const ni = args.indexOf('--orders');
   const N = Math.max(1, Math.min(20, ni >= 0 ? Number(args[ni + 1]) : 6));

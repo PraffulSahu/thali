@@ -166,7 +166,7 @@ The admin password and TOTP secret are constants in `services/identity/src/seed.
 step) prints the email, password, TOTP secret, the `otpauth://` URI and the current 6-digit code, so you can also
 copy them from the seed output. They exist only in demo data and are never created in production.
 
-The fixed OTP `123456` works only for the numbers in `DEMO_PHONES` (and, for the generated Bengaluru accounts, the prefixes in `DEMO_PHONE_PREFIXES`, default `+91900,+91910,+91920,+91930`) while `APP_MODE=demo` and
+The fixed OTP `123456` works only for the numbers in `DEMO_PHONES` (and, for the generated Bengaluru accounts, the prefixes in `DEMO_PHONE_PREFIXES`, default `+9191010,+9192020,+9193030`) while `APP_MODE=demo` and
 `DEMO_OTP_ENABLED=true` (demo phones and the fixed OTP exist in demo mode only; production refuses both). OTP requests are rate limited per phone (5 per hour), so vary the phone when you
 script flows. In production there is no fixed OTP and no demo admin: create admins with the bootstrap CLI
 ([docs/06-deployment.md](docs/06-deployment.md)).
