@@ -1,6 +1,6 @@
 # Masala UI redesign — design sources
 
-Tracked copy of the Claude Design export the 2026-10 redesign was built from (implemented on `feat/ui-redesign`).
+Tracked copy of the design export the 2026-10 redesign was built from (implemented on `feat/ui-redesign`).
 
 - `design-spec.md` — tokens, components, per-board element tables (§5), responsive rules, extrapolation for undrawn screens.
 - `design-spec-overrides.md` — controller rulings that win over the spec's fallbacks (real backend controls instead of hidden ones).

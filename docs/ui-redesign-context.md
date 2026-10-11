@@ -4,7 +4,7 @@
 > original brief, so it describes the screens and data *before* the redesign; where it differs from the app, the
 > app, [LLD section 10.1](03-LLD.md) and ADR-034 to ADR-041 in [04-ADR.md](04-ADR.md) are authoritative.
 > Where to look now:
-> - Design sources (Claude Design export, per-board element tables, overrides) and the backend gap analysis:
+> - Design sources (design export, per-board element tables, overrides) and the backend gap analysis:
 >   [docs/design/redesign/](design/redesign/README.md) (`design-spec.md`, `design-spec-overrides.md`, `gap-analysis.md`,
 >   board screenshots and illustrations).
 > - Component library, shells, tokens and theme: `apps/web/src/README-DESIGN-SYSTEM.md`.

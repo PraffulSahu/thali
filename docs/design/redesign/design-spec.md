@@ -1,6 +1,6 @@
 # Thali UI redesign — binding design specification
 
-Source of truth: the Claude Design export in `design/` (10 boards: `NN-*.html` markup/CSS + `screens/*.png`).
+Source of truth: the design export in `design/` (10 boards: `NN-*.html` markup/CSS + `screens/*.png`).
 Screenshot ↔ board map: `board-00.png` (+ `b00-0/1/2.png`) = 00 public · `board-01` = 01 sign-in · `board-02` = 02
 foundations · `board-03` = 10 discover · `board-04` = 11 restaurant (customizer open) · `board-05` = 12 checkout ·
 `board-06` = 13 tracking · `board-07` = 20 owner live · `board-08` = 30 partner home · `board-09` = 40 admin overview.

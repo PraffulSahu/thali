@@ -467,7 +467,7 @@ needs a per-provider 10-minute count in service-kit). The admin overview counts 
 
 ## ADR-041 Masala design system: tokens, light/dark/system theme, self-hosted fonts
 Status: accepted (2026-10-11, UI redesign).
-Context: the web app is rebuilt from the Claude Design export (boards 00 to 40). It needs one visual language
+Context: the web app is rebuilt from the design export (boards 00 to 40). It needs one visual language
 for four role areas, dark mode that is legible on every screen, and no third-party font requests (privacy,
 offline demo, CSP-readiness).
 Decision: design tokens are CSS custom properties in `apps/web/src/styles.css`, defined for light and dark

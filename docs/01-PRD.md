@@ -135,7 +135,7 @@ IDs are referenced from the HLD/LLD and tests.
   dead-lettered events, failed notifications, provider error counts — all measured live.
 
 ### 4.4a Redesign capabilities (2026-10-11)
-The UI redesign (Masala design system, boards 00 to 40 of the Claude Design export) adds these capabilities on
+The UI redesign (Masala design system, boards 00 to 40 of the design export) adds these capabilities on
 top of the requirements above; the matching decisions are ADR-034 to ADR-041 and the contracts are LLD 10.1.
 - **C-15 Address search**: the landing page and the location picker search addresses as you type
   (Google Places when configured, otherwise a seeded Bengaluru gazetteer in demo), resolve a place or the
