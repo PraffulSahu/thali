@@ -10,6 +10,7 @@ import {
   AddAddressCard,
   Badge,
   Button,
+  Checkbox,
   ChoicePills,
   ConfirmDialog,
   Dialog,
@@ -174,10 +175,7 @@ export function AddressForm({ initial, onSaved, onCancel }: AddressFormProps) {
           </p>
         ) : null}
       </div>
-      <label className="flex min-h-touch items-center gap-2.5 text-sm text-fg">
-        <input type="checkbox" className="size-[18px] accent-[var(--pri)]" checked={f.isDefault} onChange={(e) => setF((s) => ({ ...s, isDefault: e.target.checked }))} />
-        Make this my default address
-      </label>
+      <Checkbox label="Make this my default address" checked={f.isDefault} onChange={(e) => setF((s) => ({ ...s, isDefault: e.target.checked }))} />
       <InlineError error={save.error && Object.keys(fieldErrors(save.error)).length === 0 ? save.error : null} />
       <FormActions>
         {onCancel ? (

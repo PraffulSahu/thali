@@ -39,7 +39,7 @@ function Banners() {
     <section aria-label="Offers and highlights" className="no-scrollbar -mx-1 flex snap-x gap-3 overflow-x-auto px-1 pb-1">
       {banners.data.map((b) => (
         <Link key={b.id} to={bannerHref(b)} className="group relative flex w-72 shrink-0 snap-start flex-col overflow-hidden rounded-card border border-line bg-card hover:border-line-2 hover:shadow-card">
-          <img src={b.imageUrl} alt="" className="aspect-[2.4/1] w-full object-cover" loading="lazy" />
+          <img src={b.imageUrl} alt="" className="aspect-[2/1] w-full bg-fill object-contain" loading="lazy" />
           <span className="flex items-center gap-2 px-3.5 py-2.5 text-[13.5px] font-semibold text-fg">
             <span className="min-w-0 flex-1 truncate">{b.title}</span>
             {b.linkType === 'COUPON' ? <span className="shrink-0 font-mono text-[11px] font-medium text-acc-fg">{b.linkValue}</span> : null}

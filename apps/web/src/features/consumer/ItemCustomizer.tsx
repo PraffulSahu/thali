@@ -10,6 +10,8 @@
 import { useId, useMemo, useState, type ReactNode } from 'react';
 import type { Selection } from '@thali/contracts';
 import { Button, Dialog, Field, InlineError, Input, QtyStepper, VegMark } from '../../components/ui';
+import { CheckGlyph } from '../../components/ui/Checkbox';
+import { RadioGlyph } from '../../components/ui/Radio';
 import { formatINR } from '../../lib/format';
 import { cn } from '../../lib/cn';
 import type { CustomizationGroup, MenuItem } from './api';
@@ -63,7 +65,10 @@ function ChoiceRow({
         disabled && 'cursor-not-allowed opacity-45',
       )}
     >
-      <input id={`c${id}`} type={type} name={name} checked={checked} disabled={disabled} onChange={onChange} className="size-[18px] shrink-0 accent-[var(--pri)]" />
+      <span className="relative flex shrink-0">
+        <input id={`c${id}`} type={type} name={name} checked={checked} disabled={disabled} onChange={onChange} className="peer absolute inset-0 size-[18px] cursor-[inherit] appearance-none opacity-0" />
+        {type === 'radio' ? <RadioGlyph /> : <CheckGlyph />}
+      </span>
       <span className="min-w-0 flex-1 text-fg">
         {label}
         {unavailable ? <span className="text-fg-3"> · Unavailable</span> : null}
