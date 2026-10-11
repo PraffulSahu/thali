@@ -1,6 +1,7 @@
 /**
  * Restaurant switcher (design-spec 20-02): the KITCHEN sidebar context card (initials tile, name, locality,
- * up-down chevrons) opening a menu of every restaurant the owner has (`GET /owner/restaurants`) with a status
+ * up-down chevrons; the foundation SidebarSwitcher, which collapses to the initials tile in the tablet rail) opening a
+ * menu of every restaurant the owner has (`GET /owner/restaurants`) with a status
  * chip, plus "+ Add restaurant". Choosing one stores the selection (selection.ts); every page remounts on it.
  * The phone top bar gets a compact name button that opens the same list in a bottom sheet.
  */
@@ -10,7 +11,7 @@ import { Icon, Sheet, Skeleton, StatusPill, initials } from '../../components/ui
 import { useAuth } from '../../lib/auth';
 import { cn } from '../../lib/cn';
 import { useRestaurants, type OwnerRestaurant } from './api';
-import { Popover } from './kit';
+import { SidebarSwitcher } from '../../components/layout/RoleSidebarShell';
 import { useNewOrderCounts } from './orderStream';
 import { resolveSelected, setSelectedRestaurantId, useSelectedRestaurantId } from './selection';
 
@@ -108,32 +109,14 @@ export function RestaurantSwitcher() {
   }
   const area = restaurantArea(current);
   return (
-    <Popover
-      label="Switch restaurant"
-      align="start"
-      role="dialog"
-      panelClassName="right-0 p-2"
-      trigger={(p) => (
-        <button
-          type="button"
-          {...p}
-          aria-label={`Switch restaurant. Current: ${current.name}${area ? `, ${area}` : ''}${elsewhere ? `. ${elsewhere} new at your other restaurants` : ''}`}
-          className="flex h-[52px] w-full items-center gap-2.5 rounded-control border border-line bg-card px-2.5 text-left hover:border-line-2"
-        >
-          <span className="relative">
-            <Tile name={current.name} />
-            {elsewhere ? <span aria-hidden="true" className="absolute -right-1 -top-1 size-2.5 rounded-full border-2 border-card bg-acc" /> : null}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-medium text-fg">{current.name}</span>
-            {area ? <span className="block truncate text-xs text-fg-3">{area}</span> : null}
-          </span>
-          <Icon name="chevrons-up-down" size={14} className="shrink-0 text-fg-3" />
-        </button>
-      )}
-    >
-      {(close) => <RestaurantList list={list.data!} currentId={current.id} onPick={close} counts={counts} />}
-    </Popover>
+    <SidebarSwitcher
+      name={current.name}
+      area={area}
+      dot={elsewhere > 0}
+      aria-label={`Switch restaurant. Current: ${current.name}${area ? `, ${area}` : ''}${elsewhere ? `. ${elsewhere} new at your other restaurants` : ''}`}
+      menuLabel="Switch restaurant"
+      menu={(close) => <RestaurantList list={list.data!} currentId={current.id} onPick={close} counts={counts} />}
+    />
   );
 }
 

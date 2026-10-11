@@ -16,7 +16,7 @@ import { useNow } from '../../hooks/useNow';
 import { cn } from '../../lib/cn';
 import { errorMessage } from '../../lib/errors';
 import { PREP_TIME_OPTIONS, allowedActions, ordersApi, type OwnerOrder } from './api';
-import { Popover } from './kit';
+import { Popover } from '../../components/ui/Popover';
 import { PREP_PILLS, firstName, hasPartner, itemsLine, maskedPhone, optionText, partnerText, prepProgress } from './orderText';
 
 export type EndedKind = 'auto' | 'rejected';

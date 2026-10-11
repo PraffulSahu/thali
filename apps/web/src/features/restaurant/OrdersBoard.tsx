@@ -13,7 +13,6 @@ import {
 import { useMediaQuery } from '../../hooks/useMediaQuery';
 import { cn } from '../../lib/cn';
 import { keys, type OwnerOrder } from './api';
-import { BellOffIcon } from './kit';
 import { NewOrderCard, PreparingCard, ReadyCard, type EndedKind } from './OrderCard';
 import { OrderDetailDialog } from './OrderDetailDialog';
 import { defaultPrep } from './orderText';
@@ -29,7 +28,7 @@ function ChimeButton() {
   const sound = useSoundState();
   return (
     <Button variant="outline" aria-pressed={sound.enabled} onClick={sound.toggle} title={sound.enabled && !sound.armed ? 'Tap anywhere on the page to allow sound' : undefined}>
-      {sound.enabled ? <Icon name="bell" size={16} /> : <BellOffIcon size={16} />}
+      <Icon name={sound.enabled ? 'bell' : 'bell-off'} size={16} />
       {sound.enabled ? 'Chime on' : 'Chime off'}
     </Button>
   );

@@ -10,7 +10,7 @@ import { useCountdown } from '../../components/ui/Countdown';
 import { errorMessage } from '../../lib/errors';
 import { formatTime } from '../../lib/format';
 import { cacheRestaurant, keys, restaurantApi, type OwnerRestaurant } from './api';
-import { Popover } from './kit';
+import { Popover } from '../../components/ui/Popover';
 
 export const PAUSE_OPTIONS = [15, 30, 60];
 export const PAUSE_MAX_MINUTES = 10080;

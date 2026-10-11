@@ -40,8 +40,10 @@ export const nav: NavItem[] = [
 
 export const shell: RoleShellConfig = {
   Context: RestaurantSwitcher,
+  railContext: true,
   MobileContext: RestaurantSwitcherMobile,
   userSubtitle: 'Owner',
+  signOutAll: true,
 };
 
 export const routes: RouteObject[] = [
