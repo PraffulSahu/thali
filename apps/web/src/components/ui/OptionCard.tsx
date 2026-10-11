@@ -6,6 +6,8 @@
  *     label="Full" aside="₹249" />
  *   <OptionCard type="checkbox" checked={raita} onChange={(e) => setRaita(e.target.checked)} label="Extra raita" aside="+₹30" />
  *   <OptionCard type="checkbox" disabled label="Boiled egg" aside="+₹20" />   // " · Unavailable" suffix
+ *   <OptionCard type="checkbox" disabled disabledReason="Max 2" label="Mint chutney" />   // max reached, not sold out
+ *   <OptionCard type="radio" disabled disabledReason={null} label="…" />                 // no suffix
  */
 import { useId, type ComponentProps, type ReactNode } from 'react';
 import { cn } from '../../lib/cn';
@@ -17,9 +19,11 @@ export interface OptionCardProps extends Omit<ComponentProps<'input'>, 'type'> {
   label: ReactNode;
   description?: ReactNode;
   aside?: ReactNode;
+  /** Suffix shown while disabled (" · Unavailable" by default); e.g. "Max 2" for a max-reached group. null = none. */
+  disabledReason?: ReactNode;
 }
 
-export function OptionCard({ type, label, description, aside, disabled, checked, className, id, ...rest }: OptionCardProps) {
+export function OptionCard({ type, label, description, aside, disabled, disabledReason = 'Unavailable', checked, className, id, ...rest }: OptionCardProps) {
   const auto = useId().replace(/:/g, '');
   const inputId = id ?? `opt${auto}`;
   return (
@@ -40,7 +44,7 @@ export function OptionCard({ type, label, description, aside, disabled, checked,
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="text-fg">
           {label}
-          {disabled ? ' · Unavailable' : null}
+          {disabled && disabledReason ? <> · {disabledReason}</> : null}
         </span>
         {description ? <span className="text-[13px] text-fg-3">{description}</span> : null}
       </span>

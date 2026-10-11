@@ -13,6 +13,7 @@
  *             {groups.map((g) => <CartSlot key={g.id} … />)}
  *           </CartTray>}
  *     toast={lastAdded ? <ToastPill tone="success">Added to {lastAdded}</ToastPill> : null}
+ *     onChipClick={(id) => { setTab(id); setOpen(true); }}   // chips become buttons (open the tray on that cart)
  *   />
  *
  * Light: ink dock on the page; dark: --card dock with a --line2 border. Hidden when `itemCount` is 0.
@@ -54,10 +55,12 @@ export interface CartDockProps {
   toast?: ReactNode;
   /** Override the sub line ("2 deliveries, one payment" / "Delivered by Spice Route"). */
   subtitle?: string;
+  /** Per-cart chips (≥721px) become buttons calling this with the cart id (e.g. open the tray on that cart). */
+  onChipClick?: (id: string) => void;
   className?: string;
 }
 
-export function CartDock({ carts, itemCount, totalPaise, open, onOpenChange, checkoutHref = '/checkout', checkout, tray, toast, subtitle, className }: CartDockProps) {
+export function CartDock({ carts, itemCount, totalPaise, open, onOpenChange, checkoutHref = '/checkout', checkout, tray, toast, subtitle, onChipClick, className }: CartDockProps) {
   const trayId = useId();
   useEffect(() => {
     if (!open) return;
@@ -102,14 +105,30 @@ export function CartDock({ carts, itemCount, totalPaise, open, onOpenChange, che
             <Icon name="chevron-up" size={16} className={cn('shrink-0 opacity-70 transition-transform duration-200', open && 'rotate-180')} />
           </button>
           <ul className="ml-auto hidden items-center gap-1.5 min-[721px]:flex" aria-label="Carts">
-            {carts.map((c) => (
-              <li key={c.id}>
-                <span className="inline-flex h-[34px] items-center gap-1.5 rounded-pill border border-[color-mix(in_srgb,var(--bg)_28%,transparent)] px-3 text-[12.5px] font-medium dark:border-line-2">
+            {carts.map((c) => {
+              const chip = 'inline-flex h-[34px] items-center gap-1.5 whitespace-nowrap rounded-pill border border-[color-mix(in_srgb,var(--bg)_28%,transparent)] px-3 text-[12.5px] font-medium dark:border-line-2';
+              const body = (
+                <>
                   <span aria-hidden="true" className="size-[7px] rounded-[2px]" style={{ background: c.hue }} />
                   {c.name} · {rupees(c.subtotalPaise)}
-                </span>
-              </li>
-            ))}
+                </>
+              );
+              return (
+                <li key={c.id}>
+                  {onChipClick ? (
+                    <button
+                      type="button"
+                      onClick={() => onChipClick(c.id)}
+                      className={cn(chip, 'transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--bg)_12%,transparent)] dark:hover:bg-fill')}
+                    >
+                      {body}
+                    </button>
+                  ) : (
+                    <span className={chip}>{body}</span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
           <div className="ml-auto shrink-0 min-[721px]:ml-0">
             {checkout ?? (

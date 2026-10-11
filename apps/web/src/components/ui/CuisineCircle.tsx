@@ -11,7 +11,7 @@
  * Disc colour = color-mix(<cuisine hue> pct%, var(--card)) — works in both themes. Art = the extracted
  * illustration for known slugs; `imageUrl` (if given) wins; unknown slugs use the "all" art.
  */
-import { useRef, type MouseEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { cn } from '../../lib/cn';
 import { CuisineArt, cuisineMeta } from '../illustrations';
@@ -81,11 +81,33 @@ export function CuisineCircle({ slug, label, imageUrl, selected, onClick, to, va
 
 /**
  * Horizontal scroll-snap row. `header` renders above-left (e.g. the h2); `controls` adds 36px prev/next
- * outline buttons above-right (hidden on phones).
+ * outline buttons above-right (hidden on phones), disabled at the start / end of the row and labelled from `label`
+ * ("Scroll cuisines left" / "Scroll cuisines right").
  */
 export function CuisineTrain({ children, label, header, controls = false, className }: { children: ReactNode; label: string; header?: ReactNode; controls?: boolean; className?: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  const [edges, setEdges] = useState({ start: true, end: false });
+  const measure = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const start = el.scrollLeft <= 2;
+    const end = el.scrollLeft + el.clientWidth >= el.scrollWidth - 2;
+    setEdges((e) => (e.start === start && e.end === end ? e : { start, end }));
+  }, []);
+  useEffect(() => {
+    if (!controls) return;
+    measure();
+    const el = ref.current;
+    const ro = typeof ResizeObserver !== 'undefined' && el ? new ResizeObserver(measure) : null;
+    if (ro && el) ro.observe(el);
+    window.addEventListener('resize', measure);
+    return () => {
+      ro?.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [controls, measure]);
   const scroll = (dir: 1 | -1) => ref.current?.scrollBy({ left: dir * Math.max(240, (ref.current?.clientWidth ?? 600) * 0.7), behavior: 'smooth' });
+  const noun = label.toLowerCase();
   return (
     <div className={cn('flex flex-col gap-4', className)}>
       {header || controls ? (
@@ -93,8 +115,8 @@ export function CuisineTrain({ children, label, header, controls = false, classN
           <div className="min-w-0">{header}</div>
           {controls ? (
             <div className="hidden shrink-0 gap-2 sm:flex">
-              <IconButton icon="chevron-left" label="Scroll left" variant="outline" size="sm" onClick={() => scroll(-1)} />
-              <IconButton icon="chevron-right" label="Scroll right" variant="outline" size="sm" onClick={() => scroll(1)} />
+              <IconButton icon="chevron-left" label={`Scroll ${noun} left`} variant="outline" size="sm" disabled={edges.start} onClick={() => scroll(-1)} />
+              <IconButton icon="chevron-right" label={`Scroll ${noun} right`} variant="outline" size="sm" disabled={edges.end} onClick={() => scroll(1)} />
             </div>
           ) : null}
         </div>
@@ -103,6 +125,7 @@ export function CuisineTrain({ children, label, header, controls = false, classN
         ref={ref}
         role="list"
         aria-label={label}
+        onScroll={controls ? measure : undefined}
         className="no-scrollbar flex snap-x snap-mandatory gap-[18px] overflow-x-auto px-0.5 pb-1.5 pt-1 [mask-image:linear-gradient(90deg,#000_92%,transparent)] max-sm:gap-4"
       >
         {Array.isArray(children)

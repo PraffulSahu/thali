@@ -76,44 +76,8 @@ export function istDayLabel(now = Date.now()): string {
 
 /* ------------------------------------------------------------------ controls */
 
-export interface PillSelectProps<T extends string> {
-  label: string;
-  /** Visible prefix ("Status:"); omit for value-only pills ("Today"). */
-  prefix?: string;
-  value: T;
-  options: { value: T; label: string }[];
-  onChange: (v: T) => void;
-  className?: string;
-}
-
-/** Outline pill (30px, board 40 "Status: All" / "Today") backed by a native select for keyboard + a11y. */
-export function PillSelect<T extends string>({ label, prefix, value, options, onChange, className }: PillSelectProps<T>) {
-  const current = options.find((o) => o.value === value)?.label ?? value;
-  return (
-    <span
-      className={cn(
-        'relative inline-flex h-[30px] items-center gap-1.5 rounded-pill border border-line bg-card px-3 text-[12.5px] font-bold text-fg',
-        'focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-acc hover:border-line-2 [@media(pointer:coarse)]:min-h-touch',
-        className,
-      )}
-    >
-      <span aria-hidden="true">{prefix ? `${prefix} ${current}` : current}</span>
-      <Icon name="chevron-down" size={13} className="text-fg-3" />
-      <select
-        aria-label={label}
-        value={value}
-        onChange={(e) => onChange(e.target.value as T)}
-        className="absolute inset-0 cursor-pointer appearance-none opacity-0"
-      >
-        {options.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </span>
-  );
-}
+// Promoted to the foundation (task FP); re-exported so admin imports keep working.
+export { FilterPills, PillSelect, type PillSelectProps } from '../../components/ui/FilterPill';
 
 /** Visible explanation for a control the admin's sub-role can't use (gap-analysis §6 "gating with explanations"). */
 export function RoleNote({ children, className }: { children: ReactNode; className?: string }) {
@@ -122,33 +86,6 @@ export function RoleNote({ children, className }: { children: ReactNode; classNa
       <Icon name="lock" size={12} />
       {children}
     </span>
-  );
-}
-
-/** Status filter pills with optional counts (design-spec §7.1 Filters). */
-export function FilterPills<T extends string>({
-  label, options, value, onChange, className,
-}: { label: string; options: { value: T; label: string; count?: number | null }[]; value: T; onChange: (v: T) => void; className?: string }) {
-  return (
-    <div role="group" aria-label={label} className={cn('-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1 no-scrollbar', className)}>
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          aria-pressed={o.value === value}
-          onClick={() => onChange(o.value)}
-          className={cn(
-            'inline-flex h-[34px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-pill border px-3 text-[13px] font-medium transition-colors duration-150 [@media(pointer:coarse)]:min-h-touch',
-            o.value === value ? 'border-pri bg-pri text-pri-fg' : 'border-line bg-card text-fg-2 hover:border-line-2 hover:text-fg',
-          )}
-        >
-          {o.label}
-          {typeof o.count === 'number' ? (
-            <span className={cn('font-mono text-[11px]', o.value === value ? 'text-pri-fg/80' : 'text-fg-3')}>{o.count}</span>
-          ) : null}
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -308,37 +245,8 @@ export function DemoTag({ children = 'DEMO' }: { children?: ReactNode }) {
 
 /* ------------------------------------------------------------------ detail pages (design-spec §7.1 two columns) */
 
-/** Main `flex:999 1 560px` + aside `flex:1 1 320px; max-width:380px`, wrapping to one column. */
-export function DetailColumns({ main, aside }: { main: ReactNode; aside: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-start gap-[18px]">
-      <div className="flex min-w-0 flex-[999_1_560px] flex-col gap-[18px]">{main}</div>
-      <aside className="flex min-w-0 flex-[1_1_320px] flex-col gap-[18px] lg:max-w-[380px]">{aside}</aside>
-    </div>
-  );
-}
+export { DetailColumns, HistoryTimeline } from '../../components/ui/HistoryTimeline';
 
-/** Vertical status-history list (newest first): "Awaiting approval → Approved · 11 Oct, 7:42 pm · reason". */
-export function HistoryTimeline({ items, label = 'Status history' }: { items: { title: ReactNode; at: string | null; detail?: ReactNode }[]; label?: string }) {
-  if (items.length === 0) return <p className="text-[13px] text-fg-3">No changes recorded.</p>;
-  return (
-    <ol aria-label={label} className="flex flex-col">
-      {items.map((h, i) => (
-        <li key={i} className="relative grid grid-cols-[14px_1fr] gap-x-2.5 pb-3.5 last:pb-0">
-          <span aria-hidden="true" className="relative flex justify-center">
-            <span className={cn('mt-1.5 size-2 rounded-full', i === 0 ? 'bg-acc' : 'bg-line-2')} />
-            {i < items.length - 1 ? <span className="absolute bottom-[-14px] top-4 w-px bg-line" /> : null}
-          </span>
-          <span className="min-w-0">
-            <span className="block text-[13.5px] font-medium text-fg">{h.title}</span>
-            <span className="block text-[12px] text-fg-3">{h.at ? `${formatDate(h.at, { day: 'numeric', month: 'short', year: 'numeric' })}, ${formatTime(h.at)}` : '—'}</span>
-            {h.detail ? <span className="mt-0.5 block break-words text-[12.5px] text-fg-2">{h.detail}</span> : null}
-          </span>
-        </li>
-      ))}
-    </ol>
-  );
-}
 
 /** Document rows inside a SectionCard (label, uploaded time, chips, actions). */
 export function DocRow({ title, sub, chips, actions }: { title: ReactNode; sub: ReactNode; chips?: ReactNode; actions?: ReactNode }) {
