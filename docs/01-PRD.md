@@ -51,9 +51,12 @@ IDs are referenced from the HLD/LLD and tests.
 ### 4.1 Consumer
 - **C-1 Guest discovery**: browse without login; pick location via browser geolocation or map
   pin / saved address.
-- **C-2 Deliverability**: list only restaurants that are APPROVED, not paused, inside an active
-  service area that contains the drop point, and within the restaurant's delivery radius.
-  Show open/closed state, ETA (labeled "estimate"; "demo estimate" in demo mode), delivery fee.
+- **C-2 Deliverability** *(amended 2026-10-11, ADR-034)*: list only restaurants that are APPROVED, inside an
+  active service area that contains the drop point, and within the restaurant's delivery radius. A paused
+  restaurant is **still listed**, shown as "Not accepting orders" (it cannot be ordered from: quote and
+  checkout reject it with `RESTAURANT_CLOSED`); restaurants outside their opening hours are listed with their
+  next opening time. Accepting restaurants sort first. Show open/closed state, ETA (labeled "estimate"; "demo
+  estimate" in demo mode), delivery fee.
 - **C-3 Search & filter**: text search over restaurants and items; filters veg-only, cuisine,
   price band, open-now; sort by distance, delivery fee, ETA, rating (rating sort only when the
   restaurant has ≥ 5 real ratings; otherwise "New").
@@ -130,6 +133,40 @@ IDs are referenced from the HLD/LLD and tests.
   summary, IP, correlation id).
 - **A-11 Health**: per-service readiness, Mongo/Redis connectivity, outbox/stream backlog,
   dead-lettered events, failed notifications, provider error counts — all measured live.
+
+### 4.4a Redesign capabilities (2026-10-11)
+The UI redesign (Masala design system, boards 00 to 40 of the Claude Design export) adds these capabilities on
+top of the requirements above; the matching decisions are ADR-034 to ADR-041 and the contracts are LLD 10.1.
+- **C-15 Address search**: the landing page and the location picker search addresses as you type
+  (Google Places when configured, otherwise a seeded Bengaluru gazetteer in demo), resolve a place or the
+  device location (reverse geocode) to a locality and pincode, and say "We don't deliver here yet" when the
+  point is not serviceable. Saved addresses carry a locality.
+- **C-16 Discovery at city scale**: counts ("N open now, M deliver here") and cuisine facets that stay stable
+  across pages, explicit pure-veg restaurants, "New" until 5 ratings, an offers page that guests can read,
+  restaurant-scoped offers with a card badge, a "Recommended" menu section, "sold out today / only N left"
+  reasons on items.
+- **C-17 Per-restaurant checkout**: pay for one restaurant's lines from a multi-restaurant cart and keep the
+  rest in the cart; paying for overlapping selections can never charge the same restaurant twice (ADR-037).
+- **C-18 Order tracking detail**: restaurant point on the map, live remaining ETA from the rider position,
+  "rider at restaurant", refund progress per restaurant, "have I rated this" state.
+- **C-19 Avatars**: customers can upload a profile picture (own uploads only).
+- **R-9 Pure-veg and featured items**: owners declare a restaurant pure veg (non-veg items are then rejected)
+  and pick up to 6 recommended items; the live-orders board shows customer, items, options and rider name.
+- **D-7 Call from the delivery**: the assigned partner can call the restaurant or the customer from the job
+  (demo: simulated and masked). Before pickup a partner sees only the drop area and label, never the full
+  address, coordinates or phone (ADR-038); offers show only the area and a coarse distance.
+- **A-12 Password reset**: an admin can reset a forgotten password through an emailed link, a TOTP code and a
+  new password; all sessions are revoked (ADR-039).
+- **A-13 Bulk operations**: retry all failed or dead notifications and replay all dead letters from the admin
+  overview and health page (audited, bounded, runbook 14.5); order search by checkout, child code or phone;
+  assign picker ranks partners by distance to the pickup.
+- **A-11 Health (amended)**: each service explains its state in words; a failing provider is "degraded", not
+  "down" (ADR-040).
+- **UX-1 Theme**: light, dark and system themes on every screen, self-hosted fonts, honest-data labels
+  retained (ADR-041).
+- **Data-1 Demo marketplace**: a deterministic Bengaluru dataset (about 600 restaurants, 1,000 consumers,
+  250 partners, thousands of historical orders) with CC-licensed photos credited in
+  `scripts/seed-data/CREDITS.md` (ADR-035, ADR-036). Demo mode only.
 
 ### 4.5 Multi-restaurant ordering (mandatory)
 - **M-1** One **CheckoutGroup** (parent) per purchase; one **ChildOrder** per restaurant; one

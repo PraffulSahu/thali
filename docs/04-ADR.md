@@ -295,3 +295,185 @@ activates (the same path as `payment.captured`), anything else (or no intent) ca
 activates a cancelled membership. If payments is unreachable the row is backed off (`RESERVATION_RECHECK_SEC`).
 Consequence: an abandoned membership purchase stays `PENDING_PAYMENT` for up to the TTL plus one sweep interval;
 a tracked `AMOUNT_MISMATCH` row is not backed off (known minor, see launch checklist).
+
+## ADR-034 Paused restaurants are listed as "Not accepting orders" (overrules PRD C-2)
+Status: accepted (2026-10-11, UI redesign). Amends PRD C-2.
+Context: PRD C-2 hid a paused restaurant from discovery. The redesign (boards 10 and 11) shows the restaurant
+with an explicit state instead, because a customer who saw it a minute ago otherwise cannot tell whether it
+vanished, closed or broke, and a 600-restaurant catalogue churns visibly when a kitchen pauses for ten minutes.
+Decision: `GET /discovery/restaurants` and `/discovery/search` keep paused restaurants in the result. Each item
+carries `closedReason` (`PAUSED` | `OUTSIDE_HOURS` | `null`), `pausedUntil`, `acceptingOrders` (true only when
+open and not paused) and `closesAt`. Sorting puts accepting restaurants first, then applies the chosen sort;
+`openNow=true` excludes paused ones and `counts.open` counts accepting restaurants only. Only APPROVED
+restaurants inside a service area and within the delivery radius are listed (the rest of C-2 is unchanged).
+Ordering stays safe because quote and checkout already reject a closed or paused restaurant with
+`RESTAURANT_CLOSED`; the web app disables "Add" and shows "Not accepting orders" (or "Opens at 6:00 PM").
+Consequence: the discovery tests that asserted "paused restaurants are not listed" now assert the new
+behaviour. Counts and facets are computed before the `openNow` filter and before pagination so they stay stable
+across pages. Listing results are cached per area for up to `DISCOVERY_CACHE_TTL_SEC` (default 60 s); API writes
+that change visibility bump the discovery epoch, but a pause written straight to Mongo is only seen after the
+TTL. Pages are re-hydrated on read, so open status and rating on a page are always current.
+
+## ADR-035 Image references: upload keys or allowlisted absolute URLs; the seed mirrors a CC-licensed pool into MinIO
+Status: accepted (2026-10-11, UI redesign).
+Context: every image field (`images.cover/logo`, `menu_items.imageKey`, cuisine and banner `imageKey`, user
+`avatarKey`) held an S3 key and every view called `storage.publicUrl(key)`. A realistic Bengaluru dataset needs
+about 900 photos reused by 600 restaurants and 15 000 items; uploading 16 000 objects through presigned PUTs is
+slow, and passing an `https://` value through `publicUrl` produced a broken URL.
+Decision: an image reference is either a storage key or an absolute `https://` URL on a host listed in
+`EXTERNAL_IMAGE_HOSTS` (default `live.staticflickr.com,upload.wikimedia.org,randomuser.me`; `none` disables
+external hosts; `*.example.com` matches subdomains only). `resolveImageUrl(storage, ref, allowHosts)` in
+service-kit is the only way views turn a ref into a URL: an allowlisted `https` URL without userinfo or port is
+returned unchanged, any other absolute or protocol-relative URL (http, `data:`, `javascript:`, unknown host)
+resolves to `null`, and everything else is a key resolved by `storage.publicUrl`. Write paths stay strict:
+owners and users can only store keys under their own verified upload prefix (`verifyAttachment`/`verifyUpload`
+check prefix, size and magic bytes); admin catalog routes (cuisines, banners) may store an allowlisted
+`https://` URL; the seed writes documents directly. The seed photos are real CC-licensed images (Wikimedia
+Commons and Openverse, commercial-use licences only, no NC/ND) plus randomuser.me portraits; the attribution row
+for every image is in `scripts/seed-data/CREDITS.md`, which must ship with any distribution that shows them.
+`npm run seed:images` downloads the pool once (cached under `.cache/`), uploads it to the public MinIO bucket
+(`images/pool/<id>.jpg`, `images/avatars/...`) and writes a manifest; the seed then references mirrored keys and
+falls back to the absolute URL for any image that could not be mirrored, so after one successful mirror the demo
+shows every photo offline and does not hot-link third parties.
+Consequence: a client or admin cannot make the app render an arbitrary external URL; adding a host is an
+environment change. The SPA has no CSP, so external hosts are not browser-blocked; a future CSP `img-src` must
+include the allowlist and the public bucket origin. Photos are "close match" for some dishes (see the seed data
+README); restaurant names are fictional, localities, streets, dishes and prices are researched. Production
+(real restaurants upload their own images) normally sets `EXTERNAL_IMAGE_HOSTS=none`.
+
+## ADR-036 Deterministic Bengaluru seed generator (`@thali/contracts/seed-blr`)
+Status: accepted (2026-10-11, UI redesign). Extends the demo seed; the original story data (`TH-DEMOMULTI`,
+`+919000000001`...) is untouched.
+Context: the redesign needs a marketplace that looks alive: about 600 restaurants over 71 localities, 15 000
+menu items, 1 000 consumers, 250 partners and a few thousand historical orders, consistent across six
+databases, without lookups between services and re-runnable on any day.
+Decision: a pure Node-only generator, `import { buildBlrWorld } from '@thali/contracts/seed-blr'` (never from the
+package root), reads `scripts/seed-data` and returns the whole world from seeded PRNG streams and `seedId('blr:...')`
+ids. Each service seed calls it and writes only the slice it owns, so ids and money reconcile by construction
+(every rating maps to a delivered child, `ratingCount` equals the number of ratings, coupon `usedCount` equals
+redemptions, ledger and payout totals follow `priceCheckout` output). Randomness never depends on the clock;
+only timestamps move with an `anchor` that `scripts/seed.ts` passes to every service, so a re-run on another
+day inserts nothing new. Writes go through `ensureDocsBulk` (service-kit `/seed`): find-missing by `_id`, validate
+the chunk once, `insertMany({ordered:false})`; a unique clash with a non-seed document throws `SeedConflictError`.
+Generated phones use `+91910` (consumers), `+91920` (owners) and `+91930` (partners), all covered by
+`DEMO_PHONE_PREFIXES`, so every generated account signs in with the demo OTP in demo mode. The seed must write the
+denormalised fields the new services read: `pureVeg`, `address.locality`, `searchTokens`, `menuStats` (marketplace
+`recomputeMenuStats`/`recomputeSearchTokens`), `customerContact.phoneLast4` and `restaurantSetKey:'*'` (orders),
+delivery job codes, `drop.area`, `drop.label` and `pickup.phone`. The seed-owned service area (`blr-koramangala`)
+is upgraded in place to a city-wide Bengaluru polygon (upsert by id), so an existing volume does not need a reset.
+The localities gazetteer (`localities` collection) is loaded with `upsertLocalities`.
+Consequence: seeds still refuse to run outside `APP_MODE=demo` and are never run against staging or production.
+The seed data directory must be present where a seed runs (inside the service images, or `npm run seed -- --local`
+with `SEED_DATA_DIR`). Direct Mongo writes bypass the discovery cache epoch; the first listing may be stale for up
+to `DISCOVERY_CACHE_TTL_SEC`.
+
+## ADR-037 Per-restaurant checkout with supersede semantics and a version-guarded cart write
+Status: accepted (2026-10-11, UI redesign). Refines ADR-014 and the checkout saga (LLD section 8).
+Context: the floating cart bar lets a customer pay for one restaurant's lines while keeping the rest of a
+multi-restaurant cart. A subset checkout has to keep the other groups, allow a second checkout on the same cart
+version, and never let two payable checkouts buy the same restaurant twice (double payment).
+Decision: `POST /cart/preview` and `POST /checkouts` accept `restaurantIds` (1 to 10 unique ids, each with a line
+in the cart, else 422 `VALIDATION_FAILED {restaurantIds}`). The set is normalised by `restaurantSetKey` (lower
+case, de-duplicated, sorted, comma-joined; `'*'` for the whole cart) and the unique partial index becomes
+`{userId, cartVersion, restaurantSetKey}` where `status=AWAITING_PAYMENT`; the legacy index is dropped by a
+startup migration only after the new one exists. Placement removes only the purchased lines; the other
+restaurants stay in the cart. Overlap rule: inside the checkout lock, any other `AWAITING_PAYMENT` checkout of
+the same user that shares a restaurant with the new one (any cart version, different set) is superseded before
+quote and reserve: released through `releaseCheckout(..., 'EXPIRED', detail 'superseded by <id>')`, which emits
+`checkout.released` (holds freed). A capture that still arrives for a superseded checkout is a `LATE_PAYMENT`
+and is refunded; a recorded amount mismatch on the old checkout is refunded the same way. If the older checkout
+turns out to be already paid, the new request fails with 409 `CONFLICT {reason:'CHECKOUT_ALREADY_PAID'}` and
+nothing new is created. The cart write that marks `checkedOutVersion` is conditional on `cartVersion` and
+increments `checkoutSeq` on every creation: when the cart changed meanwhile (or another creation committed), the
+request fails with 409 `{reason:'CART_CHANGED'}` and its hold is released. A cart-level coupon that does not
+apply to the subset is dropped (preview shows the same); a coupon sent in the body that does not apply is 422
+`COUPON_INVALID {reason:'NOT_APPLICABLE'}`.
+Consequence: while a rolling deploy runs, old instances do not supersede (those overlaps resolve at checkout TTL,
+15 min). Overlapping unpaid checkouts are released before the new reserve, so a stock-limited item is not blocked by
+the superseded hold; a concurrent overlap that appears mid-request is superseded again inside the transaction.
+
+## ADR-038 Delivery partner privacy: area on offers, full drop address only after pickup
+Status: accepted (2026-10-11, UI redesign).
+Context: an offered partner has not committed and may be anyone online; the customer's name, address and
+coordinates were visible to all of them. The redesign also adds a "Call" button.
+Decision: an offer (`GET /partner/offers`, offer reject) exposes only `drop {area, distanceFromPickupKm}` plus
+pickup details, a distance rounded to 0.1 km and whole-minute ETA. `area` is the address locality, else the
+pincode (the service-area-name step of the original plan was dropped because the quote does not carry it).
+For the assigned partner, `drop {name, area, label, address, location, addressRevealed, phoneMasked}` has
+`address`, `location` and `navigation.dropUrl` null until the job is `PICKED_UP`; they are shown only while
+`PICKED_UP` or `OUT_FOR_DELIVERY`. Completed (DELIVERED, FAILED, CANCELLED) jobs in partner history show area and
+label only. Coordinates and the maps link are withheld too, because they would reveal the address.
+`POST /deliveries/:jobId/contact {target}` is limited to the assigned partner with role
+`DELIVERY_PARTNER` (others get 404 or 403), allowed only in the states where a call makes sense (restaurant:
+ASSIGNED, AT_PICKUP; customer: AT_PICKUP to OUT_FOR_DELIVERY), rate limited (10/min/partner, fails closed),
+and audited as `delivery.contact_revealed` in the same transaction before the response (no number in the
+summary). Demo mode returns a masked display number and no `tel:` URL; every other mode returns a `tel:` URL
+from identity (customer) or the order's `pickup.phone` / marketplace (restaurant), valid for 10 minutes.
+Consequence: partner web screens must read `drop.area/label/addressRevealed`, not `drop.address`. The admin TMS
+view keeps the full address. `partner.offer` realtime stays `{offerId, jobId, expiresAt}` (tested to carry no
+customer data). A proxy-number mode (`PROXY`) is reserved in the enum but not implemented.
+
+## ADR-039 Admin password reset: emailed link plus TOTP, with a credential version
+Status: accepted (2026-10-11, UI redesign). Extends the admin authentication design (password plus mandatory TOTP, PRD A-1).
+Context: the admin sign-in design has a "Forgot?" link. A reset by email alone would turn a mailbox compromise
+into an admin takeover, and admin accounts must keep mandatory MFA.
+Decision: `POST /auth/admin/password/forgot {email}` always answers 202 `{status:'ACCEPTED'}` and does its work
+after the response, so it never reveals whether an account exists. Only an ACTIVE, undeleted, unlocked ADMIN
+with TOTP enabled and an email gets a link. The token is 32 random bytes (base64url); only its sha256 is stored
+(`admin_credentials.resetTokenHash`, unique partial index, with `resetExpiresAt` = 30 minutes); a new request
+replaces the old token. The email goes through notifications template `ADMIN_PASSWORD_RESET` (the URL is a
+secret key, encrypted at rest) with link `${PUBLIC_WEB_URL}/admin/reset-password?token=...`.
+`POST /auth/admin/password/reset {token, newPassword, totpCode}` checks, in order: token, account state, TOTP
+(within one step and newer than `lastTotpStep`, so a code used for login cannot be replayed), then consumes the
+TOTP step and only then the password policy (12 to 256 characters and different from the current one, reported as
+one generic message so it is not an oracle). A wrong TOTP counts towards the existing lockout (5 failures lock
+15 minutes). One transaction consumes the token, writes the argon2id hash, increments
+`credentialVersion`, stamps `passwordChangedAt`, revokes every session and writes the audit entry. The pending
+MFA token carries the claim `cv`; `mfaVerify` rejects a stale `cv`, and accepting the TOTP and creating the
+session happen in one transaction on the credential document, so a reset and a concurrent login serialise.
+Limits: per IP 10 per 15 min and per email 3 per 15 min on forgot, 10 per 15 min per IP on reset, plus a
+fail-closed gateway limiter (`RATE_LIMIT_ADMIN_PASSWORD_PER_MIN`, default 10). Audit: `admin.password_reset_requested`
+and `admin.password_reset_failed` use an anonymous actor with the admin as target; `admin.password_reset_completed`
+names the admin. In production `PUBLIC_WEB_URL` is required and may not be a localhost address.
+Consequence: anyone can block a specific admin from requesting new links for 15 minutes (per-email limit; chosen
+over mail-bombing). A crash between the 202 and the send loses that email; the admin requests again. The SPA
+removes the token from the address bar and sets `no-referrer` while the reset page is mounted.
+
+## ADR-040 Explanatory health: a failing provider is "degraded", never "down"
+Status: accepted (2026-10-11, UI redesign). Refines PRD A-11.
+Context: the admin overview and health page must say why something is wrong. A service that answers
+`/internal/health/details` is not down just because its SMTP or SMS provider is failing, and calling it down
+breaks the honest-data rule.
+Decision: service-kit stores the last scrubbed provider error per provider (hash per service, 1 h TTL;
+`lastProviderErrors` in health details; emails become `[email]`, 10+ digit numbers `[phone]`, bearer tokens and
+`key=`/`token=`/`secret=` values `[redacted]`, 300 characters max). The gateway adds `degradedReasons[]`,
+`summary` and `providers {category: 'up'|'failing'}` per service. `down` still means only "did not answer". A
+reachable service is `degraded` when: Mongo or Redis is down; a provider category is failing; total provider
+errors reach 5 per hour; consumer lag exceeds 100 on any stream; the oldest outbox event is older than 60 s; or
+dead letters exceed 0. A provider category (email: resend, mailpit, smtp, ses; sms: twilio, msg91; payment:
+razorpay; maps: google*; other names shown as-is) is failing when it has 5 or more errors in the last hour, or at
+least 2 errors in the last hour with the latest within 10 minutes. A single blip is not failing. The summary
+reads "All checks passing", "Unreachable: <error>", or up to three reasons plus "+N more".
+Consequence: the "2 in 10 minutes" rule is approximated from hourly counts and the latest timestamp (exact
+needs a per-provider 10-minute count in service-kit). The admin overview counts "failed notifications" as
+`FAILED + DEAD` (all-time retryable), not the 24-hour figure.
+
+## ADR-041 Masala design system: tokens, light/dark/system theme, self-hosted fonts
+Status: accepted (2026-10-11, UI redesign).
+Context: the web app is rebuilt from the Claude Design export (boards 00 to 40). It needs one visual language
+for four role areas, dark mode that is legible on every screen, and no third-party font requests (privacy,
+offline demo, CSP-readiness).
+Decision: design tokens are CSS custom properties in `apps/web/src/styles.css`, defined for light and dark
+(foundations board 02) and bridged to Tailwind v4 utilities; a legacy bridge keeps old class names working
+during the migration. Theme preference is `light | dark | system`, stored in `localStorage` key `thali.theme`,
+applied as `<html data-theme>`; an inline script in `index.html` sets it before first paint to avoid a flash,
+and `system` follows the OS live. Fonts are self-hosted through `@fontsource-variable` packages (Bricolage
+Grotesque for display, Figtree for body, JetBrains Mono for codes and data; woff2 subsets emitted by Vite), with no request to a font CDN. Shells (`PublicShell`, `ConsumerShell`,
+`CheckoutShell`, `RoleSidebarShell` for owner, partner and admin) and the component library are documented in
+`apps/web/src/README-DESIGN-SYSTEM.md`. The honest-data rules carry over: "New" under 5 ratings, `EST.` on
+estimates, `SIMULATED LOCATION`, payouts "Paid" only with a UTR. Screens the boards do not draw keep their
+information architecture and are rebuilt in the same system.
+Consequence: every colour must come from a token (no hard-coded light colours) and meet the contrast targets in
+the design spec for both themes. Known polish backlog (sub-role tag slot, tab-bar order per role, shared table
+primitives) is tracked in the task reports, not in this ADR. Design sources: `.superpowers/sdd/2026-10-11-ui-redesign/`
+(design spec, overrides, boards, fonts; git-ignored working directory).

@@ -188,6 +188,11 @@ concurrency, Mongoose `optimisticConcurrency: true`) on stateful aggregates mark
 | `audit_logs` | `eventId` (unique), `actorId`, `actorRole`, `action`, `targetType`, `targetId`, `summary`, `ip`, `correlationId`, `service`, `occurredAt` | `occurredAt desc`; `targetType+targetId`; `actorId` |
 | `outbox`, `inbox`, `idempotency_keys`, `dead_letters` | (service-kit standard, every service) | outbox `publishedAt+createdAt`; TTL inbox 30 d |
 
+**Amendments (2026-10-11 redesign), identity:**
+- `users.avatarKey?: string|null` (own upload key `users/<id>/avatars/<uuid>.(jpg|png|webp)`, or an absolute `https://` URL on `EXTERNAL_IMAGE_HOSTS` when written by the seed; views add `avatarUrl`).
+- `users.addresses[].locality?` (≤ 60) and `users.addresses[].formattedAddress?` (≤ 300). Locality feeds the header chip and the partner-facing `drop.area`.
+- `admin_credentials.resetTokenHash?` (sha256 of the emailed token; unique partial index where it is a string), `resetExpiresAt?` (now + 30 min), `credentialVersion` (int, default 0, `$inc` on every reset; carried as claim `cv` in the pending MFA token), `passwordChangedAt?`. ADR-039.
+
 ### 3.2 marketplace (`thali_marketplace`)
 | Collection | Fields | Indexes |
 |---|---|---|
@@ -204,6 +209,17 @@ concurrency, Mongoose `optimisticConcurrency: true`) on stateful aggregates mark
 | `memberships` | `userId`, `planId`, `planSnapshot`, `status` PENDING_PAYMENT\|ACTIVE\|EXPIRED\|CANCELLED, `startsAt`, `endsAt`, `paymentIntentId`, `freeDeliveriesUsed`, `usage[] {checkoutId, freeDeliveries, discountPaise, status HELD\|USED\|RELEASED}` | `userId+status`; `endsAt` |
 | `ratings` | `restaurantId`, `childOrderId` (unique), `userId`, `stars` 1-5, `comment` | unique `childOrderId` |
 
+**Amendments (2026-10-11 redesign), marketplace:**
+- `restaurants.pureVeg: boolean` (default false; owner-declared, admin-overridable; unset never means "derive from the menu"; informational `menuAllVeg` is exposed on owner/admin views). A non-veg item or option in a `pureVeg` restaurant is rejected with 422 `PURE_VEG_VIOLATION`.
+- `restaurants.address.locality?` (≤ 60).
+- `restaurants.menuStats {itemCount, availableItemCount, nonVegCount, avgItemPricePaise, priceBand, updatedAt}` (denormalised for discovery; `recomputeMenuStats` after bulk writes; self-heals on first read; ignores tracked stock).
+- `restaurants.images.cover/logo`, `menu_items.imageKey`, cuisine/banner `imageKey`: a key or an allowlisted `https://` URL (ADR-035).
+- `restaurants` new index `{status:1, location:'2dsphere'}`.
+- `menu_items.featured` (default false; at most 6 per restaurant, 422 `VALIDATION_FAILED` beyond; the "Recommended" section); `menu_items.searchTokens: string[]` (lower-cased words of name + tags, set by a `pre('validate')` hook; index `{searchTokens:1}`; item search is an anchored word-prefix match, every word must match, descriptions are not searched; `recomputeSearchTokens` backfills raw-driver inserts and runs at boot with `onlyMissing`); new index `{restaurantId:1, featured:1}`.
+- `coupons.restaurantIds: ObjectId[]` (empty = all restaurants) and `coupons.badgeLabel` (≤ 16, e.g. "20% OFF"); new index `{restaurantIds:1, active:1}`.
+- `localities` (new): `{name, primary, aliases[], kind LOCALITY|ROAD|LANDMARK, locality, city, pincode, location, tokens[], isDemo}`; indexes `tokens` (multikey, prefix search) and `location` 2dsphere. Written by `upsertLocalities` (deterministic ids, idempotent). In demo, when empty, the first lookup lazy-loads `${SEED_DATA_DIR}/localities.json`.
+- Redis (prefixed with `REDIS_KEY_PREFIX`): `disc:epoch` (bumped by approval/suspension, pause/resume, hours, profile and menu writes, pureVeg override, coupon writes), `disc:list:<epoch>:<areaId>:<geohash7>:<sha1(filters)>` and `disc:offers:<epoch>` (TTL `DISCOVERY_CACHE_TTL_SEC`), `geo:ac:*`, `geo:pd:*`, `geo:rev:<geohash7>` (24 h, Google results only).
+
 ### 3.3 orders (`thali_orders`)
 | Collection | Fields | Indexes |
 |---|---|---|
@@ -213,6 +229,12 @@ concurrency, Mongoose `optimisticConcurrency: true`) on stateful aggregates mark
 | `order_events` | `childOrderId`?, `checkoutGroupId`, `type`, `data`, `actor`, `at` (append-only timeline) | `checkoutGroupId+at` |
 | `support_tickets` | `code`, `userId`, `childOrderId`?, `checkoutGroupId`?, `subject`, `category` ORDER_ISSUE\|PAYMENT\|DELIVERY\|ACCOUNT\|OTHER, `status` OPEN\|IN_PROGRESS\|RESOLVED\|CLOSED, `assigneeId`?, `messages[] {authorId, authorRole, body, at}`, `priority` | `status+createdAt`; `userId+createdAt` |
 | `restaurant_projection` | `_id`=restaurantId, `ownerUserId`, `name`, `status`, `location` | — |
+
+**Amendments (2026-10-11 redesign), orders:**
+- `carts.checkoutSeq` (int, default 0): incremented by every checkout creation in the same conditional write that sets `checkedOutVersion` (`updateOne({_id, cartVersion})`; no match = 409 `CART_CHANGED`). ADR-037.
+- `checkout_groups.restaurantSetKey` (default `'*'`, from `restaurantSetKey()` in contracts) and `checkout_groups.customerContact {name, phoneMasked, phoneLast4}`. The unique partial index is now `uniq_active_checkout_per_cart_version_set {userId, cartVersion, restaurantSetKey}` where status=AWAITING_PAYMENT (legacy `uniq_active_checkout_per_cart_version` dropped by `migrateCheckoutIndexes` after the new one exists). New indexes `{placedAt:-1,_id:-1}`, `{status:1, placedAt:-1}`, `{'customerContact.phoneLast4':1}`. A missing `restaurantSetKey` is read as `'*'`.
+- `child_orders.customerContact.phoneLast4`, `child_orders.restaurantAddress.locality`, `child_orders.dropAddress.locality` (and `AddressSnapshot.locality` in views). New indexes `{'customerContact.phoneLast4':1}`, `{placedAt:1}`, `{deliveredAt:1}`, `{refundStatus:1}`, `{restaurantId:1, placedAt:-1}`, `{createdAt:-1,_id:-1}`, `{'refunds.updatedAt':1}`.
+- Startup migration `orders:contact-backfill` (leader-locked scheduler job, 5-minute interval, first tick at boot): fills `phoneLast4`, group `customerContact` and `restaurantSetKey:'*'` on settled legacy groups; writes a marker document `_id:'orders:contact-backfill:v1'` in `migrations` once a clean run finds nothing left. `runContactBackfill(ctx, {force:true})` ignores the marker; operationally, delete the marker (runbook section 14.4).
 
 ### 3.4 payments (`thali_payments`)
 | Collection | Fields | Indexes |
@@ -235,12 +257,22 @@ REQUESTED/PROCESSING payouts.
 | `delivery_offers` | `jobId`, `partnerId`, `status` OfferStatus OFFERED\|ACCEPTED\|REJECTED\|EXPIRED\|CANCELLED, `expiresAt`, `batchEvaluation {eligible, reasons[]}`, `round` | unique `jobId+partnerId+round`; `partnerId+status`; `status+expiresAt` |
 | `location_pings` | `partnerId`, `jobId`?, `location`, `accuracyM`, `simulated`, `at` | TTL 7 d on `at` |
 
+**Amendments (2026-10-11 redesign), delivery** (`delivery_jobs`):
+- New fields (all default null): `childOrderCode`, `checkoutCode`, `codesCheckedAt` (backfill marker), `drop.area` (locality, else pincode), `drop.label` ("Home"/"Work"/null), `pickup.phone` (restaurant E.164, for the call button).
+- New indexes `{childOrderCode:1, codesCheckedAt:1}` (code prefix search and backfill scan), `{checkoutCode:1}`, `{checkoutGroupId:1}`, `{partnerUserId:1, createdAt:-1, _id:-1}` (history paging).
+- `delivery:order-code-backfill` (leader-locked, 5 min): fills codes for older jobs from orders `GET /internal/orders/child/:id`; a 404 marks the row so it is not asked again; transient errors stop the run.
+- Redis `trk:eta:<jobId>` (30 s): cached remaining-ETA computation keyed on job status and partner.
+
 ### 3.6 notifications (`thali_notifications`)
 | Collection | Fields | Indexes |
 |---|---|---|
 | `notifications` | `userId`?, `channel` SMS\|EMAIL\|IN_APP, `to` (masked for display; full value encrypted `toEnc`), `template`, `data` (non-sensitive), `status` QUEUED\|SENDING\|SENT\|DELIVERED\|FAILED\|DEAD, `attempts`, `nextAttemptAt`, `provider`, `providerMessageId`?, `lastError`?, `sourceEventId`?, `dedupeKey` (unique), `readAt`? (in-app) | unique `dedupeKey`; `status+nextAttemptAt`; `userId+createdAt`; `providerMessageId` |
 | `provider_callbacks` | `provider`, `payload`, `receivedAt`, `verified` | TTL 30 d |
 | `realtime_tickets` | (Redis only: `rt:ticket:<id>` → JSON auth, TTL 30 s) | — |
+
+**Amendments (2026-10-11 redesign), notifications:** no schema change. New email template `ADMIN_PASSWORD_RESET` (subject "Reset your Thali admin password"; `resetUrl` is the only secret key and is stored encrypted; `expiresMinutes` defaults to 30). `recordProviderError` calls now carry a scrubbed message (health `lastProviderErrors`).
+
+**Amendments (2026-10-11 redesign), seed-owned data:** the Bengaluru seed (ADR-036) writes all of the above denormalised fields directly (`pureVeg`, `address.locality`, `searchTokens`, `menuStats`, `restaurantSetKey:'*'`, `customerContact`, `phoneLast4`, delivery job codes and `drop.area`) and upgrades the seed-owned service area `blr-koramangala` in place to a city-wide Bengaluru polygon.
 
 ## 4. State machines (backend-enforced via `assertTransition`)
 
@@ -378,6 +410,8 @@ Delivery fee per child (marketplace): `distanceKm` (geo provider) from restauran
 service area containing the drop point.
 
 ## 7. Dispatch & batching policy (delivery)
+*(2026-10-11 redesign)* Offers show only the drop area and a coarse distance; the full drop address and coordinates are revealed to the assigned partner only while PICKED_UP / OUT_FOR_DELIVERY (ADR-038, section 10.1).
+
 Config (env, defaults): `MAX_ACTIVE_DELIVERIES=2`, `OFFER_TTL_SEC=45`, `OFFERS_PER_ROUND=3`,
 `DISPATCH_RADIUS_KM=[3,5,8]` per round (last value repeats), `MAX_DISPATCH_ROUNDS=5`,
 `BATCH_PICKUP_RADIUS_KM=1.5`, `BATCH_DROP_RADIUS_KM=3`, `BATCH_MAX_EXTRA_MINUTES=12`,
@@ -406,6 +440,8 @@ Dispatcher sweeper (every 5 s, leader-locked): expire offers past TTL; for jobs 
 PENDING_ASSIGNMENT/OFFERED with no live offers → next round.
 
 ## 8. Checkout saga details (orders)
+*(2026-10-11 redesign)* Checkout can be scoped to a subset of the cart's restaurants (`restaurantIds`); overlapping unpaid checkouts are superseded and the cart write is guarded by `cartVersion` + `checkoutSeq` (ADR-037, models in section 3.3).
+
 `POST /api/v1/checkouts` body `{ cartId? (implicit user cart), addressId | address, couponCode?,
 useMembership: boolean, expectedTotalPaise? }`, header `Idempotency-Key`.
 1. Load user cart; reject empty (422 `CART_EMPTY`).
@@ -456,13 +492,14 @@ release. (b) PLACED children with `acceptBy < now` → REJECTED reason RESTAURAN
 | `restaurant.email_verification_requested` | marketplace | `{restaurantId, email, verifyUrl}` (url contains raw token; notifications must not log it) | notifications |
 | `restaurant.status_changed` | marketplace | `{restaurantId, ownerUserId, name, from, to, reason?, location}` | orders (projection), notifications |
 | `restaurant.updated` | marketplace | `{restaurantId, ownerUserId, name, status, location}` | orders |
+<!-- 2026-10-11 redesign: `restaurant.updated` does not carry `pureVeg` or `locality`; orders reads the restaurant address and phone from marketplace `GET /internal/restaurants/:id` and its own snapshots. -->
 | `membership.activated` | marketplace | `{membershipId, userId, planId, endsAt}` | notifications |
 | `checkout.created` | orders | `{checkoutId, userId, totalPaise, childOrderIds}` | — |
 | `checkout.confirmed` | orders | `{checkoutId, userId, childOrderIds}` | marketplace (commit reservation, redeem coupon, use membership) |
 | `checkout.released` | orders | `{checkoutId, reason: PAYMENT_FAILED\|EXPIRED}` | marketplace (release) |
 | `checkout.late_payment` | orders | `{checkoutId, paymentIntentId?, amountPaise}` | payments (full refund LATE_PAYMENT) |
 | `order.placed` | orders | `{childOrderId, checkoutId, userId, restaurantId, restaurantOwnerId, code, totalPaise, acceptBy}` | notifications (restaurant + customer) |
-| `order.accepted` | orders | `{childOrderId, checkoutId, userId, restaurantId, prepMinutes, pickup:{name,address,location}, drop:{name,address,location,phoneMasked}, pickupCode, deliveryCode}` | delivery (create job), notifications |
+| `order.accepted` | orders | `{childOrderId, checkoutId, userId, restaurantId, prepMinutes, pickup:{name,address,location,phone?}, drop:{name,address,location,phoneMasked,area?,label?}, pickupCode, deliveryCode, childOrderCode?, checkoutCode?}` **(2026-10-11 redesign: `pickup.phone`, `drop.area`, `drop.label`, `childOrderCode`, `checkoutCode`; orders always sets them, they are optional in the type so pre-redesign events still parse; delivery falls back to the pincode parsed from `drop.address` for `area`, null for `label`, and orders `GET /internal/orders/child/:id` for the codes)** | delivery (create job), notifications |
 | `order.rejected` | orders | `{childOrderId, checkoutId, userId, restaurantId, reason, refundPaise}` | payments (refund), marketplace (release stock for that child: restore `stockQty`), notifications |
 | `order.cancelled` | orders | `{childOrderId, checkoutId, userId, restaurantId, actor, reason, refundPaise}` | payments, delivery (cancel job), marketplace (restock if before PREPARING), notifications |
 | `order.preparing` / `order.ready` | orders | `{childOrderId, restaurantId, userId}` | delivery (ready flag), notifications |
@@ -477,6 +514,7 @@ release. (b) PLACED children with `acceptBy < now` → REJECTED reason RESTAURAN
 | `delivery.unassigned` | delivery | `{jobId, childOrderId, reason}` | orders |
 | `delivery.picked_up` / `delivery.started` / `delivery.delivered` | delivery | `{jobId, childOrderId, partnerUserId, at}` (+ `distanceKm` on delivered) | orders, notifications |
 | `delivery.failed` | delivery | `{jobId, childOrderId, reason}` | orders |
+| `delivery.arrived` **(2026-10-11 redesign)** | delivery | `{jobId, childOrderId, partnerUserId, at}` (`DeliveryAtPayload`; outbox on `events.delivery` in the same transaction as ASSIGNED to AT_PICKUP) | orders (sets `child.deliveryStatus='AT_PICKUP'` only while the child is ACCEPTED, PREPARING or READY_FOR_PICKUP and the event is not older than `deliveryUpdatedAt`; appends an `order_events` row `delivery.arrived`; realtime `owner.order` + `order.updated`; idempotent through the inbox) |
 | `delivery.exception` | delivery | `{jobId, childOrderId, reason}` | notifications (admin) |
 | `partner.status_changed` | delivery | `{partnerId, userId, from, to, reason?}` | notifications |
 
@@ -517,12 +555,90 @@ Internal: `POST /internal/payment-intents`, `POST /internal/payment-intents/:id/
 Internal: `POST /internal/notifications/otp {phone, code}` (synchronous send; body not persisted), `POST /internal/notifications/send {channel, to, template, data, dedupeKey}`.
 All services: internal `GET /internal/health/details`, `POST /internal/dead-letters/:id/replay`, `GET /internal/dead-letters`, `GET /internal/routes` (method+path list for OpenAPI coverage checks).
 
+### 10.1 Amendments (2026-10-11 redesign): new and changed routes
+All paths are under `/api/v1` through the gateway unless marked internal. Every route is registered in OpenAPI (coverage tests). Error codes are in the section 1.2 envelope; "400" means `VALIDATION_FAILED`.
+
+**gateway**
+| Method + path | Auth | Request | Response | Errors |
+|---|---|---|---|---|
+| `GET /meta` (changed) | public | | adds `city {name, pilot}` (`CITY_NAME`, `CITY_PILOT`) | |
+| `GET /admin/health` (changed) | ADMIN+MFA | | each service adds `degradedReasons: string[]`, `summary: string`, `providers: {[category]: 'up'\|'failing'}` (rules in ADR-040); `down` only when unreachable | |
+| `/auth/admin/password/*` | public | | gateway adds a fail-closed per-IP limiter (`RATE_LIMIT_ADMIN_PASSWORD_PER_MIN`, default 10) in front of identity's own limits | 429, 503 if Redis is down |
+
+**identity**
+| Method + path | Auth | Request | Response | Errors |
+|---|---|---|---|---|
+| `POST /auth/admin/password/forgot` | public | `{email}` | 202 `{status:'ACCEPTED'}` in every case (no account oracle; work happens after the response) | 400, 429 (10/15 min per IP, 3/15 min per email), 503 if the limiter's Redis is down |
+| `POST /auth/admin/password/reset` | public | `{token (43-char base64url), newPassword (12-256), totpCode (6 digits)}` | 204 | 400 (policy: one generic message), 401 `INVALID_CREDENTIALS` (bad/expired/used/replaced token, wrong or replayed TOTP), 403 `ACCOUNT_BLOCKED`, 423 `ACCOUNT_LOCKED`, 429 |
+| `POST /auth/admin/mfa` (changed) | public (mfaToken) | `{mfaToken, code}` | unchanged | 401 `UNAUTHENTICATED` when the mfaToken's `cv` is older than `credentialVersion` (password reset in between) |
+| `POST /me/uploads` | user | `{contentType: image/jpeg\|png\|webp, sizeBytes <= 2 MB}` | 201 `{key: users/<id>/avatars/<uuid>.<ext>, bucket:'public', upload:{url, method:'PUT', headers, expiresAt, maxBytes}}` | 422 `FILE_INVALID`, 429 (20/h per user) |
+| `PATCH /me` (changed) | user | adds `avatarKey: string\|null` (own upload key only; absolute URLs rejected) | User adds `avatarUrl` | 400, 409, 422 `FILE_INVALID` (not the caller's prefix, missing object, wrong size or magic bytes; an invalid object is deleted) |
+| `POST/PATCH /me/addresses[/:id]` (changed) | user | adds `locality` (<= 60), `formattedAddress` (<= 300); null clears on PATCH | SavedAddress adds both (nullable) | unchanged |
+| `GET /me`, auth responses, `/admin/users` (changed) | | | add `avatarUrl: string\|null` | |
+| `GET /internal/users/:id` (changed) | service | | adds `avatarUrl` | |
+
+**marketplace**
+| Method + path | Auth | Request | Response | Errors |
+|---|---|---|---|---|
+| `GET /discovery/restaurants` (changed) | public | unchanged filters | adds `counts {total, open}` and `facets {cuisines:[{slug,count}]}` (computed after cuisine/veg/price/q filters, before `openNow` and pagination); each item adds `locality`, `closedReason` (`PAUSED`\|`OUTSIDE_HOURS`\|null), `pausedUntil`, `acceptingOrders`, `closesAt`, `offer {label, code}\|null`; paused restaurants are listed, accepting ones sort first (ADR-034); `isVeg` is `PURE_VEG` only for `pureVeg===true`; distance/ETA are haversine estimates labelled `DEMO_HAVERSINE` (demo/sandbox) or `HAVERSINE_FALLBACK` (production) | 400 |
+| `GET /discovery/search` (changed) | public | `q` | restaurants + `matchedItems`, same new item fields; item search is a word-prefix match ("dos" finds Masala Dosa) | 400 |
+| `GET /discovery/places?q&lat?&lng?&limit=8&sessionToken?` | public, rate limited | `q` 2-100 chars, `limit` 1-10 | `{items:[{id, primary, secondary, locality, city, pincode, location\|null, source}], source}`; `source` `GOOGLE` or `DEMO_GAZETTEER` (`FALLBACK` in production); gazetteer ids are `gz_<id>` | 400, 429 |
+| `GET /discovery/places/:placeId?sessionToken?` | public | | `{id, formattedAddress, locality, city, pincode, location, serviceable, serviceArea\|null, source}` | 404 (unknown id, also a malformed Google id), 502 `UPSTREAM_UNAVAILABLE` only for a Google id while Google is down |
+| `GET /discovery/reverse?lat&lng` | public | | `{label, locality, city, pincode, serviceable, serviceArea\|null, source}`; never fails on a provider outage (gazetteer label "Locality, City" or "lat, lng") | 400 |
+| `GET /restaurants/:idOrSlug` (changed) | public | | `restaurant` adds `locality`, `address.locality`, `pausedUntil`, `acceptingOrders`, `closesAt`, `pureVeg`; top level adds `recommended: PublicMenuItem[]`; items add `unavailableReason` (`SOLD_OUT`\|`UNAVAILABLE`\|null), `stockLeft` (only when <= 5), `featured` | 404 |
+| `GET /coupons/available` (changed) | optional bearer | | guest: all live coupons with `remainingUses:null`, `eligibility:'SIGN_IN_TO_CHECK'`; every item adds `offerHeadline`, `eligibility`, `restaurantIds`, `badgeLabel` | |
+| `GET /restaurants/ratings/mine?childOrderIds=a,b` | user | CSV of 1-50 ids | `{items:[{childOrderId, restaurantId, stars, createdAt}]}` (own ratings only; unrated ids omitted) | 400, 401 |
+| `PATCH /owner/restaurants/:id` (changed) | owner | adds `pureVeg?: boolean`, `address.locality` | view adds `pureVeg`, `menuAllVeg`, `address.locality` | 422 `PURE_VEG_VIOLATION {itemIds, optionIds}` |
+| `POST/PATCH /owner/restaurants/:id/items[/:itemId]` (changed) | owner | adds `featured?: boolean` | view adds `featured` | 422 `PURE_VEG_VIOLATION {itemId?, optionId?}`; 422 `VALIDATION_FAILED` for a 7th featured item |
+| `PATCH /admin/marketplace/restaurants/:id` | ADMIN+MFA | `{pureVeg: boolean}` (audited override) | OwnerRestaurant | 404, 422 `PURE_VEG_VIOLATION` |
+| `POST/PATCH /admin/marketplace/coupons[/:id]` (changed) | ADMIN+MFA | adds `restaurantIds: ObjectId[]` (empty = all; deduped), `badgeLabel: string(<=16)\|null` | AdminCoupon adds both | 400 |
+| `POST/PATCH /admin/marketplace/{cuisines,banners}` (changed) | ADMIN+MFA | `imageKey` may be an `https://` URL on an `EXTERNAL_IMAGE_HOSTS` host | `imageUrl` resolved (nullable on the admin banner view); a public banner whose ref does not resolve is not returned | 400 when the host is not allowlisted |
+| `POST /internal/coupons/validate` (changed) | service | adds optional `restaurantSubtotals:[{restaurantId, subtotalPaise}]` (duplicate ids rejected) | adds `restaurantIds: string[]`, `badgeLabel`; discount and min-order use the eligible restaurants' subtotal only | 422 `COUPON_INVALID {reason:'NOT_APPLICABLE'}` (also for a scoped coupon sent without subtotals), 422 `VALIDATION_FAILED` |
+| `POST /internal/reservations` (changed) | service | unchanged | unchanged | 422 `COUPON_INVALID NOT_APPLICABLE` for a scoped coupon when no line is in scope |
+| `GET /internal/restaurants/:id` (changed) | service | | adds `address.locality`, `pureVeg` (declared value), `images {coverUrl, logoUrl}` | |
+
+**orders**
+| Method + path | Auth | Request | Response | Errors |
+|---|---|---|---|---|
+| `POST /cart/preview` (changed) | user | adds `restaurantIds?: ObjectId[1..10]` (unique) | `coupon` adds `restaurantIds[]`; children and pricing cover the subset only | 422 `VALIDATION_FAILED {restaurantIds:[missing]}` for an id with no cart line; 400 |
+| `POST /checkouts` (changed) | user, `Idempotency-Key` | adds `restaurantIds?`; `couponCode: null` = no coupon | unchanged | the preview errors, plus 409 `CONFLICT {reason:'CHECKOUT_ALREADY_PAID', checkoutId}` and 409 `CONFLICT {reason:'CART_CHANGED'}`; 422 `COUPON_INVALID {reason:'NOT_APPLICABLE'}` (ADR-037) |
+| `GET /orders/:checkoutId`, `GET /orders/child/...`, admin detail (changed) | user / ADMIN | | each child adds `restaurant {location:{lat,lng}\|null, address:{line1, locality\|null, city}}` (no phone); address snapshots add `locality` | |
+| `GET /admin/orders/checkouts` | ADMIN+MFA | `q` (TH- checkout or child code, checkout/child/user/restaurant id, restaurant-name prefix, or 4-13 digits = phone), `status` (CSV CheckoutStatus), `phone`, `restaurantId`, `from`, `to`, `cursor`, `limit <= 50` | `{items:[{id, code, status, userId, placedAt, createdAt, customer {name, phoneMasked}, restaurants:[{id, childOrderId, childCode, name, childStatus, deliveryStatus, refundStatus}], totalPaise, paidPaise, refundedPaise, refundPendingPaise, attention}], nextCursor}`. Sort `placedAt desc, _id desc`; without `status` only placed checkouts; `attention` priority DELIVERY_FAILED, REFUND_FAILED, FINDING_PARTNER, AWAITING_ACCEPTANCE, null | 400 (bad status/cursor/limit; phone with < 4 digits), 401, 403 |
+| `GET /admin/orders/overview` (changed) | ADMIN+MFA | | adds `today.byStatus` (all 13 child statuses, children placed since IST midnight), `today.refundedPaise`, top-level all-time `refundsPendingPaise` (next to `refundsPending`), `support {open, inProgress}` | |
+| `GET /admin/orders` (changed) | ADMIN+MFA | `phone` accepts any input with >= 4 digits; `q` of 4-13 digits is a phone search (`phone` wins when both); both match the indexed `customerContact.phoneLast4` | unchanged | 400 |
+| `GET /internal/orders/child/:id` (changed) | service | | adds `checkoutCode` | |
+
+**payments**
+| Method + path | Auth | Request | Response | Errors |
+|---|---|---|---|---|
+| `GET /finance/partner/summary` (changed) | DELIVERY_PARTNER | `from?`, `to?` (ISO with offset; half-open `[from, to)`, default IST midnight to now; span <= 93 days) | AccountSummary + `window {from, to, earningsPaise, entriesByType, deliveries}`; `earningsPaise` = DELIVERY_EARNING only (payouts and manual adjustments excluded); `deliveries` = DELIVERY_EARNING entries | 400 |
+| `GET /finance/restaurants/:restaurantId/summary` (changed) | owner of the restaurant | same | same; `earningsPaise` = ORDER_EARNING + COMMISSION + REFUND_ADJUSTMENT | 400, 403, 404, 502 |
+
+**delivery**
+| Method + path | Auth | Request | Response | Errors |
+|---|---|---|---|---|
+| `POST /deliveries/:jobId/contact` | DELIVERY_PARTNER, assigned only; 10/min/partner, fails closed | `{target:'CUSTOMER'\|'RESTAURANT'}` | `{target, mode:'DIRECT'\|'PROXY'\|'DEMO', telUrl\|null, displayNumber ('+91 ••••• •3210'), expiresAt (now + 600 s), note\|null}`; demo returns no `telUrl`; audited as `delivery.contact_revealed` before the response | 400, 403 (role), 404 (not my job), 409 `CONFLICT {reason:'NOT_CALLABLE_NOW'\|'NO_PHONE_ON_FILE'}`, 429, 502 |
+| `GET /partner/offers`, `POST /deliveries/offers/:offerId/reject` (changed) | partner | | `job.drop = {area\|null, distanceFromPickupKm}` only (no name, address, label, phone, coordinates); `distanceKm` rounded to 0.1, `estimatedMinutes` whole minutes (ADR-038) | |
+| every `PartnerDeliveryJob` response (changed): `/deliveries/active`, `/history`, `/offers/:id/accept`, `/:jobId/arrived\|pickup\|start\|deliver\|fail` | partner | | `drop = {name, area, label, address\|null, location\|null, addressRevealed, phoneMasked}`; `address`, `location` and `navigation.dropUrl` are null except while PICKED_UP / OUT_FOR_DELIVERY; terminal jobs show area + label only; adds `childOrderCode`, `checkoutCode` | |
+| `GET /deliveries/tracking/:childOrderId` (changed) | order owner | | adds `remaining {minutes, distanceKm, source, computedAt}\|null` (cached 30 s per job, status and partner; compute `stale` on the client) | 404 |
+| `GET /admin/delivery/jobs` (changed) | ADMIN+MFA | adds `q` (<= 64): `TH-...` = child/checkout code prefix, else exact job id / childOrderId / checkoutGroupId / code | `AdminDeliveryJob` adds `childOrderCode`, `checkoutCode`, `drop.area`, `drop.label` | |
+| `GET /admin/delivery/overview` (changed) | ADMIN+MFA | | adds `unassigned` (PENDING_ASSIGNMENT + OFFERED), `partners.approved`, `partners.onDelivery` | |
+| `GET /admin/delivery/partners` (changed) | ADMIN+MFA | adds `online=true\|false`, `hasCapacity=true\|false`, `nearJobId=<jobId>` | rows add `distanceToPickupKm` (null without `nearJobId`) and `activeJobCount`; with `nearJobId`: nearest first (`$geoNear`), first `limit` rows only, `nextCursor:null`, partners without a location omitted | 400, 404 (unknown job) |
+
+**notifications**
+| Method + path | Auth | Request | Response | Errors |
+|---|---|---|---|---|
+| `GET /admin/notifications/summary` | ADMIN+MFA | | `{byStatus (all 7 statuses, all-time), failedLast24h (SMS+EMAIL FAILED/DEAD by updatedAt), byChannel {SMS:{failed}, EMAIL:{failed}}, lastError {channel, provider, message (scrubbed), at}\|null}` | 403 |
+| `POST /admin/notifications/retry` | ADMIN+MFA (roles as per-id retry) | `{status:'FAILED'\|'DEAD', channel?, before? (ISO), limit 1..500 (default 500)}` | `{queued}`; same filter and re-queue rules as the per-id retry (never OTP, recipient must be resolvable); oldest first, one transaction, one `notification.bulk_retry` audit; the first 25 are kicked, the retry worker takes the rest | 400, 403 |
+| `POST /admin/notifications/dead-letters/replay` | ADMIN+MFA | `{service?, limit 1..100 (default 100)}` | `{replayed, failed:[{service, id, error}]}`; oldest first, `limit` is the total across services; a service that cannot be listed appears as `id:'*'`; one `dead_letter.bulk_replay` audit | 400 (unknown service), 403 |
+
 ## 11. Realtime messages (SSE `event:` names)
 `order.updated {checkoutId, childOrderId, status, refundStatus, deliveryStatus}` → user;
 `owner.order {childOrderId, restaurantId, status}` → `rt:owner:<ownerUserId>`;
-`delivery.location {childOrderId, lat, lng, at, simulated}` → customer;
+`delivery.location {childOrderId, lat, lng, at, simulated, remainingMinutes}` → customer (2026-10-11 redesign: `remainingMinutes: number|null`, the live ETA from the partner position, from real pings and from the demo simulator);
 `partner.offer {offerId, jobId, expiresAt}` → `rt:partner:<partnerUserId>`; `notification {id, title, body}` → user;
 heartbeats every 20 s (`: ping`).
+Unchanged and tested: `partner.offer` carries only `{offerId, jobId, expiresAt}` (no customer data, ADR-038). `owner.order` is also published for `delivery.arrived` (AT_PICKUP).
 
 ## 12. Configuration (env)
 Common: `APP_MODE`, `MONGO_URI` (e.g. `mongodb://thali:pw@mongo:27017/?replicaSet=rs0&authSource=admin`),
@@ -539,6 +655,23 @@ Orders: `ACCEPT_WINDOW_SEC=300`, `CHECKOUT_TTL_SEC=900`, `FOOD_TAX_BPS=500`, `FE
 storage vars. Notifications: `SMS_PROVIDER=twilio|mock`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`,
 `TWILIO_FROM` / `TWILIO_MESSAGING_SERVICE_SID`, `EMAIL_PROVIDER=resend|mailpit|mock`, `RESEND_API_KEY`,
 `RESEND_WEBHOOK_SECRET`, `EMAIL_FROM`, `MAILPIT_URL` (demo: Mailpit HTTP send API `POST /api/v1/send`).
+
+**Additions (2026-10-11 redesign):**
+
+| Var | Service | Default | Meaning |
+|---|---|---|---|
+| `EXTERNAL_IMAGE_HOSTS` | marketplace, identity (any service that resolves image refs) | `live.staticflickr.com,upload.wikimedia.org,randomuser.me` | CSV of hosts whose absolute `https://` image URLs are served as-is; `*.example.com` = subdomains only; `none` = no external images; an entry with a scheme, path or bare `*` fails startup. ADR-035 |
+| `DISCOVERY_CACHE_TTL_SEC` | marketplace | `60` | Seconds a discovery listing (ordered ids, counts, facets) and the scoped-offers map stay cached per area/drop/filters; `0` disables. API writes bump the epoch; direct Mongo writes are seen after the TTL |
+| `SEED_DATA_DIR` | marketplace, seeds | `<repo>/scripts/seed-data` | Directory with `localities.json` (demo gazetteer lazy load) and the seed generator inputs; absent in a Docker image = empty gazetteer |
+| `DEMO_PHONE_PREFIXES` | identity | unset = `+91900,+91910,+91920,+91930` in demo, none elsewhere | E.164 prefixes that get the fixed demo OTP when `APP_MODE=demo` and `DEMO_OTP_ENABLED=true` (ignored, and refused as a truthy `DEMO_*` value, in production). Leave unset |
+| `RATE_LIMIT_ADMIN_PASSWORD_PER_MIN` | gateway | `10` | Fail-closed per-IP limit on `/api/v1/auth/admin/password/*` |
+| `ADMIN_RESET_MAX_PER_EMAIL` | identity | `3` | Forgot-password requests per email per `ADMIN_LOGIN_WINDOW_SEC` |
+| `PUBLIC_WEB_URL` | identity (and all services that build links) | `http://localhost:5173` (demo) | **Required in production** and must not be a localhost address: identity refuses to start otherwise, because it builds the admin reset link `${PUBLIC_WEB_URL}/admin/reset-password?token=...` |
+| `STORAGE_PROVIDER`, `S3_*` | identity | as marketplace | Avatar uploads (`POST /me/uploads`); compose gives identity the shared storage env |
+| `CITY_NAME`, `CITY_PILOT` | gateway | `Bengaluru`, `true` | `GET /api/v1/meta` `city {name, pilot}` |
+| `GOOGLE_MAPS_API_KEY` | marketplace | – | With `GEO_PROVIDER=google` also powers address search: **Places API (New)** (`places:autocomplete`, place details) and Geocoding reverse; without it the demo gazetteer answers |
+| `MARKETPLACE_URL`, `ORDERS_URL` | delivery | `http://localhost:4002`, `http://localhost:4003` | Restaurant phone fallback for the call button; order-code backfill |
+
 
 ## 13. Testing strategy
 - **Unit** (vitest): pricing (incl. property tests on reconciliation), state machines, phone

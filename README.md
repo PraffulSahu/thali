@@ -4,6 +4,28 @@ A food-delivery marketplace for a pilot launch in India: consumers, restaurants 
 partners and administrators, with multi-restaurant checkout, real payment/refund/ledger flows, dispatch and
 live tracking. It is a MERN-style monorepo of six domain services behind an API gateway and one React SPA.
 
+## What is in it
+
+- **Consumers**: a public landing page with address search (type an address or use your location), discovery of
+  restaurants that deliver to you with counts, cuisine chips, pure-veg and offers, restaurant pages with a
+  recommended section and an item customizer, a floating multi-restaurant cart, **per-restaurant checkout**
+  (pay for one restaurant and keep the rest in the cart), live order tracking with the rider's remaining ETA,
+  refund progress per restaurant, ratings, Thali Plus membership, support tickets, saved addresses with
+  locality, profile pictures.
+- **Restaurants**: live-orders board (new, preparing, ready) with accept and reject, pause controls, menu and
+  stock management with pure-veg enforcement and recommended items, store settings, finance with today's
+  figures and payouts, onboarding wizard.
+- **Delivery partners**: online toggle, time-limited offers that show only the drop **area** (never the
+  customer's address before pickup), batching explanations, pickup and delivery codes, **call the restaurant or
+  customer** (simulated in demo), earnings and payouts.
+- **Admins**: overview with live counts and "needs attention", global search (orders, phones, users),
+  approvals, TMS with a nearest-partner assign picker, finance and refunds, catalog (scoped coupons, banners,
+  cuisines, service areas), support, audit log, **explanatory health** (a failing provider is "degraded", not
+  "down"), **bulk retry** of failed notifications and **bulk replay** of dead letters, and a **password reset**
+  by emailed link plus authenticator code.
+- **Design**: the Masala design system with **light, dark and system themes** on every screen, self-hosted fonts,
+  and honest-data labels (no fake ratings, estimates marked `EST.`, simulated locations marked).
+
 > **Mode and honesty note.** The stack boots in `APP_MODE=demo`: payments, SMS and maps are simulated
 > (a signed mock payment webhook, a mock SMS provider, a haversine estimator), email goes to a local Mailpit
 > inbox and files go to a local MinIO. Every provider adapter for Razorpay, Twilio, Resend, Google Maps and
@@ -25,7 +47,9 @@ live tracking. It is a MERN-style monorepo of six domain services behind an API 
 cp .env.example .env        # demo-only placeholder secrets; boots out of the box
 npm ci
 npm run stack:up            # docker compose up -d --build --wait (first build takes a few minutes)
+npm run seed:images         # optional: mirror the demo photos into MinIO so the app shows them offline (one time, cached)
 npm run seed                # idempotent demo data (refuses to run unless APP_MODE=demo)
+npm run demo:traffic        # optional: place and progress live orders so the boards are busy
 ```
 
 `cp .env.example .env` is for a local demo only: every placeholder secret in it carries the marker `thali-demo-`,
@@ -44,15 +68,15 @@ you still set `APP_MODE`, the real provider credentials, turn `DEMO_OTP_ENABLED`
 
 `npm run seed` runs each service's own seed inside its container (`docker compose exec <svc> node dist/seed.js`;
 order: identity, marketplace, delivery, payments, notifications, orders), so every service only writes its own
-database. On a fresh stack the first run inserts 168 documents (identity 11, marketplace 63, delivery 18, payments 20,
-notifications 19, orders 37) and a second run reports 0 inserts. Options: `npm run seed -- identity marketplace` (only some services)
+database. A second run reports 0 inserts (idempotent). TODO (controller, after the Bengaluru seed is verified):
+state the per-service insert counts and the duration of the first run here. Options: `npm run seed -- identity marketplace` (only some services)
 and `npm run seed -- --local` (host mode with tsx against the infra stack and the values in `.env`).
 
 Then open:
 
 | What | URL |
 |---|---|
-| Web app (consumer, `/restaurant`, `/partner`, `/admin`) | http://localhost:5173 |
+| Web app: landing and consumer at `/`, sign-in at `/signin?role=customer\|restaurant\|partner\|admin`, then `/restaurant`, `/partner`, `/admin` | http://localhost:5173 |
 | API gateway | http://localhost:8080 (health: `/health/ready`, meta: `/api/v1/meta`) |
 | Swagger UI (all seven specs) | http://localhost:8080/api/docs |
 | Mailpit inbox (demo emails) | http://localhost:8025 |
@@ -85,6 +109,39 @@ added to `.env` (the Mailpit inbox is then http://localhost:18025 and MinIO http
 `S3_PUBLIC_ENDPOINT` follows `MINIO_HOST_PORT` automatically, so browser uploads keep working. The infra stack's
 Mongo is on 27018 and Redis on 6379; the full stack does not publish them, so there is no clash there.
 
+## Demo: the Bengaluru marketplace
+
+In demo mode the seed builds a Bengaluru-scale marketplace so every screen has realistic content: restaurants
+across 71 localities with fictional names but real streets, dishes and prices, menus with photos, consumers,
+delivery partners and two months of order history with ratings, payouts and refunds, plus one city-wide service area.
+The data is generated deterministically (`@thali/contracts/seed-blr`), so it is the same on every machine and
+re-running the seed changes nothing. The older small story data (`TH-DEMOMULTI` and the nine accounts below) is
+kept. Mode is shown in a persistent banner, and everything seeded is flagged `isDemo`.
+
+| Dataset | Count |
+|---|---|
+| Restaurants, owners | TODO (controller: fill from the verified seed; target about 600 restaurants / 450 owners) |
+| Consumers, delivery partners | TODO (target about 1,000 / 250) |
+| Historical checkouts, menu items | TODO (target about 5,000 over 60 days / about 15,000 items) |
+
+Try it:
+
+1. Open http://localhost:5173. The public landing asks "Where should we deliver?": type `Indiranagar` or
+   `Koramangala`, pick a suggestion (or use your location) and you land on discovery for that address.
+2. Toggle **light / dark / system** from the theme control in the header (or the account menu on phones).
+3. Sign in from `/signin?role=customer` (phone, demo OTP), `/signin?role=restaurant`, `/signin?role=partner`, or
+   `/signin?role=admin` (email, password, authenticator code). `/admin/login` redirects there.
+4. Add items from two restaurants, then check out **one** restaurant from the cart bar; the other stays in the cart.
+5. For a busy dashboard run `npm run demo:traffic`, then open the owner board, the partner home and the admin overview.
+
+Sample logins for the generated data: TODO (controller: list a few consumer `+91910...`, owner `+91920...` and
+partner `+91930...` numbers that exist after the seed, all with the demo OTP `123456`).
+
+Photos are real, CC-licensed pictures from Wikimedia Commons and Openverse plus randomuser.me portraits; the
+attribution for every image is in [scripts/seed-data/CREDITS.md](scripts/seed-data/CREDITS.md) (restaurant and
+person names are fictional). Run `npm run seed:images` once to copy them into the local MinIO; without it the
+app hot-links the original hosts, which are allowed by `EXTERNAL_IMAGE_HOSTS`.
+
 ## Demo credentials (demo mode only)
 
 | Role | Sign in | Code / password |
@@ -92,13 +149,13 @@ Mongo is on 27018 and Redis on 6379; the full stack does not publish them, so th
 | Consumers | phone `+919000000001`, `+919000000002`, `+919000000003` | OTP `123456` |
 | Restaurant owners | `+919100000001`, `+919100000002` | OTP `123456` |
 | Delivery partners | `+919200000001` (approved, online), `+919200000002` (approved, offline) | OTP `123456` |
-| Admin | `admin@thali.demo` at `/admin` | password `ThaliDemo#2026`, TOTP secret `THALIDEMOTOTPSECRETKEY234567ABCD`; the seed prints both, the otpauth URI and the current 6-digit code. Override with `SEED_ADMIN_PASSWORD` / `SEED_ADMIN_TOTP_SECRET` |
+| Admin | `admin@thali.demo` at `/signin?role=admin` | password `ThaliDemo#2026`, TOTP secret `THALIDEMOTOTPSECRETKEY234567ABCD`; the seed prints both, the otpauth URI and the current 6-digit code. Override with `SEED_ADMIN_PASSWORD` / `SEED_ADMIN_TOTP_SECRET` |
 
 The admin password and TOTP secret are constants in `services/identity/src/seed.ts`; `npm run seed` (the identity
 step) prints the email, password, TOTP secret, the `otpauth://` URI and the current 6-digit code, so you can also
 copy them from the seed output. They exist only in demo data and are never created in production.
 
-The fixed OTP `123456` works only for the numbers in `DEMO_PHONES` while `APP_MODE=demo` and
+The fixed OTP `123456` works only for the numbers in `DEMO_PHONES` (and, for the generated Bengaluru accounts, the prefixes in `DEMO_PHONE_PREFIXES`, default `+91900,+91910,+91920,+91930`) while `APP_MODE=demo` and
 `DEMO_OTP_ENABLED=true` (demo phones and the fixed OTP exist in demo mode only; production refuses both). OTP requests are rate limited per phone (5 per hour), so vary the phone when you
 script flows. In production there is no fixed OTP and no demo admin: create admins with the bootstrap CLI
 ([docs/06-deployment.md](docs/06-deployment.md)).
@@ -158,7 +215,7 @@ services/notifications  SMS / email / in-app with retries, SSE hub
 apps/web                React SPA: consumer, restaurant, partner and admin areas
 e2e/                    Playwright end-to-end and failure-scenario tests
 infra/                  mongo init + keyfile scripts, nginx config
-scripts/                dev.sh, gen-env.sh, wait-for-health.sh, seed.ts, smoke.ts
+scripts/                dev.sh, gen-env.sh, wait-for-health.sh, seed.ts, seed-images.ts, demo-traffic.ts, smoke.ts, seed-data/ (Bengaluru dataset + CREDITS.md)
 docs/                   PRD, HLD, LLD, ADRs, provider setup, deployment, runbook, checklist, diagrams
 ```
 
@@ -166,14 +223,16 @@ docs/                   PRD, HLD, LLD, ADRs, provider setup, deployment, runbook
 
 | Doc | Contents |
 |---|---|
-| [docs/01-PRD.md](docs/01-PRD.md), [02-HLD.md](docs/02-HLD.md), [03-LLD.md](docs/03-LLD.md), [04-ADR.md](docs/04-ADR.md) | Requirements, architecture, binding contracts, decisions (ADR-014 onward record build-time rulings) |
+| [docs/01-PRD.md](docs/01-PRD.md), [02-HLD.md](docs/02-HLD.md), [03-LLD.md](docs/03-LLD.md), [04-ADR.md](docs/04-ADR.md) | Requirements, architecture, binding contracts, decisions (ADR-014 onward record build-time rulings; ADR-034 to ADR-041 the UI redesign) |
 | [docs/05-provider-setup.md](docs/05-provider-setup.md) | Razorpay, Twilio (India DLT), Resend, Google Maps, S3: exact credentials, console steps, webhook URLs, status |
 | [docs/06-deployment.md](docs/06-deployment.md) | Staging and production on ECS Fargate (or equivalent), Atlas, managed Redis, secrets, TLS, scaling |
-| [docs/07-runbook.md](docs/07-runbook.md) | Stuck payment/checkout/order, refunds, dead letters, Redis loss, failover, provider outage, secret rotation |
+| [docs/07-runbook.md](docs/07-runbook.md) | Stuck payment/checkout/order, refunds, dead letters, Redis loss, failover, provider outage, secret rotation; reseed, image mirror, demo traffic, bulk retry/replay, reading "degraded" (section 14) |
 | [docs/08-launch-checklist.md](docs/08-launch-checklist.md) | Verified vs pending external configuration, limitations, launch blockers |
 | [docs/09-api.md](docs/09-api.md) | Swagger locations, auth, idempotency, webhooks, pagination, errors |
 | [docs/10-testing.md](docs/10-testing.md) | How to run tests; recorded results |
 | [docs/backup-restore.md](docs/backup-restore.md) | mongodump / mongorestore per service database, Redis AOF |
+| [docs/ui-redesign-context.md](docs/ui-redesign-context.md) | The original UI redesign brief (every screen and data object); the redesign is implemented, see the note at its top |
+| [scripts/seed-data/CREDITS.md](scripts/seed-data/CREDITS.md) | Photo attribution for the demo dataset (CC licences) |
 | [docs/diagrams/](docs/diagrams/) | Architecture, checkout and refund sagas, delivery flow, state machines (Mermaid) |
 
 ## Configuration
@@ -187,6 +246,10 @@ other than a local demo with `scripts/gen-env.sh` (see Quick start); by hand tha
 openssl rand -base64 32     # FIELD_ENCRYPTION_KEY (base64 of exactly 32 bytes)
 openssl rand -hex 32        # INTERNAL_SERVICE_SECRET, peppers, webhook secrets, Mongo/MinIO passwords
 ```
+
+For production also set `PUBLIC_WEB_URL` (the public SPA origin; identity refuses to start without it because it
+builds the admin password-reset link), decide `EXTERNAL_IMAGE_HOSTS` (usually `none`) and enable Google Places for
+address search ([docs/06-deployment.md](docs/06-deployment.md) section 7).
 
 `APP_MODE=production` refuses to start with any mock provider, Mailpit, the demo geo provider, any truthy
 `DEMO_*` variable, any value containing the `thali-demo-` placeholder marker (raw, inside a URI or

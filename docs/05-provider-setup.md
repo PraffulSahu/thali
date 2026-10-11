@@ -214,11 +214,12 @@ admin health page) and falls back to a haversine estimate labelled `HAVERSINE_FA
 | A Google Cloud project with **billing enabled** | Google Cloud Console |
 | **Routes API** enabled | APIs & Services, Library |
 | **Geocoding API** enabled | APIs & Services, Library |
+| **Places API (New)** enabled (2026-10-11, address search) | APIs & Services, Library; marketplace calls `places:autocomplete` and place details (field mask `id,formattedAddress,location,addressComponents`) |
 | An API key | `GOOGLE_MAPS_API_KEY` (secret) on **marketplace** and **delivery**, with `GEO_PROVIDER=google` |
 
 ### Key restrictions (do this before production)
 
-- **API restrictions:** restrict the key to *Routes API* and *Geocoding API* only.
+- **API restrictions:** restrict the key to *Routes API*, *Geocoding API* and *Places API (New)* only.
 - **Application restrictions:** *IP addresses*: the NAT/egress addresses of the marketplace and delivery tasks.
   Do not use HTTP-referrer restrictions (the key is never sent to browsers).
 - Never ship this key in the SPA. Set a quota cap and a budget alert; rotate it if it ever appears in a log.
@@ -226,8 +227,13 @@ admin health page) and falls back to a haversine estimate labelled `HAVERSINE_FA
   public OSM tile servers have a usage policy that does not allow heavy production traffic: put a tile
   provider (or your own tile cache) before launch by changing `OSM_TILE_URL` (and the attribution) in `apps/web/src/components/ui/Map.tsx`; it is a build-time constant, not an environment variable.
 
-Status note: the Geocoding adapter method exists and is tested, but no service route calls it yet. Routes API
-is the only Google call made at runtime today. Enabling Geocoding costs nothing until used.
+Status note (updated 2026-10-11): address search now calls Google when `GEO_PROVIDER=google`. Marketplace
+`GET /discovery/places` uses Places autocomplete (India only, location-biased, with a session token),
+`GET /discovery/places/:placeId` uses Place Details, and `GET /discovery/reverse` uses Geocoding reverse. Google
+results are cached for 24 h and Google failures fall back to the seeded gazetteer (labelled `FALLBACK` in
+production, `DEMO_GAZETTEER` in demo) and are recorded as a failing `maps` provider on the health page. A malformed
+place id answers 404 and does not count as a provider error. All of this is unverified against live Google until
+a key is available.
 
 ### How to verify
 

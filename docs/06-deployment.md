@@ -188,8 +188,9 @@ openssl genpkey -algorithm ED25519 -out jwt-private.pem
 | `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` | payments | |
 | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM` or `TWILIO_MESSAGING_SERVICE_SID` | notifications | |
 | `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET`, `EMAIL_FROM` | notifications | |
-| `GOOGLE_MAPS_API_KEY` | marketplace, delivery | |
+| `GOOGLE_MAPS_API_KEY` | marketplace, delivery | Marketplace now also uses it for address search (Places API (New) autocomplete and details, plus Geocoding reverse); enable those APIs on the key (provider setup section 4). Without Places the address search falls back to the labelled gazetteer, which in production is only a fallback |
 | `S3_*` | marketplace, delivery | Prefer the task IAM role: omit the key variables |
+| `S3_*` (identity) | identity | Customer avatars (`POST /me/uploads`) write to the public bucket: give the identity task the same storage variables and bucket write access as marketplace |
 
 Production-mode checklist for task environment (the services refuse to start otherwise):
 
@@ -200,6 +201,28 @@ PAYMENT_PROVIDER=razorpay   SMS_PROVIDER=twilio   EMAIL_PROVIDER=resend   GEO_PR
 # UNSET (not just false): DEMO_OTP_ENABLED, DEMO_PHONES  (any truthy DEMO_* is refused; compose defaults DEMO_PHONES)
 # unset MAILPIT_URL; no MOCK_WEBHOOK_SECRET needed
 ```
+
+Redesign additions to the production environment (2026-10-11):
+
+```
+PUBLIC_WEB_URL=https://app.example.com   # REQUIRED in production, identity refuses to start if missing or localhost
+EXTERNAL_IMAGE_HOSTS=none                # or the exact CDN/image hosts you trust (CSV); the default list is the demo seed's hosts
+DISCOVERY_CACHE_TTL_SEC=60               # marketplace discovery cache; 0 disables (default 60)
+RATE_LIMIT_ADMIN_PASSWORD_PER_MIN=10     # gateway, admin forgot/reset per IP (default 10)
+# leave unset: DEMO_PHONE_PREFIXES (demo only), SEED_DATA_DIR (seed and demo gazetteer only)
+```
+
+- `PUBLIC_WEB_URL` must be the public origin that serves the SPA, with the scheme: the admin password-reset
+  email links to `${PUBLIC_WEB_URL}/admin/reset-password?token=...`. A missing value or a `localhost`, `127.*`,
+  `::1` or `0.0.0.0` host fails identity at startup. The same value drives other emailed links (restaurant
+  verification) and the CORS/CSRF origin defaults.
+- Admin password reset needs a working email provider (Resend) on notifications; without it the admin sees the
+  generic confirmation and no mail arrives (the failure shows as a failing email provider on the health page).
+- `EXTERNAL_IMAGE_HOSTS`: absolute `https://` image URLs are served only from these hosts (`*.example.com`
+  matches subdomains only; `none` disables). Real restaurants upload to the public bucket, so production
+  normally sets `none`. If a CSP is added later, `img-src` must include the public bucket origin and this list.
+- Google Places is billed per request; the SPA debounces keystrokes (250 ms), the route is rate limited per IP
+  at the gateway and Google results are cached for 24 h. Set a quota cap on the key.
 
 Also refused in production (fail fast at startup, without echoing the value): any environment value containing the
 `.env.example` placeholder marker `thali-demo-` (raw, inside a connection URI, or base64-encoded; ADR-032), and

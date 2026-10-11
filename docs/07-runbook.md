@@ -52,6 +52,7 @@ Returns `overall` and, per service, `status` (`up`/`degraded`/`down`), `latencyM
 | `consumerLag` growing | consumer stuck or slow | logs; section 6 |
 | `deadLetters` > 0 | events a consumer gave up on | section 6 |
 | `providerErrorsByProvider` non-empty | upstream provider failing | section 11 |
+| `degradedReasons` / `summary` / `providers` (2026-10-11 redesign) | the health page says in words why a service is degraded | section 14.6 |
 
 The same details are available per service from inside the network (this snippet is verified):
 
@@ -427,3 +428,151 @@ Log lines (JSON) with `alert` set: `PAYMENT_MISMATCH`, `DUPLICATE_CAPTURE`, `FAI
 Metrics from the health page: `outboxOldestAgeSec` > 60, `consumerLag` > 100, `deadLetters` > 0,
 `providerErrorsLastHour` > 0. Business signals: checkouts `AWAITING_PAYMENT` older than 20 minutes,
 refunds `FAILED` or `PROCESSING` > 10 minutes, delivery jobs with `exception=true`, notifications `DEAD`.
+
+## 14. Demo data, reseed and bulk operations (2026-10-11 redesign)
+
+### 14.1 Reseed (demo only)
+
+Seeds refuse to run unless `APP_MODE=demo` and must never run against staging or production (ADR-036).
+
+```bash
+# fresh volumes (cleanest: drops Mongo, Redis and MinIO data)
+docker compose down -v && npm run stack:up
+npm run seed:images        # optional first: mirror the photos into MinIO (14.2); `npm run seed` also runs it unless --no-images
+npm run seed               # idempotent; order: identity, marketplace, delivery, payments, notifications, orders
+```
+
+- Re-running `npm run seed` on a seeded stack inserts nothing new (ids are deterministic; only timestamps follow
+  the anchor passed to every service). `npm run seed -- identity marketplace` seeds only some services;
+  `npm run seed -- --local` runs with tsx against the infra stack and the `.env` values (needs `SEED_DATA_DIR`
+  if the repo layout differs).
+- An existing volume does not need a reset: the seed-owned service area `blr-koramangala` is upgraded in place to
+  a city-wide Bengaluru polygon, and the localities gazetteer is upserted.
+- Direct Mongo writes bypass the discovery cache epoch: right after a reseed the first listings can be stale for
+  up to `DISCOVERY_CACHE_TTL_SEC` (60 s). Wait a minute, or bump the epoch by editing any restaurant through the API.
+- The seed-data directory (`scripts/seed-data`) must be reachable by the service that reads it. If a seed fails
+  with a missing file, run `npm run seed -- --local`, or set `SEED_DATA_DIR`.
+- TODO (controller, after Task 8 verification): record the seed duration, per-collection document counts on a
+  fresh stack, the sample sign-in phones per role (consumers `+91910...`, owners `+91920...`, partners
+  `+91930...`, all with OTP `123456` in demo) and the admin credentials printed by the identity seed.
+
+### 14.2 Image mirror (`npm run seed:images`)
+
+The photos come from `scripts/seed-data/images.json` (CC-licensed; credits in `scripts/seed-data/CREDITS.md`)
+and `avatars.json` (randomuser.me).
+
+```bash
+npm run seed:images                      # download (cached in .cache/seed-images) + upload to the public MinIO bucket + write the manifest
+npm run seed:images -- --no-upload       # only fill the download cache
+npm run seed:images -- --offline         # no downloads: upload what is cached
+npm run seed:images -- --concurrency 4   # be gentler with the hosts
+```
+
+- It needs MinIO up (`MINIO_ROOT_USER`, `MINIO_ROOT_PASSWORD`, `MINIO_HOST_PORT`, `S3_PUBLIC_BUCKET` from `.env`;
+  override the endpoint with `SEED_IMAGES_S3_ENDPOINT`). Uploads are HEAD-then-PUT, so re-runs upload nothing.
+- Wikimedia throttles with 429 when many full-size thumbnails are requested at once: the script backs off and
+  retries; a host that keeps failing leaves some images out of `.cache/seed-images/manifest.json`. That is not an
+  error: the seed falls back to the absolute URL (host must be in `EXTERNAL_IMAGE_HOSTS`) for those.
+- Symptom "images missing in the app": check the browser network tab. Mirrored keys resolve under
+  `S3_PUBLIC_BASE_URL`; absolute URLs need their host in `EXTERNAL_IMAGE_HOSTS` on every service that serves
+  the view, otherwise `imageUrl` is `null` and the SPA draws a placeholder.
+- After the images are mirrored once, re-run `npm run seed` so the documents reference the mirrored keys.
+
+### 14.3 Demo traffic (`npm run demo:traffic`)
+
+Makes the boards look alive: places live orders through the public APIs as seeded demo consumers and walks
+some of them through accept, ready, pickup and delivery with the demo owners and partners.
+
+```bash
+npm run demo:traffic
+```
+
+- Demo mode only. It signs in with the demo OTP, so it is subject to the per-phone OTP limits (5 per hour,
+  30 s cooldown): do not run it in a tight loop.
+- Run it instead of, not together with, `npm run smoke` or `npm run e2e`: they share the demo partners and the
+  owner boards.
+- TODO (controller, after Task 8 verification): document the options (order count, pacing) and the expected
+  end state once the script is final.
+
+### 14.4 Order contact backfill and delivery code backfill (force run)
+
+Two leader-locked scheduler jobs fill fields that older rows lack. Both run at boot and then every 5 minutes as
+cheap, indexed no-ops once nothing is left.
+
+| Job | Service | Fills | Marker |
+|---|---|---|---|
+| `orders:contact-backfill` | orders | `child_orders.customerContact.phoneLast4`, `checkout_groups.customerContact`, `restaurantSetKey:'*'` on settled legacy groups (AWAITING_PAYMENT groups are skipped) | document `_id: 'orders:contact-backfill:v1'` in `thali_orders.migrations`, written once a clean run finds nothing left |
+| `delivery:order-code-backfill` | delivery | `delivery_jobs.childOrderCode` and `checkoutCode` from orders `GET /internal/orders/child/:id` | per row `codesCheckedAt` (an order that answers 404 is not asked again) |
+
+When to force the orders backfill: after a rolling deploy that took longer than one 5-minute tick, old instances
+can write checkouts without `restaurantSetKey` or `customerContact`, and the completion marker may already be
+set. Remove the marker (database shell, section 0.4); the next tick (within 5 minutes, on the leader) does a
+real pass and writes the marker again when nothing is left:
+
+```js
+// mongosh, database thali_orders
+use thali_orders
+db.migrations.deleteOne({ _id: 'orders:contact-backfill:v1' })
+// afterwards: rows still missing the field (expect 0 once the pass has run)
+db.child_orders.countDocuments({ 'customerContact.phoneLast4': { $exists: false } })
+db.checkout_groups.countDocuments({ restaurantSetKey: { $exists: false }, status: { $ne: 'AWAITING_PAYMENT' } })
+```
+
+The code-level equivalent is `runContactBackfill(ctx, {force:true})` in `services/orders/src/jobs/contact-backfill.ts`
+(used by tests). It only updates rows where the field is still missing and writes with `timestamps:false`, so
+it is safe to repeat. Legacy `AWAITING_PAYMENT` groups keep no `restaurantSetKey` until they settle or expire;
+that is expected and read as `'*'`.
+
+- If the delivery backfill logs an orders error and stops, it resumes on the next tick; rows whose order is
+  unknown (404) are marked and skipped, other 4xx errors skip that row only.
+- Searching orders by phone (admin) depends on `phoneLast4`: rows not yet backfilled are not found by phone.
+
+### 14.5 Bulk notification retry and dead-letter replay
+
+Admin overview ("N failed notifications / Retry", "N dead letters / Replay") and the health page call these;
+both are audited and bounded. Roles: retry needs OPS or SUPPORT, replay needs OPS.
+
+```bash
+# how many are failing (all-time byStatus; failedLast24h counts SMS/EMAIL only)
+curl -sS $API/api/v1/admin/notifications/summary -H "authorization: Bearer $ADMIN_TOKEN"
+
+# retry FAILED, then DEAD (oldest first, up to `limit` <= 500 per call; optional channel and before filters)
+curl -sS -X POST $API/api/v1/admin/notifications/retry -H "authorization: Bearer $ADMIN_TOKEN" \
+  -H 'content-type: application/json' -d '{"status":"FAILED","channel":"EMAIL","limit":500}'
+# -> {"queued":N}
+
+# replay dead letters across services (oldest first, `limit` <= 100 in total)
+curl -sS -X POST $API/api/v1/admin/notifications/dead-letters/replay -H "authorization: Bearer $ADMIN_TOKEN" \
+  -H 'content-type: application/json' -d '{"service":"orders","limit":100}'
+# -> {"replayed":N,"failed":[{"service":"...","id":"...","error":"..."}]}
+```
+
+- Fix the cause first (provider credentials, template, sender, a bug behind a dead letter); a bulk retry of rows
+  that fail deterministically just dies again. OTP rows and rows with no resolvable recipient are never retried
+  (they are skipped, so `queued` can be lower than the number of failing rows). The first 25 re-queued rows are kicked immediately; the
+  retry worker takes the rest.
+- A replay entry in `failed` with `id: "*"` means that service's dead letters could not be listed (service down
+  or ops route refused); the other services were still replayed. Repeat after the service is healthy.
+- Replay is idempotent through the inbox (30 day retention). Replay order within one aggregate matters; the bulk
+  call goes oldest first, so run it once and check the downstream state rather than looping.
+- Every call writes one audit entry (`notification.bulk_retry`, `dead_letter.bulk_replay`).
+
+### 14.6 Reading "degraded" on the health page
+
+`GET /api/v1/admin/health` (and the admin Health and Overview pages) now explain each service in words
+(ADR-040). `down` means the service did not answer. A service that answers is `degraded` when one of these holds:
+
+| Reason shown | Rule | What to do |
+|---|---|---|
+| Mongo or Redis down | the service's own dependency check failed | section 8 or 9 |
+| "Email provider failing: ..." / SMS / payment / maps | category has >= 5 errors in the last hour, or >= 2 errors in the last hour with the latest within 10 minutes; the reason carries the last scrubbed provider message | section 11; the service itself is fine and still serving |
+| provider errors >= 5 per hour | total across providers | section 11 |
+| consumer lag > 100 | a stream consumer is behind | logs; section 6 |
+| oldest outbox event > 60 s | relay cannot publish | section 8 |
+| dead letters > 0 | events a consumer gave up on | section 6 / 14.5 |
+
+- One provider error is not "failing": a single blip leaves the category `up`. The 10-minute rule is an
+  approximation from hourly counts plus the latest error time.
+- `summary` is "All checks passing", "Unreachable: <error>", or up to three reasons plus "+N more".
+- A provider chip in the admin console reads "failing", never "down"; the platform is still serving requests.
+- Messages are scrubbed (emails, long digit runs, bearer/key/token values) and kept 1 hour per provider.

@@ -39,6 +39,7 @@ suite repeats this against the running stack (`e2e` flow 11, see [10-testing.md]
 |---|---|
 | Consumer, restaurant owner, partner | `POST /api/v1/auth/otp/request {phone}` then `POST /api/v1/auth/otp/verify {phone, code, guestCartToken?}` returns `{accessToken, user, guestCartMerged?}` and sets the refresh cookie |
 | Admin | `POST /api/v1/auth/admin/login {email, password}` returns `{mfaRequired, mfaToken}` (or `mfaSetupRequired` with a password-only token for first-time TOTP enrolment); `POST /api/v1/auth/admin/mfa {mfaToken, code}` returns the full token |
+| Admin password reset (2026-10-11) | `POST /api/v1/auth/admin/password/forgot {email}` always returns 202; the emailed link opens `/admin/reset-password?token=...`; `POST /api/v1/auth/admin/password/reset {token, newPassword, totpCode}` returns 204 and revokes every session (ADR-039) |
 | Authenticated call | `Authorization: Bearer <accessToken>`; EdDSA JWT, 15 min; verified locally by each service against the identity JWKS |
 | Refresh | `POST /api/v1/auth/refresh` with the `thali_rt` cookie (httpOnly, SameSite=Strict, path `/api/v1/auth`); rotated on every use, reuse of an old token revokes the session family |
 | Service to service | `Authorization: Bearer <HS256 service token>` (`iss` caller, `aud` callee, 60 s) on `/internal/*` only |
@@ -93,6 +94,16 @@ Codes added late in the build, and where they come from:
 | `ORDER_ACCEPT_WINDOW_EXPIRED` | 409 | restaurant accept (orders) | The acceptance window has passed |
 | `CONCURRENT_MODIFICATION` | 409 | any service | Optimistic-concurrency conflict; re-read and retry |
 | `PAYLOAD_TOO_LARGE` | 413 | any service | Body over the 1 MB JSON limit |
+
+Added by the redesign (2026-10-11):
+
+| Code | HTTP | Raised by | Meaning |
+|---|---|---|---|
+| `PURE_VEG_VIOLATION` | 422 | owner/admin restaurant and item writes (marketplace) | A non-veg item or option in a `pureVeg` restaurant, or `pureVeg=true` while non-veg items exist; `details` lists `itemIds`/`optionIds` (or `itemId`/`optionId`) |
+| `COUPON_INVALID` with `details.reason: 'NOT_APPLICABLE'` | 422 | coupon validate, reservations, `POST /checkouts` | A restaurant-scoped coupon applies to none of the checked-out restaurants |
+| `CONFLICT` with `details.reason: 'CHECKOUT_ALREADY_PAID'` / `'CART_CHANGED'` | 409 | `POST /checkouts` | An overlapping older checkout was paid meanwhile (`details.checkoutId`), or the cart changed or another checkout committed during this request (ADR-037) |
+| `CONFLICT` with `details.reason: 'NOT_CALLABLE_NOW'` / `'NO_PHONE_ON_FILE'` | 409 | `POST /deliveries/:jobId/contact` | The job state does not allow that call, or no number is available |
+| `UPSTREAM_UNAVAILABLE` | 502 | `GET /discovery/places/:placeId` | Google Places is failing for a Google place id (gazetteer ids never fail) |
 
 Not separate codes: `FIRST_ORDER_ONLY`, `MIN_ORDER`, `EXPIRED`, `NOT_STARTED`, `INACTIVE`, `NOT_FOUND`,
 `NO_DISCOUNT` are values of `error.details.reason` on `COUPON_INVALID` (422), and `TOTAL_LIMIT` / `PER_USER_LIMIT`
@@ -170,7 +181,7 @@ Provider-side configuration (URLs, events, secrets) is in [05-provider-setup.md]
 | Limit | Scope | Where |
 |---|---|---|
 | 300 / min | per IP, all routes | gateway (fails open if Redis is down) |
-| 60 / min | per IP, `/api/v1/discovery*` | gateway |
+| 60 / min | per IP, `/api/v1/discovery*` (includes address search: `/discovery/places*`, `/discovery/reverse`) | gateway |
 | 10 / min | per IP, `/api/v1/auth/otp/*` | gateway (fails closed with 503 if Redis is down) |
 | 5 / hour, 30 s cooldown | per phone, OTP requests; 20 / hour per IP | identity |
 | 5 attempts | per OTP challenge | identity |
@@ -178,6 +189,10 @@ Provider-side configuration (URLs, events, secrets) is in [05-provider-setup.md]
 | 10 / min | checkout creation per user | orders |
 | 1 / 3 s | location ping per partner | delivery |
 | 20 / min | payment verify per user | payments |
+| 10 / min | `/api/v1/auth/admin/password/*` per IP (`RATE_LIMIT_ADMIN_PASSWORD_PER_MIN`) | gateway (fails closed with 503 if Redis is down) |
+| 10 / 15 min per IP, 3 / 15 min per email | admin forgot-password; 10 / 15 min per IP on reset | identity |
+| 10 / min | partner call reveal (`POST /deliveries/:jobId/contact`) | delivery (fails closed) |
+| 20 / hour | avatar upload presign per user | identity |
 
 429 responses carry `Retry-After`; the gateway exposes `retry-after`, `ratelimit-limit`,
 `ratelimit-remaining` to browsers.
@@ -188,6 +203,7 @@ Provider-side configuration (URLs, events, secrets) is in [05-provider-setup.md]
 2. `GET /api/v1/realtime/stream?ticket=<ticket>` opens `text/event-stream` (heartbeat comment `: ping` every
    20 s, `retry: 5000`, closed after 1 h, at most 5 streams per user).
 3. Event names: `order.updated`, `owner.order`, `delivery.location`, `partner.offer`, `notification`.
+   `delivery.location` carries `remainingMinutes` (live ETA, or `null`) since 2026-10-11.
 4. If the stream drops, poll the REST resource every 10 s (the SPA does this and says so).
 
 The bearer token never goes into the URL; the ticket is consumed on connect.
@@ -196,7 +212,48 @@ The bearer token never goes into the URL; the ticket is consumed on connect.
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `GET /api/v1/meta` | none | `{mode, brand, currency, timezone, providers:{payment,sms,email,maps,storage}}` with labels `demo`/`sandbox`/`live`; drives the mode banner |
+| `GET /api/v1/meta` | none | `{mode, brand, currency, timezone, city:{name, pilot}, providers:{payment,sms,email,maps,storage}}` with labels `demo`/`sandbox`/`live`; drives the mode banner |
 | `GET /health/live`, `GET /health/ready` | none | Process liveness; readiness checks Mongo and Redis (gateway: Redis) |
-| `GET /api/v1/admin/health` | ADMIN + MFA | Aggregated per-service details (outbox, consumer lag, dead letters, provider errors) |
+| `GET /api/v1/admin/health` | ADMIN + MFA | Aggregated per-service details (outbox, consumer lag, dead letters, provider errors, last scrubbed provider error) plus `degradedReasons[]`, `summary` and `providers{category: up\|failing}` per service; a failing provider is `degraded`, `down` means unreachable (ADR-040, runbook 14.6) |
 | `GET /api/v1/admin/audit-logs` | ADMIN + MFA | Central audit log (actor, action, target, summary, IP, correlation id) |
+
+## 11. Redesign additions (2026-10-11)
+
+New and changed endpoints, grouped by service. Request and response shapes, errors and roles are specified in
+[LLD section 10.1](03-LLD.md); the OpenAPI documents are authoritative.
+
+| Area | Endpoint | Auth | Notes |
+|---|---|---|---|
+| Address search | `GET /api/v1/discovery/places?q&lat&lng&limit&sessionToken` | public | Autocomplete: Google Places when configured, otherwise the demo gazetteer; `source` says which |
+| | `GET /api/v1/discovery/places/:placeId` | public | Place details: locality, pincode, location, `serviceable`, `serviceArea` |
+| | `GET /api/v1/discovery/reverse?lat&lng` | public | Reverse geocode for "Use my location"; never fails on a provider outage |
+| Discovery | `GET /api/v1/discovery/restaurants`, `/discovery/search` (changed) | public | `counts`, `facets`, `closedReason`, `pausedUntil`, `acceptingOrders`, `closesAt`, `locality`, `offer`; paused restaurants listed (ADR-034) |
+| | `GET /api/v1/restaurants/:idOrSlug` (changed) | public | `recommended[]`, `unavailableReason`, `stockLeft`, `featured`, `pureVeg`, `locality`, `closesAt` |
+| | `GET /api/v1/coupons/available` (changed) | optional bearer | Guests allowed (`eligibility: SIGN_IN_TO_CHECK`); `restaurantIds`, `badgeLabel`, `offerHeadline` |
+| | `GET /api/v1/restaurants/ratings/mine?childOrderIds=` | user | Which of my delivered children I have already rated |
+| Catalog admin | `PATCH /api/v1/admin/marketplace/restaurants/:id` | ADMIN+MFA | `{pureVeg}` override |
+| | `POST/PATCH /api/v1/admin/marketplace/coupons` (changed) | ADMIN+MFA | `restaurantIds`, `badgeLabel` |
+| Checkout | `POST /api/v1/cart/preview`, `POST /api/v1/checkouts` (changed) | user | `restaurantIds` subset; 409 `CHECKOUT_ALREADY_PAID` / `CART_CHANGED` (ADR-037) |
+| Orders | `GET /api/v1/orders/:checkoutId` (changed) | user | Each child adds `restaurant {location, address}`; `deliveryStatus` can be `AT_PICKUP` |
+| Admin orders | `GET /api/v1/admin/orders/checkouts` | ADMIN+MFA | Checkout-level list; search by code, id, restaurant, phone; `attention` flag |
+| | `GET /api/v1/admin/orders/overview` (changed) | ADMIN+MFA | `today.byStatus`, `today.refundedPaise`, `refundsPendingPaise`, `support{open,inProgress}` |
+| | `GET /api/v1/admin/orders?phone=` (changed) | ADMIN+MFA | Phone search by last four digits (any input with 4+ digits) |
+| Delivery (partner) | `POST /api/v1/deliveries/:jobId/contact` | DELIVERY_PARTNER | Call the restaurant or customer; audited; demo is simulated (ADR-038) |
+| | `GET /api/v1/partner/offers` (changed) | partner | Offer drop = area + coarse distance only |
+| | `/deliveries/*`, `/deliveries/history` (changed) | partner | `drop {name, area, label, address\|null, location\|null, addressRevealed, phoneMasked}`; `childOrderCode`, `checkoutCode` |
+| | `GET /api/v1/deliveries/tracking/:childOrderId` (changed) | order owner | `remaining {minutes, distanceKm, source, computedAt}` |
+| Delivery (admin) | `GET /api/v1/admin/delivery/jobs?q=` (changed) | ADMIN+MFA | Code search |
+| | `GET /api/v1/admin/delivery/overview` (changed) | ADMIN+MFA | `unassigned`, `partners.approved`, `partners.onDelivery` |
+| | `GET /api/v1/admin/delivery/partners?online&hasCapacity&nearJobId` (changed) | ADMIN+MFA | Assign picker, nearest first |
+| Finance | `GET /api/v1/finance/partner/summary`, `/finance/restaurants/:id/summary` (changed) | partner / owner | `from`/`to` window; `window{earningsPaise, deliveries, entriesByType}` (default today, IST) |
+| Notifications (admin) | `GET /api/v1/admin/notifications/summary` | ADMIN+MFA | Counts by status and channel, last scrubbed provider error |
+| | `POST /api/v1/admin/notifications/retry` | ADMIN+MFA | Bulk retry of FAILED or DEAD (limit <= 500, audited) |
+| | `POST /api/v1/admin/notifications/dead-letters/replay` | ADMIN+MFA | Bulk replay across services (limit <= 100, audited) |
+| Identity | `POST /api/v1/auth/admin/password/forgot`, `/reset` | public | Admin password reset (ADR-039) |
+| | `POST /api/v1/me/uploads`; `PATCH /api/v1/me {avatarKey}` | user | Avatar upload and set |
+| | `/me/addresses` (changed) | user | `locality`, `formattedAddress` |
+| Gateway | `GET /api/v1/meta`, `GET /api/v1/admin/health` (changed) | none / ADMIN+MFA | `city`; health explanations |
+
+Image fields in every view are resolved URLs; the stored value may be a storage key or an `https://` URL on an
+allowlisted host (`EXTERNAL_IMAGE_HOSTS`, ADR-035). Clients must treat `imageUrl: null` as "no image" and draw
+a placeholder.

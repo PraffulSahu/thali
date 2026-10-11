@@ -143,13 +143,17 @@ served safely or legally until it is done.
 | 2 | **Razorpay live activation** | Business KYC, bank account, live keys, live webhook, payment methods, settlement terms | Business owner | [05](05-provider-setup.md#1-razorpay-payments-and-refunds) | Yes |
 | 3 | **Twilio account + India DLT registration** | SID/token, sender or Messaging Service, **PE ID, registered header, every template registered**, Twilio India bundle approved | Business owner + Engineering | [05](05-provider-setup.md#2-twilio-sms-and-india-dlt-registration) | Yes (no OTP, no login) |
 | 4 | **Resend domain and webhook** | Verified domain (SPF, DKIM, DMARC), API key, signing secret, `EMAIL_FROM` | Engineering + DNS owner | [05](05-provider-setup.md#3-resend-email) | Yes (restaurant verification email) |
-| 5 | **Google Maps key** | Billing project, Routes + Geocoding APIs, key restricted by API and IP, quota/budget alert | Engineering | [05](05-provider-setup.md#4-google-maps-platform-eta-distance-geocoding) | Yes for accurate fees/ETAs (fallback is labelled haversine) |
+| 5 | **Google Maps key** | Billing project, Routes + Geocoding + Places (New) APIs, key restricted by API and IP, quota/budget alert | Engineering | [05](05-provider-setup.md#4-google-maps-platform-eta-distance-geocoding) | Yes for accurate fees/ETAs (fallback is labelled haversine) |
 | 6 | **AWS S3 buckets, CORS, IAM, CDN** | Two buckets, block public access, encryption, CORS, IAM policy, CloudFront for images | Engineering | [05](05-provider-setup.md#5-s3-object-storage) | Yes |
 | 7 | **Cloud environment** | AWS account, VPC, ECS services, ALB + ACM certificate + DNS, Atlas cluster with PITR and per-service users, managed Redis, Secrets Manager | Engineering | [06](06-deployment.md) | Yes |
 | 8 | **Staging deployment and live smoke** | Run the stack on cloud with sandbox providers; record `smoke`/e2e equivalent results | Engineering | [06](06-deployment.md), [10](10-testing.md) | Yes |
 | 9 | **First production admin** | `bootstrap-admin` run, TOTP enrolled, second SUPER_ADMIN created | Engineering | [06](06-deployment.md) section 8 | Yes |
 | 10 | **Real tile provider** | Replace public OSM tile servers with a provider/CDN (policy and capacity) | Engineering | [05](05-provider-setup.md) | Before public traffic |
 | 11 | **Alerting and on-call** | Wire the alerts listed in the runbook section 13 to a pager; name an owner | Engineering/Ops | [07](07-runbook.md) | Yes |
+| 12 | **`PUBLIC_WEB_URL` (production)** | Set to the public SPA origin (https, not localhost) on identity and the other services; identity refuses to start otherwise because it builds the admin password-reset link from it (2026-10-11) | Engineering | [06](06-deployment.md) section 7 | Yes |
+| 13 | **`EXTERNAL_IMAGE_HOSTS` decision** | Set `none` (real uploads only) or the exact trusted image hosts; the default list is the demo seed's hosts | Engineering | [06](06-deployment.md) section 7, ADR-035 | Before launch |
+| 14 | **Google Places for address search** | Enable Places API (New) on the Google key (restricted by API and IP), quota cap and budget alert; verify `GET /api/v1/discovery/places?q=...` returns `source: GOOGLE` | Engineering | [05](05-provider-setup.md#4-google-maps-platform-eta-distance-geocoding) | Yes for accurate address search (fallback is the labelled gazetteer) |
+| 15 | **Admin password-reset email** | Resend sending verified so `ADMIN_PASSWORD_RESET` mail is delivered; test with a second admin; reset needs TOTP | Engineering | [05](05-provider-setup.md#3-resend-email) | Yes |
 
 ## 3. Launch blockers (decisions and reviews not done)
 
@@ -239,6 +243,25 @@ reviews, so nobody is surprised. "Before launch" rows are also listed in section
 | Infra: MinIO images are archived `bitnamilegacy` builds (dev/test only; production uses AWS S3); infra compose image tags are not pinned; the 7 service Dockerfiles are near-duplicates; `.npmrc` sets `legacy-peer-deps=true` (npm arborist crash workaround) | tasks 1 and 15 minors |
 | Integration hooks have a 120 s timeout, which can mask a hang; services build images from the working tree, so build releases from a clean checkout of a tagged commit | task 15 minor |
 | E2E leaves demo data behind per run (orders and a suspended "E2E Kitchen"); reset with `docker compose down -v` | task 21 minor |
+
+### 4.5 UI redesign (2026-10-11): known limitations and residuals
+
+| Limitation | Source / note |
+|---|---|
+| Discovery listings are cached up to `DISCOVERY_CACHE_TTL_SEC` (60 s): order and counts can lag direct Mongo writes (seeds, scripts); API writes bump the epoch; pages are re-hydrated so open status and rating are current | ADR-034, task 2 |
+| Distance and ETA in the restaurant list are haversine estimates (`DEMO_HAVERSINE` / `HAVERSINE_FALLBACK`), while the restaurant page and quote still call the geo provider, so the two can differ slightly with Google | task 2 concern 2 |
+| `menuStats` (price band, availability counts) ignores tracked stock: a stock-out does not change it | task 2 concern 4 |
+| `restaurant.updated` carries no `pureVeg`; the owner and admin set it through marketplace and orders reads restaurant data through internal calls | task 2 package gap |
+| Address search is verified against the demo gazetteer only; Google Places (New) is unverified live. Gazetteer street rows sit at the locality centre | task 2 concern 5, launch item 14 |
+| Provider "failing" (health) is approximated from hourly counts plus the latest error time; an exact 10-minute count needs a service-kit change | ADR-040, task 6 |
+| A pending admin password reset can be blocked for 15 minutes by anyone requesting links for that email (per-email limit); the forgot email is sent in-process after the 202, so a crash right then loses it | ADR-039, task 6 |
+| Rolling deploys: old orders instances do not supersede overlapping checkouts (resolve at the 15 minute TTL); force the contact backfill after a long deploy (runbook 14.4) | ADR-037, task 3 minors 3 and 5 |
+| `drop.area` is the address locality, else the pincode (no service-area name); partner call "PROXY" mode is not implemented (DIRECT in non-demo, simulated in demo) | ADR-038, tasks 3 and 4 |
+| Remaining-ETA on tracking is computed even when the rider position is stale; clients must check `stale` | task 4 minor 5 |
+| Admin bulk notification replay walks services sequentially and takes the oldest window first; a service that cannot be listed shows as `id: "*"` | task 5 minors |
+| Seed photos: some dishes use a close-match photo, covers are partly generic; restaurant names are fictional; attribution is in `scripts/seed-data/CREDITS.md` and must accompany any shared demo | ADR-035, seed data report |
+| Item search matches word prefixes in name and tags only (not descriptions, not mid-word) | task 2 fix round 1 |
+| Foundation polish backlog (sub-role tag slot in the admin shell, per-role mobile tab order, shared table primitives, consumer shell slots) | progress ledger |
 
 ## 5. Sign-off
 
