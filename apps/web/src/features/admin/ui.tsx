@@ -285,7 +285,8 @@ export function CheckoutsTable({ rows, loading, error, onRetry, empty, caption, 
 }
 
 export const CHECKOUT_STATUS_OPTIONS: { value: string; label: string }[] = [
-  { value: 'ALL', label: 'All' },
+  // ORD-1 lists never-placed checkouts (awaiting payment / payment failed / expired) only when asked by status.
+  { value: 'ALL', label: 'All placed' },
   { value: 'PAID_PLACED', label: 'Order placed' },
   { value: 'IN_PROGRESS', label: 'In progress' },
   { value: 'PARTIALLY_COMPLETED', label: 'Partially completed' },
@@ -354,3 +355,15 @@ export function DocRow({ title, sub, chips, actions }: { title: ReactNode; sub: 
     </li>
   );
 }
+
+/* ------------------------------------------------------------------ health text (shared by overview + Health page) */
+
+/** Row text: down → the real error (unreachable), degraded → its reasons, up → summary. */
+export function serviceHealthText(s: { status: 'up' | 'degraded' | 'down'; error?: string; summary?: string; degradedReasons?: string[] }): string {
+  if (s.status === 'down') return s.error ?? s.summary ?? 'No response from this service.';
+  if (s.status === 'degraded') return s.degradedReasons?.length ? s.degradedReasons.join('; ') : s.summary ?? 'Degraded';
+  return s.summary ?? '—';
+}
+
+/** Tone for the health text cell: problems in mono + tone colour, healthy rows muted. */
+export const HEALTH_TEXT_TONE = { up: 'text-fg-3', degraded: 'font-mono text-[12px] text-warn', down: 'font-mono text-[12px] text-bad' } as const;

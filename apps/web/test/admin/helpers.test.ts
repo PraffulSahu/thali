@@ -5,6 +5,7 @@ import { checkRefundInput } from '../../src/features/admin/OrderInvestigation';
 import { bpsToPercent, percentToBps } from '../../src/features/admin/editors/CouponEditor';
 import { pointsToPolygon, ringToPoints } from '../../src/features/admin/editors/ServiceAreaEditor';
 import { classifySearch } from '../../src/features/admin/CommandPalette';
+import { retryOutcome } from '../../src/features/admin/bulk';
 import { adminSubtitle, healthTone } from '../../src/features/admin/shell';
 import { agoLabel, customerLabel, rangeToIso } from '../../src/features/admin/ui';
 
@@ -65,6 +66,12 @@ describe('admin input helpers', () => {
     expect(classifySearch('123')).toEqual({ kind: 'text', term: '123' });
     expect(classifySearch('12345678901234')).toEqual({ kind: 'text', term: '12345678901234' });
     expect(classifySearch('Spice Route')).toEqual({ kind: 'text', term: 'Spice Route' });
+  });
+
+  it('reports what a bulk retry really re-queued', () => {
+    expect(retryOutcome(12, 12)).toEqual({ title: 'Re-queued 12 notifications', description: undefined });
+    expect(retryOutcome(9, 12).title).toBe('9 re-queued, 3 not retryable');
+    expect(retryOutcome(0, 2).title).toBe('0 re-queued, 2 not retryable');
   });
 
   it('labels customers, refresh age, IST ranges, sub-roles and the health dot', () => {

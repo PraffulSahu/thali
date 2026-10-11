@@ -11,10 +11,10 @@ import {
 
 afterEach(() => vi.unstubAllGlobals());
 
-function setup(opts: { roles?: Parameters<typeof adminAuth>[0]; ordersStatus?: number } = {}) {
+function setup(opts: { roles?: Parameters<typeof adminAuth>[0]; ordersStatus?: number; orders?: object; tms?: object } = {}) {
   const calls = routeFetch([
-    ['/admin/orders/overview', () => (opts.ordersStatus ? json({ error: { code: 'UPSTREAM_UNAVAILABLE', message: 'orders down', requestId: 'r1' } }, opts.ordersStatus) : json(ordersOverview))],
-    ['/admin/delivery/overview', () => json(tmsOverview)],
+    ['/admin/orders/overview', () => (opts.ordersStatus ? json({ error: { code: 'UPSTREAM_UNAVAILABLE', message: 'orders down', requestId: 'r1' } }, opts.ordersStatus) : json(opts.orders ?? ordersOverview))],
+    ['/admin/delivery/overview', () => json(opts.tms ?? tmsOverview)],
     ['/admin/marketplace/overview', () => json(marketOverview)],
     ['/admin/health', () => json(healthReport)],
     ['/admin/notifications/summary', () => json(ntfSummary)],
@@ -118,7 +118,7 @@ describe('Admin overview (board 40)', () => {
     await user.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: /retry all/i }));
     await waitFor(() => expect(calls.filter((c) => c.method === 'POST' && c.url.endsWith('/admin/notifications/retry'))).toHaveLength(2));
     expect(calls.filter((c) => c.url.endsWith('/admin/notifications/retry')).map((c) => (c.body as { status: string }).status)).toEqual(['FAILED', 'DEAD']);
-    expect(await screen.findByText(/re-queued 11 notifications/i)).toBeInTheDocument();
+    expect(await screen.findByText('11 re-queued, 1 not retryable')).toBeInTheDocument();
   });
 
   it('recent orders come from ORD-1 with status + day filters and View all keeps them', async () => {
@@ -149,6 +149,28 @@ describe('Admin overview (board 40)', () => {
     expect(within(list).getByText("Your role can't assign deliveries")).toBeInTheDocument();
     expect(within(list).getByText("Your role can't approve restaurants")).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: '3 dead letters · Replay' })).toBeDisabled();
+  });
+
+  it('failed refunds link to Finance only for roles that can retry them', async () => {
+    const failing = { ...ordersOverview, refundsFailed: 2 };
+    setup({ roles: ['FINANCE'], orders: failing });
+    const link = await screen.findByRole('link', { name: /orders with a failed refund · retry/i });
+    expect(link).toHaveAttribute('href', '/admin/finance?tab=refunds&status=FAILED');
+  });
+
+  it('hides the Finance link for Ops and explains why; unassigned counts what ?filter=unassigned lists', async () => {
+    setup({ roles: ['OPS'], orders: { ...ordersOverview, refundsFailed: 2 }, tms: { ...tmsOverview, jobsByStatus: { PENDING_ASSIGNMENT: 4, OFFERED: 3 }, unassigned: 7, exceptions: 1 } });
+    const kpis = await screen.findByRole('region', { name: /today's key figures/i });
+    expect(await within(kpis).findByText('Retrying refunds needs the Finance role')).toBeInTheDocument();
+    expect(within(kpis).queryByRole('link', { name: /retry/i })).not.toBeInTheDocument();
+    expect(within(kpis).getByText('4')).toBeInTheDocument(); // PENDING_ASSIGNMENT only, not 7
+    // 4 + 3 − 1 exception shown = 6 still in dispatch rounds
+    expect(await screen.findByText(/6 more deliveries still in dispatch rounds/)).toBeInTheDocument();
+  });
+
+  it('recent orders default reads "Status: All placed" (ORD-1 lists never-placed checkouts only on request)', async () => {
+    setup();
+    expect(await screen.findByText('Status: All placed')).toBeInTheDocument();
   });
 
   it('healthRows keeps each problem service on its own row and groups the healthy ones', () => {

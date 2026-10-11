@@ -22,7 +22,7 @@ import DeadLettersPanel from './DeadLettersPanel';
 import NotificationsPanel from './NotificationsPanel';
 import { Mono } from './shared';
 import { useHealth } from './shell';
-import { agoLabel, useNow } from './ui';
+import { agoLabel, HEALTH_TEXT_TONE, serviceHealthText, useNow } from './ui';
 
 const REFRESH_MS = 30_000;
 const OVERALL: Record<HealthState, { tone: 'ok' | 'warn' | 'bad'; title: string }> = {
@@ -65,11 +65,10 @@ function ServiceDetails({ health }: { health: ServiceHealth }) {
   );
 }
 
-const TEXT_TONE: Record<HealthState, string> = { up: 'text-fg-3', degraded: 'text-warn', down: 'text-bad' };
 
 function ServiceRow({ name, health }: { name: string; health: ServiceHealth }) {
   const [open, setOpen] = useState(health.status !== 'up');
-  const text = health.status === 'down' ? health.error ?? health.summary ?? 'No response from this service.' : health.degradedReasons?.length ? health.degradedReasons.join('; ') : health.summary ?? '—';
+  const text = serviceHealthText(health);
   const failing = Object.entries(health.providers ?? {}).filter(([, s]) => s === 'failing');
   const providers = Object.entries(health.providers ?? {});
   return (
@@ -82,7 +81,7 @@ function ServiceRow({ name, health }: { name: string; health: ServiceHealth }) {
           <StatusPill kind="health" status={health.status} density="dense" />
         </td>
         <td className="min-w-[240px] px-3.5 py-3">
-          <p className={`break-words font-mono text-[12px] ${TEXT_TONE[health.status]}`}>{text}</p>
+          <p className={`break-words font-mono text-[12px] ${HEALTH_TEXT_TONE[health.status]}`}>{text}</p>
           {health.status === 'down' && health.errorCode ? <p className="mt-1 text-[12px] text-fg-3">Error code <Mono>{health.errorCode}</Mono></p> : null}
           {providers.length ? (
             <p className="mt-1.5 flex flex-wrap gap-1.5">

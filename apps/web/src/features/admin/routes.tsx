@@ -1,10 +1,10 @@
 /**
  * Admin area routes (mounted at `/admin/*` behind the ADMIN + MFA guard). Sign-in + MFA live in the
- * foundation's unified `/signin?role=admin` (the router also redirects `/admin/login`).
+ * foundation's unified `/signin?role=admin`; the root router redirects `/admin/login*` there.
  * Pages are lazy-loaded so the Leaflet map and editors only load when needed.
  */
 import type { RouteObject } from 'react-router';
-import { Navigate, useLocation } from 'react-router';
+import { Navigate } from 'react-router';
 import { NotFoundPage } from '../../components/layout/ErrorBoundary';
 import type { NavItem } from '../../components/layout/RoleNav';
 import type { RoleShellConfig } from '../../components/layout/RoleSidebarShell';
@@ -12,14 +12,7 @@ import { AdminFooter, AdminMobileContext, AdminSearchContext, DeliveriesBadge, H
 
 const page = (load: () => Promise<{ default: React.ComponentType }>) => () => load().then((m) => ({ Component: m.default }));
 
-/** Any leftover `/admin/login?next=` link → the unified sign-in with the Admin tab. */
-function LoginRedirect() {
-  const next = new URLSearchParams(useLocation().search).get('next');
-  return <Navigate to={`/signin?role=admin${next ? `&next=${encodeURIComponent(next)}` : ''}`} replace />;
-}
-
 export const routes: RouteObject[] = [
-  { path: 'login/*', element: <LoginRedirect /> },
   { index: true, lazy: page(() => import('./OverviewPage')) },
   { path: 'approvals', element: <Navigate to="/admin/restaurants?status=APPROVAL_PENDING" replace /> },
   { path: 'restaurants', lazy: page(() => import('./RestaurantsApprovals')) },

@@ -2,7 +2,7 @@
  * Notifications by status with per-row retry and NTF-2 bulk retry (`POST /admin/notifications/retry {status}` for
  * FAILED / DEAD; never OTP), plus the demo-only provider outage switch (`POST /admin/notifications/demo/fail-mode`).
  */
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Badge } from '../../components/ui/Badge';
 import { Button } from '../../components/ui/Button';
@@ -11,12 +11,10 @@ import { DataTable, type Column } from '../../components/ui/DataTable';
 import { Pagination, useCursorPages } from '../../components/ui/Pagination';
 import { RelativeTime } from '../../components/ui/RelativeTime';
 import { StatusPill } from '../../components/ui/StatusPill';
-import { useToast } from '../../components/ui/Toast';
 import { Toggle } from '../../components/ui/Toggle';
 import { useMeta } from '../../hooks/useMeta';
-import { errorMessage } from '../../lib/errors';
-import { plural } from '../../lib/format';
-import { listNotifications, notificationSummary, qk, retryAllNotifications, retryNotification, setFailMode, type AdminNotification } from './api';
+import { listNotifications, notificationSummary, qk, retryNotification, setFailMode, type AdminNotification } from './api';
+import { useRetryNotifications } from './bulk';
 import { useAdminMutation, useAdminRoles } from './shared';
 import { DemoTag, FilterPills, RoleNote } from './ui';
 
@@ -70,8 +68,6 @@ type ShownStatus = (typeof STATUS_OPTIONS)[number]['value'];
 
 export default function NotificationsPanel({ titleId }: { titleId?: string }) {
   const { canOps, canSupport } = useAdminRoles();
-  const qc = useQueryClient();
-  const { toast } = useToast();
   const [status, setStatus] = useState<ShownStatus>('DEAD');
   const [confirmAll, setConfirmAll] = useState(false);
   const pages = useCursorPages();
@@ -82,14 +78,7 @@ export default function NotificationsPanel({ titleId }: { titleId?: string }) {
     placeholderData: keepPreviousData,
   });
   const retry = useAdminMutation((id: string) => retryNotification(id), { success: 'Notification re-queued', invalidate: [['admin', 'health']] });
-  const retryAll = useMutation({
-    mutationFn: (s: 'FAILED' | 'DEAD') => retryAllNotifications({ status: s }),
-    onSuccess: async (r) => {
-      toast({ title: `Re-queued ${plural(r.queued, 'notification')}`, description: 'One-time codes and notifications without a recipient are never retried.', tone: 'success' });
-      await qc.invalidateQueries({ queryKey: ['admin', 'health'] });
-    },
-    onError: (e) => toast({ title: "Couldn't retry notifications", description: errorMessage(e), tone: 'danger' }),
-  });
+  const retryAll = useRetryNotifications();
   const canRetry = canOps || canSupport;
   const retryable = status === 'FAILED' || status === 'DEAD';
   const counts = summary.data?.byStatus;
@@ -159,9 +148,9 @@ export default function NotificationsPanel({ titleId }: { titleId?: string }) {
         open={confirmAll}
         onClose={() => setConfirmAll(false)}
         title={`Retry every ${status === 'DEAD' ? 'given-up' : 'failed'} notification?`}
-        description="Up to 500 notifications are re-queued, oldest first. One-time codes are never resent. Recorded in the audit log."
+        description="Up to 500 notifications are re-queued, oldest first. One-time codes and notifications without a recipient are never resent. Recorded in the audit log."
         confirmLabel="Retry all"
-        onConfirm={() => retryAll.mutateAsync(status as 'FAILED' | 'DEAD')}
+        onConfirm={() => retryAll.mutateAsync({ statuses: [status as 'FAILED' | 'DEAD'], asked: counts ? counts[status] : 0 })}
       />
     </>
   );

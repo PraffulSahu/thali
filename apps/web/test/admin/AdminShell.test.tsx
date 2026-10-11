@@ -2,7 +2,7 @@ import '../setup';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { RoleSidebarShell } from '../../src/components/layout/RoleSidebarShell';
-import { nav, routes, shell } from '../../src/features/admin/routes';
+import { nav, shell } from '../../src/features/admin/routes';
 import { renderWithProviders } from '../utils';
 import { adminAuth, healthReport, json, marketOverview, ordersOverview, routeFetch, tmsOverview } from './fixtures';
 
@@ -35,10 +35,5 @@ describe('Admin shell (board 40 sidebar)', () => {
     expect(await within(sidebar).findByText('a service is down')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /search orders, phones/i, hidden: true }).length).toBeGreaterThanOrEqual(2); // sidebar card + phone top-bar icon
     expect(screen.getAllByText('Ops admin · MFA on').length).toBeGreaterThan(0);
-  });
-
-  it('redirects the old admin login route to the unified sign-in', () => {
-    expect(routes.find((r) => r.path === 'login/*')).toBeDefined();
-    expect(routes.some((r) => r.path === 'login' && 'lazy' in r)).toBe(false);
   });
 });

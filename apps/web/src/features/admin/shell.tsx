@@ -38,9 +38,13 @@ export function PartnersBadge() {
   const { data } = useTmsOverview();
   return <NavPlainCount count={data?.partners.byStatus.APPROVAL_PENDING} label="partners awaiting approval" />;
 }
-export function unassignedCount(data: { unassigned?: number; jobsByStatus: Record<string, number> } | undefined): number | undefined {
+/**
+ * Deliveries waiting for a partner (PENDING_ASSIGNMENT). The TMS jobs API filters one status at a time, so the badge,
+ * the overview tile and `/admin/tms?filter=unassigned` all count exactly this set; offered jobs have their own tab.
+ */
+export function unassignedCount(data: { jobsByStatus: Record<string, number> } | undefined): number | undefined {
   if (!data) return undefined;
-  return data.unassigned ?? (data.jobsByStatus.PENDING_ASSIGNMENT ?? 0) + (data.jobsByStatus.OFFERED ?? 0);
+  return data.jobsByStatus.PENDING_ASSIGNMENT ?? 0;
 }
 export function DeliveriesBadge() {
   const { data } = useTmsOverview();

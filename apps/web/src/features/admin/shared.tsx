@@ -14,6 +14,10 @@ import { errorMessage } from '../../lib/errors';
 import { formatDateTime } from '../../lib/format';
 import type { ApprovalAction, SignedUrl } from './api';
 
+/** Approve copy shared by the overview row, the detail page and the confirm dialogs. */
+export const APPROVE_RESTAURANT_COPY = 'The restaurant goes live in discovery and the owner is notified. This is recorded in the audit log.';
+export const APPROVE_BLOCKED_COPY = 'Approve unlocks after business email is verified';
+
 /** Admin sub-roles from the token (`adm` claim). The server enforces; this only decides what to offer. */
 export function useAdminRoles() {
   const { adminRoles } = useAuth();
@@ -230,7 +234,7 @@ export function ApprovalPanel({ entity, name, status, approveBlockedReason, canA
         open={dialog === 'approve'}
         onClose={() => setDialog(null)}
         title={`Approve ${name}?`}
-        description={`The ${what} goes live and the owner is notified.`}
+        description={entity === 'restaurant' ? APPROVE_RESTAURANT_COPY : `The ${what} goes live and is notified. This is recorded in the audit log.`}
         confirmLabel="Approve"
         onConfirm={() => onAction('approve')}
       />

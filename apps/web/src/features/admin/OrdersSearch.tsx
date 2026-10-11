@@ -5,7 +5,7 @@
  * with the same filters. Rows open the investigation page.
  */
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Button } from '../../components/ui/Button';
 import { Field } from '../../components/ui/Field';
@@ -30,6 +30,9 @@ export default function OrdersSearch() {
   const restaurantId = params.get('restaurantId') ?? '';
   const [draft, setDraft] = useState(q);
   const [rid, setRid] = useState(restaurantId);
+  // ⌘K "Search all orders for …" can change ?q while this page is open: keep the inputs in step with the URL.
+  useEffect(() => setDraft(q), [q]);
+  useEffect(() => setRid(restaurantId), [restaurantId]);
   const pages = useCursorPages();
 
   const update = (next: Record<string, string | null>) => {

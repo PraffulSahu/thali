@@ -10,7 +10,7 @@
  *   recent      ORD-1 `GET /admin/orders/checkouts` (status + day filters, View all → /admin/orders)
  * No realtime here: auto-refresh every 30 s plus Refresh, with "refreshed Ns ago".
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { Button, ButtonLink } from '../../components/ui/Button';
@@ -23,20 +23,19 @@ import { formatPaise } from '../../components/ui/Price';
 import { Skeleton } from '../../components/ui/Skeleton';
 import { StackedStatusBar, type StatusSegment } from '../../components/ui/StackedStatusBar';
 import { StatusPill, humanize } from '../../components/ui/StatusPill';
-import { useToast } from '../../components/ui/Toast';
 import { AccentWord } from '../../components/ui/Typography';
 import { errorMessage } from '../../lib/errors';
 import { plural } from '../../lib/format';
 import {
-  deadLetterCount, listCheckouts, listJobs, listPartners, listRestaurants, notificationSummary, qk, replayAllDeadLetters,
-  restaurantAction, retryableCount, retryAllNotifications, type AdminJob, type AdminPartner, type AdminRestaurant, type HealthReport,
-  type NotificationSummary, type OrdersOverview,
+  deadLetterCount, listCheckouts, listJobs, listPartners, listRestaurants, notificationSummary, qk, retryableCount, type AdminJob,
+  type AdminPartner, type AdminRestaurant, type HealthReport, type NotificationSummary, type OrdersOverview,
 } from './api';
+import { APPROVE_BLOCKED_COPY, APPROVE_RESTAURANT_COPY, useApproveRestaurant, useReplayAllDeadLetters, useRetryNotifications } from './bulk';
 import { PartnerPicker, jobLabel } from './PartnerPicker';
 import { useAdminRoles } from './shared';
 import { unassignedCount, useHealth, useMarketplaceOverview, useOrdersOverview, useTmsOverview } from './shell';
 import {
-  agoLabel, ageLabel, CHECKOUT_STATUS_OPTIONS, CheckoutsTable, DATE_RANGES, istDayLabel, istToday, PillSelect, rangeToIso, RoleNote, useNow,
+  agoLabel, ageLabel, HEALTH_TEXT_TONE, serviceHealthText, CHECKOUT_STATUS_OPTIONS, CheckoutsTable, DATE_RANGES, istDayLabel, istToday, PillSelect, rangeToIso, RoleNote, useNow,
   type DateRange,
 } from './ui';
 
@@ -70,6 +69,7 @@ function Kpis({ orders, market, tms }: { orders: ReturnType<typeof useOrdersOver
   const pendingPartners = t?.partners.byStatus.APPROVAL_PENDING ?? 0;
   const unassigned = unassignedCount(t) ?? 0;
   const failed = o?.refundsFailed ?? 0;
+  const { canFinance } = useAdminRoles();
   const approvalsUnavailable = market.isError || tms.isError;
   return (
     <KpiStrip label="Today's key figures">
@@ -106,6 +106,7 @@ function Kpis({ orders, market, tms }: { orders: ReturnType<typeof useOrdersOver
         highlight={unassigned > 0}
         value={t ? unassigned : undefined}
         sub={<Link to="/admin/tms?filter=unassigned" className="underline underline-offset-2">Open deliveries →</Link>}
+        /* counts PENDING_ASSIGNMENT only, the same set ?filter=unassigned lists (offered jobs live in the Offered tab) */
       />
       <KpiTile
         label="Approvals"
@@ -142,7 +143,13 @@ function Kpis({ orders, market, tms }: { orders: ReturnType<typeof useOrdersOver
         sub={
           o ? (
             failed > 0 ? (
-              <Link to="/admin/finance?tab=refunds&status=FAILED" className="font-semibold text-bad underline underline-offset-2">Retry →</Link>
+              canFinance ? (
+                <Link to="/admin/finance?tab=refunds&status=FAILED" className="font-semibold text-bad underline underline-offset-2">
+                  {failed === 1 ? 'Order' : 'Orders'} with a failed refund · Retry →
+                </Link>
+              ) : (
+                <RoleNote>Retrying refunds needs the Finance role</RoleNote>
+              )
             ) : (
               'Nothing to retry'
             )
@@ -217,31 +224,24 @@ function docsLine(p: AdminPartner): string {
 
 function NeedsAttention({ now }: { now: number }) {
   const { canOps } = useAdminRoles();
-  const qc = useQueryClient();
-  const { toast } = useToast();
+  const approveMutation = useApproveRestaurant();
+  const tms = useTmsOverview(REFRESH_MS);
   const exceptions = useQuery({ queryKey: qk.jobs({ exception: true, overview: true }), queryFn: () => listJobs({ exception: true, limit: 5 }), refetchInterval: REFRESH_MS });
   const restaurants = useQuery({ queryKey: qk.restaurants({ status: 'APPROVAL_PENDING', overview: true }), queryFn: () => listRestaurants({ status: 'APPROVAL_PENDING', limit: 5 }), refetchInterval: REFRESH_MS });
   const partners = useQuery({ queryKey: qk.partners({ status: 'APPROVAL_PENDING', overview: true }), queryFn: () => listPartners({ status: 'APPROVAL_PENDING', limit: 5 }), refetchInterval: REFRESH_MS });
   const [assigning, setAssigning] = useState<AdminJob | null>(null);
   const [approving, setApproving] = useState<AdminRestaurant | null>(null);
 
-  const approve = async (r: AdminRestaurant) => {
-    try {
-      await restaurantAction(r.id, 'approve');
-      toast({ title: `${r.name} approved`, tone: 'success' });
-      await Promise.all([qc.invalidateQueries({ queryKey: ['admin', 'restaurants'] }), qc.invalidateQueries({ queryKey: qk.overview('marketplace') })]);
-    } catch (e) {
-      toast({ title: "Couldn't approve", description: errorMessage(e), tone: 'danger' });
-      throw e;
-    }
-  };
+  const approve = (r: AdminRestaurant) => approveMutation.mutateAsync({ id: r.id, name: r.name });
 
   const jobs = exceptions.data?.items ?? [];
   const rs = restaurants.data?.items ?? [];
   const ps = partners.data?.items ?? [];
   const loading = exceptions.isPending || restaurants.isPending || partners.isPending;
   const count = jobs.length + rs.length + ps.length;
-  const nothing = !loading && count === 0 && !exceptions.isError && !restaurants.isError && !partners.isError;
+  const t = tms.data;
+  const inDispatch = t ? Math.max(0, (t.jobsByStatus.PENDING_ASSIGNMENT ?? 0) + (t.jobsByStatus.OFFERED ?? 0) - t.exceptions) : 0;
+  const nothing = !loading && count === 0 && inDispatch === 0 && !exceptions.isError && !restaurants.isError && !partners.isError;
 
   return (
     <SectionCard title="Needs attention" count={loading ? undefined : count}>
@@ -274,7 +274,7 @@ function NeedsAttention({ now }: { now: number }) {
                 </Link>
               }
               subTone={blocked ? 'warn' : undefined}
-              sub={blocked ? 'Approve unlocks after business email is verified' : `Business email verified · ${r.documents.filter((d) => d.verified).length}/${r.documents.length} documents verified`}
+              sub={blocked ? APPROVE_BLOCKED_COPY : `Business email verified · ${r.documents.filter((d) => d.verified).length}/${r.documents.length} documents verified`}
               note={!canOps ? <RoleNote>Your role can't approve restaurants</RoleNote> : undefined}
               action={
                 <Button size="sm" variant="outline" disabled={blocked || !canOps} onClick={() => setApproving(r)}>
@@ -309,6 +309,12 @@ function NeedsAttention({ now }: { now: number }) {
               </li>
             ))
           : null}
+        {inDispatch > 0 ? (
+          <li className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-2.5 text-[12.5px] text-fg-3 last:border-0">
+            <span>{plural(inDispatch, 'more delivery', 'more deliveries')} still in dispatch rounds (no action needed yet)</span>
+            <Link to="/admin/tms?filter=unassigned" className="underline underline-offset-2 hover:text-fg">Open deliveries →</Link>
+          </li>
+        ) : null}
         {nothing ? (
           <li className="flex items-center gap-2.5 px-4 py-5 text-[13.5px] text-fg-3">
             <span aria-hidden="true" className="size-2 rounded-full bg-ok" />
@@ -321,7 +327,7 @@ function NeedsAttention({ now }: { now: number }) {
         open={approving !== null}
         onClose={() => setApproving(null)}
         title={approving ? `Approve ${approving.name}?` : 'Approve?'}
-        description="The restaurant goes live in discovery and the owner is notified. This is recorded in the audit log."
+        description={APPROVE_RESTAURANT_COPY}
         confirmLabel="Approve"
         onConfirm={() => approve(approving!)}
       />
@@ -349,7 +355,7 @@ export function healthRows(report: HealthReport): HealthRow[] {
       key: name,
       name,
       status: s.status,
-      text: s.status === 'down' ? s.error ?? s.summary ?? 'No response' : s.degradedReasons?.length ? s.degradedReasons.join('; ') : s.summary ?? 'Degraded',
+      text: serviceHealthText(s),
     }));
   const up = entries.filter(([, s]) => s.status === 'up');
   const rows: HealthRow[] = [...bad];
@@ -366,46 +372,10 @@ export function healthRows(report: HealthReport): HealthRow[] {
   return rows;
 }
 
-function useBulkActions() {
-  const qc = useQueryClient();
-  const { toast } = useToast();
-  const replay = useMutation({
-    mutationFn: () => replayAllDeadLetters({}),
-    onSuccess: async (r) => {
-      toast({
-        title: r.failed.length ? `Replayed ${r.replayed}, ${r.failed.length} failed` : `Replayed ${plural(r.replayed, 'dead letter')}`,
-        description: r.failed.length ? `${r.failed[0]!.service}: ${r.failed[0]!.error}. See Health for details.` : undefined,
-        tone: r.failed.length ? 'warn' : 'success',
-      });
-      await qc.invalidateQueries({ queryKey: ['admin', 'health'] });
-    },
-    onError: (e) => toast({ title: "Couldn't replay dead letters", description: errorMessage(e), tone: 'danger' }),
-  });
-  const retry = useMutation({
-    mutationFn: async (summary: NotificationSummary) => {
-      let queued = 0;
-      if ((summary.byStatus.FAILED ?? 0) > 0) queued += (await retryAllNotifications({ status: 'FAILED' })).queued;
-      if ((summary.byStatus.DEAD ?? 0) > 0) queued += (await retryAllNotifications({ status: 'DEAD' })).queued;
-      return { queued, asked: retryableCount(summary) };
-    },
-    onSuccess: async ({ queued, asked }) => {
-      toast({
-        title: `Re-queued ${plural(queued, 'notification')}`,
-        description: queued < asked ? 'One-time codes and notifications without a recipient are never retried.' : undefined,
-        tone: 'success',
-      });
-      await qc.invalidateQueries({ queryKey: ['admin', 'health'] });
-    },
-    onError: (e) => toast({ title: "Couldn't retry notifications", description: errorMessage(e), tone: 'danger' }),
-  });
-  return { replay, retry };
-}
-
-const TEXT_TONE = { up: 'text-fg-3', degraded: 'text-warn font-mono text-[12px]', down: 'text-bad font-mono text-[12px]' } as const;
-
 function SystemHealth({ health, summary, now }: { health: ReturnType<typeof useHealth>; summary: { data?: NotificationSummary; isError: boolean }; now: number }) {
   const { canOps, canSupport } = useAdminRoles();
-  const { replay, retry } = useBulkActions();
+  const replay = useReplayAllDeadLetters();
+  const retry = useRetryNotifications();
   const [confirm, setConfirm] = useState<'replay' | 'retry' | null>(null);
   const dead = deadLetterCount(health.data);
   const failed = retryableCount(summary.data);
@@ -433,7 +403,7 @@ function SystemHealth({ health, summary, now }: { health: ReturnType<typeof useH
                   <td className="px-3.5 py-[11px]">
                     <StatusPill kind="health" status={r.status} density="dense" />
                   </td>
-                  <td className={`px-3.5 py-[11px] text-[12.5px] ${TEXT_TONE[r.status]} break-words`}>{r.text}</td>
+                  <td className={`px-3.5 py-[11px] text-[12.5px] ${HEALTH_TEXT_TONE[r.status]} break-words`}>{r.text}</td>
                 </tr>
               ))}
             </tbody>
@@ -470,9 +440,13 @@ function SystemHealth({ health, summary, now }: { health: ReturnType<typeof useH
         open={confirm === 'retry'}
         onClose={() => setConfirm(null)}
         title={`Retry ${plural(failed, 'failed notification')}?`}
-        description="Failed and given-up SMS and email notifications are re-queued. One-time codes are never resent. Recorded in the audit log."
+        description="Failed and given-up notifications are re-queued. One-time codes and notifications without a recipient are never resent, so fewer may be re-queued. Recorded in the audit log."
         confirmLabel="Retry all"
-        onConfirm={() => retry.mutateAsync(summary.data!)}
+        onConfirm={() => {
+          const s = summary.data!;
+          const statuses = (['FAILED', 'DEAD'] as const).filter((k) => (s.byStatus[k] ?? 0) > 0);
+          return retry.mutateAsync({ statuses: [...statuses], asked: retryableCount(s) });
+        }}
       />
     </SectionCard>
   );

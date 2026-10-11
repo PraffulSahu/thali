@@ -1,6 +1,6 @@
 import '../setup';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { act, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import OrdersSearch from '../../src/features/admin/OrdersSearch';
 import TmsPage from '../../src/features/admin/TmsPage';
@@ -22,6 +22,16 @@ describe('Orders search (ORD-1)', () => {
     await user.type(screen.getByRole('searchbox'), '98765 43210');
     await user.click(screen.getByRole('button', { name: 'Search' }));
     await waitFor(() => expect(calls.some((c) => new URL(c.url, 'http://x').searchParams.get('q') === '98765 43210')).toBe(true));
+  });
+});
+
+describe('Orders search input follows the URL', () => {
+  it('updates the search box when ?q changes while the page is open (⌘K "Search all orders")', async () => {
+    routeFetch([['/admin/orders/checkouts', () => json({ items: [checkoutRow], nextCursor: null })]]);
+    const { router } = renderWithProviders(<OrdersSearch />, { route: '/admin/orders?q=TH-OLD', auth: adminAuth() });
+    expect(await screen.findByRole('searchbox')).toHaveValue('TH-OLD');
+    await act(() => router.navigate('/admin/orders?q=TH-NEW'));
+    await waitFor(() => expect(screen.getByRole('searchbox')).toHaveValue('TH-NEW'));
   });
 });
 

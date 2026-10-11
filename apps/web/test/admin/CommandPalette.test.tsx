@@ -50,6 +50,18 @@ describe('Admin ⌘K search', () => {
     expect(calls.some((c) => c.url.includes('/admin/marketplace/restaurants'))).toBe(false);
   });
 
+  it('Enter before the debounce settles searches the current term, not stale results', async () => {
+    const user = userEvent.setup();
+    const { router } = setup();
+    await user.keyboard('{Control>}k{/Control}');
+    const input = await screen.findByRole('combobox');
+    await user.type(input, 'th-demo');
+    await screen.findByRole('option', { name: /TH-DEMOMULTI/ });
+    await user.type(input, 'x{Enter}');
+    await waitFor(() => expect(router.state.location.pathname).toBe('/admin/orders'));
+    expect(router.state.location.search).toContain('q=TH-DEMOX');
+  });
+
   it('searches users and restaurants for free text', async () => {
     const user = userEvent.setup();
     const { calls, router } = setup();

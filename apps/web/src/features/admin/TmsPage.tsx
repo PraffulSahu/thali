@@ -5,7 +5,7 @@
  * location simulator (labelled DEMO). Reads: any admin; changes: OPS (others see why).
  */
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
@@ -41,6 +41,7 @@ export default function TmsPage() {
   const status = params.get('status') && STATUSES.includes(params.get('status')!) ? params.get('status')! : 'ASSIGNED';
   const q = params.get('q') ?? '';
   const [draft, setDraft] = useState(q);
+  useEffect(() => setDraft(q), [q]);
   const [picking, setPicking] = useState<AdminJob | null>(null);
   const [unassigning, setUnassigning] = useState<AdminJob | null>(null);
   const [failing, setFailing] = useState<AdminJob | null>(null);
@@ -122,7 +123,7 @@ export default function TmsPage() {
       />
       <div className="flex flex-col gap-[18px]">
         <KpiStrip label="Delivery overview">
-          <KpiTile label="Unassigned" {...kpi} value={ov ? unassigned : undefined} highlight={unassigned > 0} sub="Finding a partner or offered" />
+          <KpiTile label="Unassigned" {...kpi} value={ov ? unassigned : undefined} highlight={unassigned > 0} sub="Finding a partner" />
           <KpiTile label="Offers out" {...kpi} value={ov?.liveOffers} sub="Waiting on a partner" />
           <KpiTile label="In progress" {...kpi} value={ov ? inProgress : undefined} sub="Assigned to on the way" />
           <KpiTile label="Exceptions" {...kpi} value={ov ? <span className={ov.exceptions > 0 ? 'text-bad' : undefined}>{ov.exceptions}</span> : undefined} sub={ov && ov.exceptions > 0 ? 'Need a decision' : 'None open'} subTone={ov && ov.exceptions > 0 ? 'muted' : 'ok'} />

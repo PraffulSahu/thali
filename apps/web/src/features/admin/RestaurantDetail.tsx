@@ -10,7 +10,7 @@ import { QueryState } from '../../components/ui/QueryState';
 import { StatusPill, statusLabel } from '../../components/ui/StatusPill';
 import { formatBps, formatDateTime, formatPhone } from '../../lib/format';
 import { getRestaurant, qk, restaurantAction, restaurantDocumentUrl, verifyRestaurantDocument, type AdminRestaurant, type AdminRestaurantDoc } from './api';
-import { ApprovalPanel, DocumentViewer, KeyValues, Mono, useAdminMutation, useAdminRoles } from './shared';
+import { APPROVE_BLOCKED_COPY, ApprovalPanel, DocumentViewer, KeyValues, Mono, useAdminMutation, useAdminRoles } from './shared';
 import { DemoTag, DetailColumns, DocRow, HistoryTimeline } from './ui';
 
 const DOC_LABELS: Record<string, string> = { FSSAI: 'FSSAI licence', GST: 'GST certificate', PAN: 'PAN', BANK_PROOF: 'Bank proof', MENU: 'Menu' };
@@ -128,7 +128,7 @@ export default function RestaurantDetail() {
                     name={r.name}
                     status={r.status}
                     canAct={canOps}
-                    approveBlockedReason={!r.emailVerified ? 'Approve unlocks after the business email is verified.' : null}
+                    approveBlockedReason={!r.emailVerified ? APPROVE_BLOCKED_COPY : null}
                     onAction={(action, reason) => act.mutateAsync({ action, reason })}
                   />
                 </SectionCard>

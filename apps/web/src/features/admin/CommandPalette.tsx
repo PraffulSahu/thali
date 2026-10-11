@@ -139,7 +139,7 @@ function useResults(raw: string, enabled: boolean) {
 
   const fetching = (ordersOn && orders.isFetching) || (usersOn && users.isFetching) || (restaurantsOn && restaurants.isFetching) || raw !== debounced;
   const errors = [ordersOn && orders.error, usersOn && users.error, restaurantsOn && restaurants.error].filter(Boolean) as unknown[];
-  return { kind, term, results, fetching, errors };
+  return { kind, term, results, fetching, errors, settled: raw === debounced };
 }
 
 const KIND_HINT: Record<SearchKind, string> = {
@@ -155,7 +155,7 @@ export function CommandPalette() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
-  const { kind, results, fetching, errors } = useResults(q, isOpen);
+  const { kind, results, fetching, errors, settled } = useResults(q, isOpen);
   const listId = useId();
   const optionId = (i: number) => `${listId}-opt-${i}`;
 
@@ -179,6 +179,14 @@ export function CommandPalette() {
       setActive((i) => Math.max(0, i - 1));
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      // Results still belong to the previous term while the debounce runs: search the CURRENT term instead.
+      if (!settled) {
+        const now = classifySearch(q);
+        if (now.kind === 'empty') return;
+        const term = encodeURIComponent(now.term);
+        go({ id: 'flush', group: 'More', icon: 'search', title: now.term, to: now.kind === 'text' ? `/admin/users?q=${term}` : `/admin/orders?q=${term}&range=all` });
+        return;
+      }
       go(results[active]);
     }
   };

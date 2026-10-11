@@ -2,17 +2,16 @@
  * Events that failed every retry in some service, gathered by the notifications service.
  * "Replay all" = NTF-3 `POST /admin/notifications/dead-letters/replay` (oldest first, ≤100); per-row replay stays.
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Button } from '../../components/ui/Button';
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 import { DataTable, type Column } from '../../components/ui/DataTable';
 import { InfoNotice } from '../../components/ui/Notice';
 import { RelativeTime } from '../../components/ui/RelativeTime';
-import { useToast } from '../../components/ui/Toast';
-import { errorMessage } from '../../lib/errors';
 import { plural } from '../../lib/format';
-import { listDeadLetters, qk, replayAllDeadLetters, replayDeadLetter, type DeadLetter } from './api';
+import { listDeadLetters, qk, replayDeadLetter, type DeadLetter } from './api';
+import { useReplayAllDeadLetters } from './bulk';
 import { Mono, useAdminMutation, useAdminRoles } from './shared';
 import { RoleNote } from './ui';
 
@@ -23,8 +22,6 @@ const eventType = (d: DeadLetter) => {
 
 export default function DeadLettersPanel({ titleId }: { titleId?: string }) {
   const { canOps } = useAdminRoles();
-  const qc = useQueryClient();
-  const { toast } = useToast();
   const query = useQuery({ queryKey: qk.deadLetters, queryFn: listDeadLetters });
   const [replaying, setReplaying] = useState<DeadLetter | null>(null);
   const [all, setAll] = useState(false);
@@ -32,18 +29,7 @@ export default function DeadLettersPanel({ titleId }: { titleId?: string }) {
     success: 'Event re-queued for processing',
     invalidate: [qk.deadLetters as unknown as unknown[], ['admin', 'health']],
   });
-  const replayAll = useMutation({
-    mutationFn: () => replayAllDeadLetters({}),
-    onSuccess: async (r) => {
-      toast({
-        title: r.failed.length ? `Replayed ${r.replayed}, ${r.failed.length} failed` : `Replayed ${plural(r.replayed, 'dead letter')}`,
-        description: r.failed.length ? r.failed.slice(0, 3).map((f) => `${f.service}: ${f.error}`).join(' · ') : undefined,
-        tone: r.failed.length ? 'warn' : 'success',
-      });
-      await qc.invalidateQueries({ queryKey: ['admin', 'health'] });
-    },
-    onError: (e) => toast({ title: "Couldn't replay dead letters", description: errorMessage(e), tone: 'danger' }),
-  });
+  const replayAll = useReplayAllDeadLetters();
 
   const pending = (query.data?.items ?? []).filter((d) => !d.replayedAt);
   const columns: Column<DeadLetter>[] = [
