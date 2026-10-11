@@ -12,15 +12,20 @@
  *    (items + packaging), restaurant COMMISSION (−bps of items), platform COMMISSION (+), partner DELIVERY_EARNING
  *    (base + ceil(km) × per-km)
  *  - a recorded (PAID) manual payout to Spice Route with its PAYOUT ledger entry.
+ *
+ * The CLI then adds the Bengaluru dataset (`./seed-blr.ts`; skip with SEED_BLR=0): intents, refunds, ledger and
+ * weekly payouts for the ~5,000 generated checkouts.
  */
 import type { Connection } from 'mongoose';
 import { bpsOf } from '@thali/contracts';
 import { seedId } from '@thali/contracts/seed';
 import { DEMO_CHECKOUTS, DEMO_PARTNER_PAYOUT, demoOrderIds as ids, demoRefundPaise, demoTimeline, type DemoCheckout, type DemoChild } from '@thali/contracts/seed-demo';
+import { buildBlrWorld, loadPricing } from '@thali/contracts/seed-blr';
 import { ensureDocs, isMainModule, runSeedCli, type SeedReport } from '@thali/service-kit/seed';
 import { createModels, initPayments, type PaymentsContext } from './context.js';
 import { deliveryEarningPaise } from './domain/ledger.js';
 import { createMockProvider } from './providers/mock-provider.js';
+import { seedPaymentsBlr } from './seed-blr.js';
 
 export interface PaymentsSeedConfig {
   PARTNER_BASE_PAYOUT_PAISE: number;
@@ -228,10 +233,14 @@ if (isMainModule(import.meta.url)) {
       createMockProvider({ conn, webhookSecret: 'seed-only-not-used-for-signing' });
       await initPayments({ conn, models: createModels(conn) } as unknown as PaymentsContext);
     },
-    run: (conn) =>
-      seedPayments(conn, {
+    run: async (conn) => {
+      const cfg = {
         PARTNER_BASE_PAYOUT_PAISE: Number(process.env.PARTNER_BASE_PAYOUT_PAISE || DEMO_PARTNER_PAYOUT.basePaise),
         PARTNER_PER_KM_PAISE: Number(process.env.PARTNER_PER_KM_PAISE || DEMO_PARTNER_PAYOUT.perKmPaise),
-      }),
+      };
+      const report = await seedPayments(conn, cfg);
+      if (process.env.SEED_BLR === '0') return report;
+      return { ...report, ...(await seedPaymentsBlr(conn, buildBlrWorld({ pricing: await loadPricing() }), cfg)) };
+    },
   });
 }

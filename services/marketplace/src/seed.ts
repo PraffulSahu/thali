@@ -5,23 +5,35 @@
  *   local:      npm run seed -w @thali/marketplace
  *
  * Content (every document flagged isDemo):
- *  - service area `service-area:blr-koramangala` (Koramangala / HSR, Bengaluru) + cuisines
+ *  - service area `service-area:blr-koramangala`: since the Bengaluru dataset it is ONE city-wide polygon named
+ *    "Bengaluru" (`BLR_CITY_POLYGON`). Discovery requires restaurant and drop in the same area and the oldest
+ *    area wins on overlap, so the existing seed-owned document is upgraded in place by one targeted update that
+ *    only matches while it still has the original Koramangala/HSR box (idempotent; edits made through the admin
+ *    UI are never touched; a fresh install inserts the city polygon directly) + cuisines
  *  - restaurants (`restaurant:<slug>`):
  *      spice-route   APPROVED, non-veg, owner user:owner1   (menu with customization groups, add-ons and
  *                                                             a tracked-stock item: Mutton Rogan Josh, stock 3)
- *      green-leaf    APPROVED, pure veg, owner user:owner2
+ *      green-leaf    APPROVED, pure veg (`pureVeg: true`), owner user:owner2
  *      tandoor-tales APPROVAL_PENDING (email verified, KYC uploaded), owner user:owner1
  *      coastal-curry VERIFICATION_PENDING (business email not verified yet), owner user:owner2
  *  - coupons WELCOME50 (50% up to ₹100) and FLAT100 (₹100 off, total limit 1); membership plan "Thali Plus"
  *  - one labelled demo banner ("DEMO · …", links to WELCOME50)
  * Menu ids: `category:<rest>:<slug>`, `item:<rest>:<slug>`, `group:<rest>:<item>:<slug>`, `option:<rest>:<item>:<group>:<slug>`.
+ * Demo restaurants carry `address.locality`; installs seeded before MKT-4/5 get `locality` and Green Leaf's
+ * `pureVeg` once (targeted updates of the seed-owned documents, only while the field is still unset).
+ *
+ * The CLI then adds the Bengaluru dataset (`./seed-blr.ts`; skip with SEED_BLR=0) and bumps the discovery
+ * cache epoch so listings show it at once.
  */
 import type { Connection } from 'mongoose';
 import { seedId } from '@thali/contracts/seed';
-import { encryptField } from '@thali/service-kit';
+import { BLR_CITY_POLYGON, BLR_LEGACY_DEMO_POLYGON, buildBlrWorld, loadPricing } from '@thali/contracts/seed-blr';
+import { createRedis, encryptField } from '@thali/service-kit';
 import { demoPdf, ensureDocs, isMainModule, runSeedCli, uploadSeedObjects, type SeedObject, type SeedReport } from '@thali/service-kit/seed';
 import { loadMarketplaceConfig, type MarketplaceConfig } from './config.js';
+import { bumpDiscoveryEpoch } from './domain/discovery-cache.js';
 import { ensureMarketplaceIndexes, getModels } from './models/index.js';
+import { seedMarketplaceBlr } from './seed-blr.js';
 
 export type MarketplaceSeedConfig = Pick<
   MarketplaceConfig,
@@ -195,6 +207,7 @@ interface RestaurantSpec {
   lat: number;
   lng: number;
   line1: string;
+  locality: string;
   phone: string;
   businessEmail: string;
   commissionBps: number;
@@ -208,25 +221,25 @@ const RESTAURANTS: RestaurantSpec[] = [
   {
     slug: 'spice-route', name: 'Spice Route', owner: 'owner1', status: 'APPROVED',
     description: 'Hyderabadi biryanis, tandoor and North Indian curries.', cuisines: ['biryani', 'north-indian', 'mughlai'],
-    lat: 12.9352, lng: 77.6245, line1: '88, 5th Block, Koramangala', phone: '+918041000001', businessEmail: 'hello@spiceroute.demo',
+    lat: 12.9352, lng: 77.6245, line1: '88, 5th Block, Koramangala', locality: 'Koramangala 5th Block', phone: '+918041000001', businessEmail: 'hello@spiceroute.demo',
     commissionBps: 2000, packagingFeePaise: 1500, avgPrepMinutes: 25, rating: [221, 52], colors: ['#b91c1c', '#f59e0b'],
   },
   {
     slug: 'green-leaf', name: 'Green Leaf', owner: 'owner2', status: 'APPROVED',
     description: 'Pure vegetarian: South Indian tiffin, North Indian thalis and bowls.', cuisines: ['south-indian', 'north-indian', 'healthy'],
-    lat: 12.9279, lng: 77.6271, line1: '12, 1st Block, Koramangala', phone: '+918041000002', businessEmail: 'namaste@greenleaf.demo',
+    lat: 12.9279, lng: 77.6271, line1: '12, 1st Block, Koramangala', locality: 'Koramangala 1st Block', phone: '+918041000002', businessEmail: 'namaste@greenleaf.demo',
     commissionBps: 1500, packagingFeePaise: 1000, avgPrepMinutes: 15, rating: [187, 41], colors: ['#15803d', '#a3e635'],
   },
   {
     slug: 'tandoor-tales', name: 'Tandoor Tales', owner: 'owner1', status: 'APPROVAL_PENDING',
     description: 'Clay-oven kebabs and breads.', cuisines: ['north-indian', 'mughlai'],
-    lat: 12.9121, lng: 77.6446, line1: '3, 27th Main, HSR Layout Sector 1', phone: '+918041000003', businessEmail: 'kitchen@tandoortales.demo',
+    lat: 12.9121, lng: 77.6446, line1: '3, 27th Main, HSR Layout Sector 1', locality: 'HSR Layout', phone: '+918041000003', businessEmail: 'kitchen@tandoortales.demo',
     commissionBps: 1800, packagingFeePaise: 1200, avgPrepMinutes: 20, colors: ['#9a3412', '#fdba74'],
   },
   {
     slug: 'coastal-curry', name: 'Coastal Curry House', owner: 'owner2', status: 'VERIFICATION_PENDING',
     description: 'Mangalorean and Malabar seafood curries.', cuisines: ['south-indian'],
-    lat: 12.9409, lng: 77.6206, line1: '5, 7th Block, Koramangala', phone: '+918041000004', businessEmail: 'orders@coastalcurry.demo',
+    lat: 12.9409, lng: 77.6206, line1: '5, 7th Block, Koramangala', locality: 'Koramangala 7th Block', phone: '+918041000004', businessEmail: 'orders@coastalcurry.demo',
     commissionBps: 1800, packagingFeePaise: 1000, avgPrepMinutes: 25, colors: ['#0e7490', '#67e8f9'],
   },
 ];
@@ -251,7 +264,7 @@ function restaurantDoc(r: RestaurantSpec, fieldKey: string) {
     phone: r.phone,
     businessEmail: r.businessEmail,
     ...(r.status === 'VERIFICATION_PENDING' ? {} : { emailVerifiedAt: at(1) }),
-    address: { line1: r.line1, city: 'Bengaluru', pincode: r.line1.includes('HSR') ? '560102' : '560034' },
+    address: { line1: r.line1, locality: r.locality, city: 'Bengaluru', pincode: r.line1.includes('HSR') ? '560102' : '560034' },
     location: pt(r.lat, r.lng),
     deliveryRadiusKm: 6,
     hours: ALL_DAY,
@@ -270,6 +283,7 @@ function restaurantDoc(r: RestaurantSpec, fieldKey: string) {
       last4: accountNumber.slice(-4),
       updatedAt: at(1),
     },
+    pureVeg: r.slug === 'green-leaf',
     packagingFeePaise: r.packagingFeePaise,
     avgPrepMinutes: r.avgPrepMinutes,
     commissionBps: r.commissionBps,
@@ -338,11 +352,8 @@ export async function seedMarketplace(conn: Connection, cfg: MarketplaceSeedConf
     [
       {
         _id: seedId('service-area:blr-koramangala'),
-        name: 'Bengaluru — Koramangala & HSR (demo)',
-        polygon: {
-          type: 'Polygon',
-          coordinates: [[[77.58, 12.9], [77.68, 12.9], [77.68, 12.99], [77.58, 12.99], [77.58, 12.9]]],
-        },
+        name: 'Bengaluru',
+        polygon: BLR_CITY_POLYGON,
         active: true,
         deliveryFee: { basePaise: 2500, baseKm: 2, perKmPaise: 800, maxPaise: 8000 },
         minOrderPaise: 9900,
@@ -354,7 +365,18 @@ export async function seedMarketplace(conn: Connection, cfg: MarketplaceSeedConf
     report,
   );
 
+  // upgrade the original demo box to the city polygon (once: only while it still has the original seed polygon)
+  await m.ServiceArea.updateOne(
+    { _id: seedId('service-area:blr-koramangala'), isDemo: true, 'polygon.coordinates': BLR_LEGACY_DEMO_POLYGON },
+    { $set: { name: 'Bengaluru', polygon: BLR_CITY_POLYGON } },
+  );
+
   await ensureDocs(m.Restaurant, RESTAURANTS.map((r) => restaurantDoc(r, cfg.FIELD_ENCRYPTION_KEY)), report);
+  // installs seeded before MKT-4/5: locality on every demo restaurant, Green Leaf declared pure veg
+  for (const r of RESTAURANTS) {
+    await m.Restaurant.updateOne({ _id: seedId(`restaurant:${r.slug}`), isDemo: true, 'address.locality': { $exists: false } }, { $set: { 'address.locality': r.locality } });
+  }
+  await m.Restaurant.updateOne({ _id: seedId('restaurant:green-leaf'), isDemo: true, pureVeg: { $exists: false } }, { $set: { pureVeg: true } });
 
   for (const [rest, cats, items] of [
     ['spice-route', SPICE_ROUTE_CATEGORIES, SPICE_ROUTE_ITEMS],
@@ -475,6 +497,24 @@ if (isMainModule(import.meta.url)) {
     service: 'marketplace',
     dbName: process.env.MONGO_DB_NAME ?? 'thali_marketplace',
     init: ensureMarketplaceIndexes,
-    run: (conn) => seedMarketplace(conn, loadMarketplaceConfig()),
+    run: async (conn) => {
+      const cfg = loadMarketplaceConfig();
+      const report = await seedMarketplace(conn, cfg);
+      if (process.env.SEED_BLR !== '0') Object.assign(report, await seedMarketplaceBlr(conn, buildBlrWorld({ pricing: await loadPricing() }), cfg));
+      await bumpEpoch();
+      return report;
+    },
   });
+}
+
+/** Best effort: make cached discovery listings rebuild now instead of after their TTL. */
+async function bumpEpoch(): Promise<void> {
+  const url = process.env.REDIS_URL;
+  if (!url) return;
+  const redis = createRedis(url, process.env.REDIS_KEY_PREFIX ? { keyPrefix: process.env.REDIS_KEY_PREFIX } : {});
+  try {
+    await Promise.race([bumpDiscoveryEpoch(redis), new Promise((done) => setTimeout(done, 3000))]);
+  } finally {
+    redis.disconnect();
+  }
 }

@@ -13,6 +13,9 @@
  * plus `restaurant_projection` rows for the four seeded restaurants and the admin timeline (`order_events`).
  * Only terminal states are seeded, so no sweeper / consumer ever acts on demo data.
  * Every breakdown is recomputed with `@thali/pricing` and must equal the shared fixture (else the seed refuses).
+ *
+ * The CLI then adds the Bengaluru dataset (`./seed-blr.ts`; skip with SEED_BLR=0): ~5,000 historical checkouts,
+ * their child orders, timeline and support tickets, plus a projection row per generated restaurant.
  */
 import type { Connection } from 'mongoose';
 import { seedId } from '@thali/contracts/seed';
@@ -29,8 +32,10 @@ import {
 } from '@thali/contracts/seed-demo';
 import { computeDeliveryFee, priceCheckout } from '@thali/pricing';
 import { ensureDocs, isMainModule, runSeedCli, type SeedReport } from '@thali/service-kit/seed';
+import { buildBlrWorld, loadPricing } from '@thali/contracts/seed-blr';
 import { lineKeyOf } from './domain/cart.js';
 import { getModels, initOrdersDb } from './models/index.js';
+import { seedOrdersBlr } from './seed-blr.js';
 
 const pt = (lat: number, lng: number) => ({ type: 'Point' as const, coordinates: [lng, lat] });
 const maskPhone = (p: string) => `${p.slice(0, 3)}******${p.slice(-4)}`;
@@ -293,5 +298,14 @@ export async function seedOrders(conn: Connection): Promise<SeedReport> {
 }
 
 if (isMainModule(import.meta.url)) {
-  void runSeedCli({ service: 'orders', dbName: 'thali_orders', init: initOrdersDb, run: seedOrders });
+  void runSeedCli({
+    service: 'orders',
+    dbName: 'thali_orders',
+    init: initOrdersDb,
+    run: async (conn) => {
+      const report = await seedOrders(conn);
+      if (process.env.SEED_BLR === '0') return report;
+      return { ...report, ...(await seedOrdersBlr(conn, buildBlrWorld({ pricing: await loadPricing() }))) };
+    },
+  });
 }

@@ -13,14 +13,19 @@
  * TH-DEMODONE-A by partner 2) so partner history, tracking and the payments ledger line up. Terminal only.
  * Dispatch only considers partners whose last location ping is fresh (DISPATCH_LOCATION_MAX_AGE_SEC), so the
  * online partner's seeded location is a starting point: the partner app (or smoke test) keeps it fresh.
+ *
+ * The CLI then adds the Bengaluru dataset (`./seed-blr.ts`; skip with SEED_BLR=0): 250 partners (offline) and a
+ * DELIVERED job per delivered historical child order.
  */
 import type { Connection } from 'mongoose';
 import { seedId } from '@thali/contracts/seed';
 import { DEMO_CHECKOUTS, demoOrderIds as ids, demoTimeline, type DemoCheckout, type DemoChild } from '@thali/contracts/seed-demo';
+import { buildBlrWorld, loadPricing } from '@thali/contracts/seed-blr';
 import { demoPdf, ensureDocs, isMainModule, runSeedCli, uploadSeedObjects, type SeedObject, type SeedReport } from '@thali/service-kit/seed';
 import { parseDeliveryConfig, type DeliveryConfig } from './config.js';
 import { hashCode } from './domain/codes.js';
 import { getModels, initDeliveryModels } from './models/index.js';
+import { seedDeliveryBlr } from './seed-blr.js';
 
 export type DeliverySeedConfig = Pick<
   DeliveryConfig,
@@ -173,6 +178,11 @@ if (isMainModule(import.meta.url)) {
     init: async (conn) => {
       await initDeliveryModels(conn);
     },
-    run: (conn) => seedDelivery(conn, parseDeliveryConfig()),
+    run: async (conn) => {
+      const cfg = parseDeliveryConfig();
+      const report = await seedDelivery(conn, cfg);
+      if (process.env.SEED_BLR === '0') return report;
+      return { ...report, ...(await seedDeliveryBlr(conn, buildBlrWorld({ pricing: await loadPricing() }), cfg)) };
+    },
   });
 }

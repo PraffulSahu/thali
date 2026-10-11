@@ -8,15 +8,19 @@
  * suspension). Rendered with the real templates and stored as already SENT, so the worker never re-sends
  * them. Ids: `notification:<key>`; dedupe keys `seed:<key>`. Order notifications follow the shared demo order history
  * (`@thali/contracts/seed-demo`) and carry checkoutId/childOrderId so the web inbox deep-links to the order.
+ *
+ * The CLI then adds the Bengaluru dataset's inbox (`./seed-blr.ts`; skip with SEED_BLR=0).
  */
 import type { Connection } from 'mongoose';
 import { seedId } from '@thali/contracts/seed';
 import { DEMO_CHECKOUTS, demoOrderIds as ids, demoRefundPaise, demoTimeline } from '@thali/contracts/seed-demo';
+import { buildBlrWorld, loadPricing } from '@thali/contracts/seed-blr';
 import { initEventCollections } from '@thali/service-kit';
 import { ensureDocs, isMainModule, runSeedCli, type SeedReport } from '@thali/service-kit/seed';
 import { renderTemplate, type TemplateName } from './domain/templates.js';
 import { notificationModel } from './models/notification.js';
 import { providerCallbackModel } from './models/provider-callback.js';
+import { seedNotificationsBlr } from './seed-blr.js';
 
 interface InAppSpec {
   key: string;
@@ -123,6 +127,10 @@ if (isMainModule(import.meta.url)) {
       await initEventCollections(conn);
       await Promise.all([notificationModel(conn).init(), providerCallbackModel(conn).init()]);
     },
-    run: seedNotifications,
+    run: async (conn) => {
+      const report = await seedNotifications(conn);
+      if (process.env.SEED_BLR === '0') return report;
+      return { ...report, ...(await seedNotificationsBlr(conn, buildBlrWorld({ pricing: await loadPricing() }))) };
+    },
   });
 }

@@ -8,15 +8,22 @@
  *   user:consumer1..3 (+91900000000{1,2,3}), user:owner1..2 (+91910000000{1,2}),
  *   user:partner1..4 (+91920000000{1..4}; 1-2 are DEMO_PHONES), user:admin (admin@thali.demo).
  * The admin gets a known demo password and an enabled TOTP secret, both printed (demo only).
+ * Demo addresses carry their locality (Koramangala nth Block); older installs get it once (targeted update).
+ *
+ * The CLI then adds the Bengaluru dataset (`./seed-blr.ts`; skip with SEED_BLR=0): 1,000 consumers (+91910…),
+ * ~450 owners (+91920…) and 250 partners (+91930…). Demo OTP 123456 works for DEMO_PHONES and every number
+ * under DEMO_PHONE_PREFIXES (default +91900,+91910,+91920,+91930 in demo mode).
  */
 import { authenticator } from 'otplib';
 import type { Connection } from 'mongoose';
 import { seedId } from '@thali/contracts/seed';
+import { buildBlrWorld, loadPricing } from '@thali/contracts/seed-blr';
 import { encryptField } from '@thali/service-kit';
 import { ensureDocs, isMainModule, runSeedCli, type SeedReport } from '@thali/service-kit/seed';
 import { initIdentityDb } from './db.js';
 import { hashPassword } from './domain/admin-auth.js';
 import { models } from './models/index.js';
+import { seedIdentityBlr } from './seed-blr.js';
 
 export const DEMO_ADMIN_EMAIL = 'admin@thali.demo';
 /** Demo-only credentials (printed by the seed). Override with SEED_ADMIN_PASSWORD / SEED_ADMIN_TOTP_SECRET. */
@@ -24,10 +31,11 @@ export const DEFAULT_DEMO_ADMIN_PASSWORD = 'ThaliDemo#2026';
 export const DEFAULT_DEMO_ADMIN_TOTP_SECRET = 'THALIDEMOTOTPSECRETKEY234567ABCD'; // base32, 20 bytes
 
 /** Koramangala, Bengaluru (inside the demo service area seeded by marketplace). */
-const home = (key: string, line1: string, lat: number, lng: number, label = 'Home') => ({
+const home = (key: string, line1: string, lat: number, lng: number, locality: string, label = 'Home') => ({
   _id: seedId(`address:${key}`),
   label,
   line1,
+  locality,
   city: 'Bengaluru',
   pincode: '560034',
   location: { type: 'Point', coordinates: [lng, lat] },
@@ -49,13 +57,13 @@ export function identitySeedUsers() {
   return [
     user('consumer1', '+919000000001', 'Asha Rao', ['CONSUMER'], {
       email: 'asha@thali.demo',
-      addresses: [home('consumer1:home', '42, 4th Block, 80 Feet Road, Koramangala', 12.9338, 77.6309)],
+      addresses: [home('consumer1:home', '42, 4th Block, 80 Feet Road, Koramangala', 12.9338, 77.6309, 'Koramangala 4th Block')],
     }),
     user('consumer2', '+919000000002', 'Vikram Shah', ['CONSUMER'], {
-      addresses: [home('consumer2:home', '7, 6th Block, Koramangala', 12.9391, 77.6197)],
+      addresses: [home('consumer2:home', '7, 6th Block, Koramangala', 12.9391, 77.6197, 'Koramangala 6th Block')],
     }),
     user('consumer3', '+919000000003', 'Meera Iyer', ['CONSUMER'], {
-      addresses: [home('consumer3:home', '19, 1st Block, Koramangala', 12.9279, 77.6346)],
+      addresses: [home('consumer3:home', '19, 1st Block, Koramangala', 12.9279, 77.6346, 'Koramangala 1st Block')],
     }),
     user('owner1', '+919100000001', 'Ravi Kumar', ['CONSUMER', 'RESTAURANT_OWNER'], { email: 'ravi.owner@thali.demo' }),
     user('owner2', '+919100000002', 'Sunita Menon', ['CONSUMER', 'RESTAURANT_OWNER'], { email: 'sunita.owner@thali.demo' }),
@@ -93,6 +101,17 @@ export async function seedIdentity(conn: Connection, opts: IdentitySeedOptions):
     },
   ], report);
 
+  // demo addresses seeded before IDN-2 lack `locality`: set it once (seed-owned docs, only when still unset)
+  for (const u of identitySeedUsers()) {
+    for (const a of (u as { addresses?: { _id: string; locality: string }[] }).addresses ?? []) {
+      await User.updateOne(
+        { _id: u._id, isDemo: true, addresses: { $elemMatch: { _id: a._id, locality: { $exists: false } } } },
+        { $set: { 'addresses.$.locality': a.locality } },
+        { timestamps: false },
+      );
+    }
+  }
+
   const adminCredId = seedId('admin-credential:admin');
   const credExisted = !!(await AdminCredential.exists({ _id: adminCredId }));
   await ensureDocs(
@@ -119,6 +138,7 @@ export async function seedIdentity(conn: Connection, opts: IdentitySeedOptions):
       `    otpauth URI  ${authenticator.keyuri(DEMO_ADMIN_EMAIL, 'Thali', totpSecret)}`,
       `    current code ${authenticator.generate(totpSecret)}`,
       '  Demo OTP 123456 works for DEMO_PHONES: consumers +91900000000{1,2,3}, owners +91910000000{1,2}, partners +91920000000{1,2}',
+      '  and for DEMO_PHONE_PREFIXES (generated Bengaluru users: consumers +91910100000x, owners +91920200000x, partners +91930300000x)',
       '',
       '',
     ].join('\n'),
@@ -131,14 +151,16 @@ if (isMainModule(import.meta.url)) {
     service: 'identity',
     dbName: process.env.IDENTITY_DB_NAME ?? 'thali_identity',
     init: initIdentityDb,
-    run: (conn) => {
+    run: async (conn) => {
       const key = process.env.FIELD_ENCRYPTION_KEY;
       if (!key) throw new Error('FIELD_ENCRYPTION_KEY is required');
-      return seedIdentity(conn, {
+      const report = await seedIdentity(conn, {
         fieldEncryptionKey: key,
         ...(process.env.SEED_ADMIN_PASSWORD ? { adminPassword: process.env.SEED_ADMIN_PASSWORD } : {}),
         ...(process.env.SEED_ADMIN_TOTP_SECRET ? { adminTotpSecret: process.env.SEED_ADMIN_TOTP_SECRET } : {}),
       });
+      if (process.env.SEED_BLR === '0') return report;
+      return { ...report, ...(await seedIdentityBlr(conn, buildBlrWorld({ pricing: await loadPricing() }))) };
     },
   });
 }
