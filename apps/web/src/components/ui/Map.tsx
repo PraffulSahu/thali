@@ -146,7 +146,7 @@ export function MapView({
     [markers, picked],
   );
   return (
-    <div role="region" aria-label={ariaLabel} className={cn('relative isolate overflow-hidden rounded-card border border-slate-200', className ?? 'h-72')}>
+    <div role="region" aria-label={ariaLabel} className={cn('relative isolate overflow-hidden rounded-card border border-line', className ?? 'h-72')}>
       <MapContainer center={[center.lat, center.lng]} zoom={zoom} scrollWheelZoom={false} className="h-full w-full" keyboard>
         <TileLayer url={OSM_TILE_URL} attribution={OSM_ATTRIBUTION} maxZoom={19} />
         {followCenter ? <Recenter center={center} /> : null}
