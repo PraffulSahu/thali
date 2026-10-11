@@ -52,7 +52,9 @@ export function DemoPill({ className }: { className?: string }) {
       )}
     >
       <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
-      {demo ? 'DEMO MODE · no real money, SMS or deliveries' : 'SANDBOX · test mode, no real charges'}
+      {/* Phones: the short label keeps the pill and the theme switch on one row; the rest stays for screen readers. */}
+      {demo ? 'DEMO MODE' : 'SANDBOX'}
+      <span className="max-sm:sr-only">{demo ? ' · no real money, SMS or deliveries' : ' · test mode, no real charges'}</span>
     </span>
   );
 }

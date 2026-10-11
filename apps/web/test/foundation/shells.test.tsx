@@ -93,7 +93,9 @@ describe('PublicShell', () => {
   it('utility bar, demo pill, theme radiogroup, header links and footer', async () => {
     metaFetch('demo');
     renderWithProviders(<PublicShell>page</PublicShell>, { route: '/terms' });
-    expect(await screen.findByText('DEMO MODE · no real money, SMS or deliveries')).toBeInTheDocument();
+    // short label on phones; the explanation is sr-only there, so the pill's full text is unchanged
+    expect(await screen.findByText((_, el) => el?.getAttribute('role') === 'status' && el.textContent === 'DEMO MODE · no real money, SMS or deliveries')).toBeInTheDocument();
+    expect(screen.getByText('· no real money, SMS or deliveries', { exact: false })).toHaveClass('max-sm:sr-only');
     expect(screen.getAllByRole('radiogroup', { name: 'Theme' }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('link', { name: 'Partner with us' })[0]).toHaveAttribute('href', '/partner-with-us');
     expect(screen.getAllByRole('link', { name: /offers/i })[0]).toHaveAttribute('href', '/offers');

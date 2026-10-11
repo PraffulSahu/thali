@@ -76,7 +76,7 @@ function LocationButton({ compact }: { compact?: boolean }) {
       <span className={cn('flex min-w-0 flex-col', compact && 'max-sm:max-w-[6.5rem]')}>
         <span className="text-[11px] font-bold uppercase leading-tight tracking-[.08em] text-fg-3 max-sm:hidden">Deliver to</span>
         <span className="flex min-w-0 items-center gap-1 text-[15px] font-extrabold leading-tight text-fg">
-          <span className="truncate">{loc ? loc.label : 'Set your location'}</span>
+          <span className="truncate">{loc ? loc.label : <>Set <span className="max-sm:hidden">your </span>location</>}</span>
           <Icon name="chevron-down" size={14} className="shrink-0" />
         </span>
       </span>
